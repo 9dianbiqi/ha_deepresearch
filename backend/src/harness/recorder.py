@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .evaluator import EvaluationResult
 from .models import HarnessRunRecord, RecorderConfig, RunContext
 
 
@@ -19,18 +20,31 @@ class JsonlRunRecorder:
         """Return the root directory used by the recorder."""
         return self._config.base_path
 
-    def persist(self, context: RunContext) -> HarnessRunRecord:
+    def persist(
+        self,
+        context: RunContext,
+        *,
+        evaluation: EvaluationResult,
+    ) -> HarnessRunRecord:
         """Serialize the run context to disk."""
         self.base_path.mkdir(parents=True, exist_ok=True)
-        record = HarnessRunRecord.from_context(context)
+        record = HarnessRunRecord.from_context(
+            context,
+            evaluation=evaluation.as_dict(),
+        )
 
         run_path = self.base_path / f"{context.run_id}.json"
         index_path = self.base_path / "runs.jsonl"
+        events_path = self.base_path / f"{context.run_id}.events.jsonl"
 
         run_path.write_text(
             json.dumps(record.as_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        with events_path.open("w", encoding="utf-8") as handle:
+            for event in context.events:
+                handle.write(json.dumps(event.as_dict(), ensure_ascii=False))
+                handle.write("\n")
         with index_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record.as_dict(), ensure_ascii=False))
             handle.write("\n")

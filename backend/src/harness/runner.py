@@ -10,7 +10,7 @@ from agent import DeepResearchAgent
 from .compressor import ContextCompressor
 from .context_manager import ContextManager
 from .event_bus import InMemoryEventBus
-from .evaluator import RuleBasedEvaluator
+from .evaluator import EvaluationResult, RuleBasedEvaluator
 from .models import HarnessRunRequest, HarnessRunResult, RecorderConfig, RunContext, utc_now
 from .policy import HarnessPolicy
 from .recorder import JsonlRunRecorder
@@ -42,27 +42,12 @@ class HarnessRunner:
         """Execute a research run under harness control."""
         context = RunContext(request=request, status="running")
         self.event_bus.emit(context, "run_started", topic=request.topic)
+        evaluation = EvaluationResult(score=0.0)
 
         try:
-            decisions = self.policy.evaluate(request)
-            context.policy_decisions = [item.as_dict() for item in decisions]
-            self.event_bus.emit(
-                context,
-                "policy_checked",
-                decisions=context.policy_decisions,
-            )
-            self.policy.assert_allowed(decisions)
-
-            agent = DeepResearchAgent(config=request.config)
-            context.result = agent.run(request.topic)
-            context.status = "completed"
-            self.event_bus.emit(
-                context,
-                "run_completed",
-                todo_count=len(context.result.todo_items),
-                has_report=bool((context.result.report_markdown or "").strip()),
-            )
-            self.context_manager.finalize(context)
+            self._evaluate_policy(context)
+            self._execute_agent(context)
+            self._compress_context(context)
         except Exception as exc:
             context.status = "failed"
             context.error = str(exc)
@@ -72,9 +57,9 @@ class HarnessRunner:
             context.metrics["duration_seconds"] = context.duration_seconds
             context.metrics["event_count"] = len(context.events)
 
-        evaluation = self.evaluator.evaluate(context)
+        evaluation = self._evaluate_run(context)
         context.metrics["evaluation_score"] = evaluation.score
-        self.recorder.persist(context)
+        self._persist_run(context, evaluation)
 
         return HarnessRunResult(
             run_id=context.run_id,
@@ -94,3 +79,37 @@ class HarnessRunner:
     def load_record(self, run_id: str) -> dict[str, object]:
         """Load one persisted harness run record."""
         return self.recorder.load(run_id)
+
+    def _evaluate_policy(self, context: RunContext) -> None:
+        decisions = self.policy.evaluate(context.request)
+        context.policy_decisions = [item.as_dict() for item in decisions]
+        self.event_bus.emit(
+            context,
+            "policy_checked",
+            decisions=context.policy_decisions,
+        )
+        self.policy.assert_executable(decisions)
+
+    def _execute_agent(self, context: RunContext) -> None:
+        agent = DeepResearchAgent(config=context.request.config)
+        context.result = agent.run(context.request.topic)
+        context.status = "completed"
+        self.event_bus.emit(
+            context,
+            "run_completed",
+            todo_count=len(context.result.todo_items),
+            has_report=bool((context.result.report_markdown or "").strip()),
+        )
+
+    def _compress_context(self, context: RunContext) -> None:
+        self.context_manager.finalize(context)
+
+    def _evaluate_run(self, context: RunContext) -> EvaluationResult:
+        return self.evaluator.evaluate(context)
+
+    def _persist_run(
+        self,
+        context: RunContext,
+        evaluation: EvaluationResult,
+    ) -> None:
+        self.recorder.persist(context, evaluation=evaluation)

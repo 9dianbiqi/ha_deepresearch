@@ -22,10 +22,13 @@ class ContextManager:
         """Compute compressed context once the run has finished."""
         compressed = self._compressor.compress_output(context.result)
         context.compressed_context = dict(compressed)
+        run_summary = compressed.get("run_summary", {})
+        reasoning_memory = compressed.get("reasoning_memory", {})
         self._event_bus.emit(
             context,
             "context_compressed",
-            task_brief_count=len(compressed.get("task_briefs", [])),
-            open_question_count=len(compressed.get("open_questions", [])),
+            completed_task_count=len(run_summary.get("completed_tasks", [])),
+            incomplete_task_count=len(run_summary.get("incomplete_tasks", [])),
+            open_question_count=len(reasoning_memory.get("open_questions", [])),
         )
         return compressed

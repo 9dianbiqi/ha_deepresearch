@@ -1,39 +1,31 @@
-# Deep Research Optimized Architecture
+# Deep Research Harness Architecture
 
-## Overview
+## Definition
 
-The project keeps the original Deep Research workflow intact and adds a lightweight harness layer around it.
+Harness is not a second business workflow.  
+Harness is the runtime governance layer around the Deep Research workflow.
 
-The original workflow is still:
+The stable execution shape is:
 
-`Frontend -> FastAPI -> DeepResearchAgent -> Planner / Search / Summarizer / Reporter`
+`FastAPI -> request normalization -> HarnessRunner -> DeepResearchAgent -> compression / evaluation / persistence`
 
-The optimized workflow adds a harness path for controlled runs:
+`DeepResearchAgent` remains responsible for research execution.  
+`HarnessRunner` is responsible for run governance.
 
-`Frontend or API Client -> FastAPI -> HarnessRunner -> Policy -> DeepResearchAgent -> Context Compression -> Recorder / Evaluator`
+## Runtime Responsibilities
 
-This keeps the research agent simple while adding enough engineering structure for repeatability, observability, and controlled execution.
-
-## Design Goals
-
-- Preserve the existing research experience and streaming API.
-- Add a lightweight harness instead of a heavy code-agent state machine.
-- Make each run traceable with a `run_id`, policy decisions, events, and persisted output.
-- Compress long research output into reusable context packages for follow-up runs.
-- Support future scenario testing and regression checks without rewriting the agent core.
-
-## Current Runtime Layers
-
-### 1. Application Layer
+### HTTP layer
 
 File: [backend/src/main.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/main.py)
 
-- Exposes the original `/research` and `/research/stream` endpoints.
-- Adds `/harness/run` for managed research execution.
-- Adds `/harness/runs/{run_id}` for replay-friendly record lookup.
-- Adds `/harness/scenarios` for curated regression topics.
+- `/research` is the public business entrypoint.
+- `/research` now normalizes input and delegates execution to `HarnessRunner`.
+- `/harness/run` is retained as an internal engineering entrypoint for controlled runs.
+- `/harness/runs/{run_id}` exposes persisted run records.
+- `/harness/scenarios` exposes curated regression topics.
+- `main.py` only performs HTTP normalization and response shaping, not workflow orchestration.
 
-### 2. Agent Workflow Layer
+### Research workflow layer
 
 Files:
 
@@ -43,10 +35,11 @@ Files:
 - [backend/src/services/summarizer.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/services/summarizer.py)
 - [backend/src/services/reporter.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/services/reporter.py)
 
-- `DeepResearchAgent` still owns topic planning, task execution, source collection, task summarization, and final report generation.
-- Existing business logic stays stable so the harness does not become a second workflow engine.
+- `DeepResearchAgent` remains the single research executor.
+- Planning, search, summarization, and reporting stay in the existing service layer.
+- The agent does not own persistence, policy, or replay concerns.
 
-### 3. Harness Layer
+### Harness governance layer
 
 Files:
 
@@ -54,43 +47,67 @@ Files:
 - [backend/src/harness/policy.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/harness/policy.py)
 - [backend/src/harness/context_manager.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/harness/context_manager.py)
 - [backend/src/harness/compressor.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/harness/compressor.py)
-- [backend/src/harness/recorder.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/harness/recorder.py)
 - [backend/src/harness/evaluator.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/harness/evaluator.py)
-- [backend/src/harness/scenarios.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/harness/scenarios.py)
+- [backend/src/harness/recorder.py](/F:/hello-agents-main/code/chapter14/helloagents-deepresearch/backend/src/harness/recorder.py)
 
-Responsibilities:
+- `HarnessRunner` orchestrates the fixed lifecycle:
+  `normalize request -> policy check -> execute agent -> compress context -> evaluate -> persist`
+- `HarnessPolicy` evaluates capability-oriented permissions such as `research:run`, `search:web`, `search:premium`, `notes:read`, `notes:write`, and `report:export`.
+- `ContextManager` produces compressed follow-up context after execution.
+- `ContextCompressor` emits two outputs:
+  - `run_summary` for replay and result display
+  - `reasoning_memory` for future follow-up research
+- `RuleBasedEvaluator` can evaluate either an in-memory run context or a persisted run record.
+- `JsonlRunRecorder` persists:
+  - a final run record
+  - an append-only run index
+  - a per-run event log
 
-- `HarnessRunner`: manages the run lifecycle and produces a durable run result.
-- `HarnessPolicy`: performs lightweight permission checks before execution.
-- `ContextManager`: finalizes reusable context after a run completes.
-- `ContextCompressor`: compresses long outputs into shorter task briefs and report excerpts.
-- `JsonlRunRecorder`: persists one JSON snapshot per run and appends a JSONL index.
-- `RuleBasedEvaluator`: provides baseline quality checks for empty reports, incomplete tasks, and missing summaries.
-- `HarnessScenario`: defines repeatable benchmark inputs.
+## Compressed Context Contract
 
-## Why This Is Lightweight
+Compressed context is intended for follow-up research, not only record display.
 
-This project is a research agent, not a general code-execution agent.
+The stable payload contains:
 
-Because of that, the harness does not need:
+- `run_summary`
+- `reasoning_memory`
 
-- fine-grained shell sandbox state
-- patch approval workflows
-- interactive tool-by-tool pauses
-- complex hierarchical memory reconstruction
+`run_summary` includes:
 
-Instead, the harness focuses on:
+- `completed_tasks`
+- `incomplete_tasks`
+- `report_excerpt`
 
-- controlled run entry
-- simple policy checks
-- compressed research memory
-- persistent replay records
-- baseline evaluation
+`reasoning_memory` includes:
 
-## Recommended Next Steps
+- `key_findings`
+- `key_sources`
+- `open_questions`
 
-1. Route the synchronous `/research` endpoint through `HarnessRunner` so every run is recorded automatically.
-2. Add a streaming harness path that mirrors `/research/stream` while recording events to the run log.
-3. Expand `HarnessPolicy` from config-based checks to capability-based checks such as `notes:write`, `search:web`, and `report:publish`.
-4. Add regression scenarios for broad topics, sparse-result topics, and time-sensitive topics.
-5. Promote the compressed context package into follow-up research runs to support multi-stage research sessions.
+## Policy Model
+
+The current policy layer is intentionally lightweight.
+
+- It uses capability decisions rather than raw config checks.
+- It keeps the three outcomes `allow`, `deny`, and `ask`.
+- It does not implement an approval UI yet.
+- In strict mode, `ask` is treated as a blocking outcome.
+
+This keeps the model compatible with future capability growth without turning the project into a heavy code-agent runtime.
+
+## Persistence and Replay
+
+Harness persistence is split by purpose:
+
+- final record for lookup and auditing
+- event log for replay and debugging
+- compressed context for future research reuse
+- evaluation result for regression analysis
+
+This separation prevents the persisted output model from becoming tightly coupled to live execution code.
+
+## Near-Term Direction
+
+1. Add a streaming harness path so `/research/stream` can also inherit run governance and recording.
+2. Extend scenario coverage for sparse-source, premium-search, and disabled-notes cases.
+3. Reuse `reasoning_memory` as follow-up input for multi-stage research sessions.

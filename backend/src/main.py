@@ -13,7 +13,6 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from config import Configuration, SearchAPI
-from agent import DeepResearchAgent
 from harness import HarnessRunner, HarnessRunRequest, build_default_scenarios
 
 # 添加控制台日志处理程序
@@ -80,6 +79,7 @@ class HarnessResponse(BaseModel):
     findings: list[dict[str, Any]] = Field(default_factory=list)
     compressed_context: dict[str, Any] = Field(default_factory=dict)
     policy_decisions: list[dict[str, Any]] = Field(default_factory=list)
+    mode: str = "internal"
 
 
 def _mask_secret(value: Optional[str], visible: int = 4) -> str:
@@ -118,6 +118,46 @@ def _serialize_todo_items(items: list[Any]) -> list[dict[str, Any]]:
         }
         for item in items
     ]
+
+
+def _normalize_harness_request(
+    payload: ResearchRequest,
+    *,
+    caller_mode: str,
+    permission_mode: str = "default",
+    metadata: dict[str, Any] | None = None,
+) -> HarnessRunRequest:
+    """Convert API payloads into the unified harness request contract."""
+    return HarnessRunRequest(
+        topic=payload.topic,
+        config=_build_config(payload),
+        metadata=dict(metadata or {}),
+        permission_mode=permission_mode,
+        caller_mode=caller_mode,
+    )
+
+
+def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
+    """Convert a harness result into the public HTTP response model."""
+    output = result.output
+    return HarnessResponse(
+        run_id=result.run_id,
+        status=result.status,
+        report_markdown=(output.report_markdown or output.running_summary or "") if output else "",
+        todo_items=_serialize_todo_items(output.todo_items if output else []),
+        metrics=result.metrics,
+        findings=[
+            {
+                "severity": item.severity,
+                "message": item.message,
+                "code": item.code,
+            }
+            for item in result.findings
+        ],
+        compressed_context=result.compressed_context,
+        policy_decisions=result.policy_decisions,
+        mode=mode,
+    )
 
 
 def create_app() -> FastAPI:
@@ -164,23 +204,26 @@ def create_app() -> FastAPI:
     @app.post("/research", response_model=ResearchResponse)
     def run_research(payload: ResearchRequest) -> ResearchResponse:
         try:
-            config = _build_config(payload)
-            agent = DeepResearchAgent(config=config)
-            result = agent.run(payload.topic)
+            request = _normalize_harness_request(payload, caller_mode="public")
+            result = harness_runner.run(request)
         except ValueError as exc:  # Likely due to unsupported configuration
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except Exception as exc:  # pragma: no cover - defensive guardrail
             raise HTTPException(status_code=500, detail="Research failed") from exc
 
+        output = result.output
         return ResearchResponse(
-            report_markdown=(result.report_markdown or result.running_summary or ""),
-            todo_items=_serialize_todo_items(result.todo_items),
+            report_markdown=(output.report_markdown or output.running_summary or "") if output else "",
+            todo_items=_serialize_todo_items(output.todo_items if output else []),
         )
 
     @app.post("/research/stream")
     def stream_research(payload: ResearchRequest) -> StreamingResponse:
         try:
             config = _build_config(payload)
+            from agent import DeepResearchAgent
             agent = DeepResearchAgent(config=config)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -206,12 +249,11 @@ def create_app() -> FastAPI:
     @app.post("/harness/run", response_model=HarnessResponse)
     def run_harness(payload: HarnessRequest) -> HarnessResponse:
         try:
-            config = _build_config(payload)
-            request = HarnessRunRequest(
-                topic=payload.topic,
-                config=config,
-                metadata=dict(payload.metadata),
+            request = _normalize_harness_request(
+                payload,
+                caller_mode="internal",
                 permission_mode=payload.permission_mode,
+                metadata=payload.metadata,
             )
             result = harness_runner.run(request)
         except PermissionError as exc:
@@ -221,24 +263,7 @@ def create_app() -> FastAPI:
         except Exception as exc:  # pragma: no cover - defensive guardrail
             raise HTTPException(status_code=500, detail="Harness run failed") from exc
 
-        output = result.output
-        return HarnessResponse(
-            run_id=result.run_id,
-            status=result.status,
-            report_markdown=(output.report_markdown or output.running_summary or "") if output else "",
-            todo_items=_serialize_todo_items(output.todo_items if output else []),
-            metrics=result.metrics,
-            findings=[
-                {
-                    "severity": item.severity,
-                    "message": item.message,
-                    "code": item.code,
-                }
-                for item in result.findings
-            ],
-            compressed_context=result.compressed_context,
-            policy_decisions=result.policy_decisions,
-        )
+        return _build_harness_response(result, mode="internal")
 
     @app.get("/harness/runs/{run_id}")
     def get_harness_run(run_id: str) -> dict[str, Any]:

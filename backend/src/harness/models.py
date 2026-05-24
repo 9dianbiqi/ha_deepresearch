@@ -26,6 +26,7 @@ class HarnessRunRequest:
     run_id: str = field(default_factory=lambda: uuid4().hex)
     metadata: dict[str, Any] = field(default_factory=dict)
     permission_mode: str = "default"
+    caller_mode: str = "public"
 
 
 @dataclass(kw_only=True)
@@ -116,6 +117,7 @@ class HarnessRunRecord:
     output: dict[str, Any] = field(default_factory=dict)
     compressed_context: dict[str, Any] = field(default_factory=dict)
     policy_decisions: list[dict[str, Any]] = field(default_factory=list)
+    evaluation: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         """Convert the record into a JSON-serializable payload."""
@@ -132,10 +134,16 @@ class HarnessRunRecord:
             "output": self.output,
             "compressed_context": self.compressed_context,
             "policy_decisions": self.policy_decisions,
+            "evaluation": self.evaluation,
         }
 
     @classmethod
-    def from_context(cls, context: RunContext) -> "HarnessRunRecord":
+    def from_context(
+        cls,
+        context: RunContext,
+        *,
+        evaluation: dict[str, Any] | None = None,
+    ) -> "HarnessRunRecord":
         """Build a persisted record from the in-memory run context."""
         output = context.result
         serialized_output = {
@@ -170,6 +178,7 @@ class HarnessRunRecord:
             output=serialized_output,
             compressed_context=dict(context.compressed_context),
             policy_decisions=list(context.policy_decisions),
+            evaluation=evaluation or {},
         )
 
 
