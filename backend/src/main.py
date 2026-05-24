@@ -222,16 +222,17 @@ def create_app() -> FastAPI:
     @app.post("/research/stream")
     def stream_research(payload: ResearchRequest) -> StreamingResponse:
         try:
-            config = _build_config(payload)
-            from agent import DeepResearchAgent
-            agent = DeepResearchAgent(config=config)
+            request = _normalize_harness_request(payload, caller_mode="public")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         def event_iterator() -> Iterator[str]:
             try:
-                for event in agent.run_stream(payload.topic):
+                for event in harness_runner.stream(request):
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except PermissionError as exc:
+                error_payload = {"type": "error", "detail": str(exc)}
+                yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
             except Exception as exc:  # pragma: no cover - defensive guardrail
                 logger.exception("Streaming research failed")
                 error_payload = {"type": "error", "detail": str(exc)}
