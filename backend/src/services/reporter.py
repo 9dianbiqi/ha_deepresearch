@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
+from typing import Any
 
 from hello_agents import ToolAwareSimpleAgent
 
 from models import SummaryState
 from config import Configuration
 from utils import strip_thinking_tokens
-from services.text_processing import strip_tool_calls
 
 
 class ReportingService:
@@ -19,8 +18,12 @@ class ReportingService:
         self._agent = report_agent
         self._config = config
 
-    def generate_report(self, state: SummaryState) -> str:
-        """Generate a structured report based on completed tasks."""
+    def generate_report(
+        self,
+        state: SummaryState,
+        notes_context: dict[str, Any] | None = None,
+    ) -> str:
+        """Generate a structured report based on completed tasks and notes."""
 
         tasks_block = []
         for task in state.todo_items:
@@ -42,26 +45,26 @@ class ReportingService:
                     f"- 任务 {task.id}《{task.title}》：note_id={task.note_id}"
                 )
 
-        notes_section = "\n".join(note_references) if note_references else "- 暂无可用任务笔记"
+        notes_section_text = "\n".join(note_references) if note_references else "- 暂无可用任务笔记"
 
-        read_template = json.dumps({"action": "read", "note_id": "<note_id>"}, ensure_ascii=False)
-        create_conclusion_template = json.dumps(
-            {
-                "action": "create",
-                "title": f"研究报告：{state.research_topic}",
-                "note_type": "conclusion",
-                "tags": ["deep_research", "report"],
-                "content": "请在此沉淀最终报告要点",
-            },
-            ensure_ascii=False,
-        )
+        note_content_section = ""
+        if notes_context:
+            parts = []
+            for note_id, note_data in notes_context.items():
+                content = note_data.get("content", "")
+                if content:
+                    parts.append(f"### 笔记 {note_id}\n{content}\n")
+            if parts:
+                note_content_section = (
+                    "\n任务笔记完整内容（已由系统自动同步，无需手动读取）：\n" + "\n".join(parts)
+                )
 
         prompt = (
             f"研究主题：{state.research_topic}\n"
             f"任务概览：\n{''.join(tasks_block)}\n"
-            f"可用任务笔记：\n{notes_section}\n"
-            f"请针对每条任务笔记使用格式：[TOOL_CALL:note:{read_template}] 读取内容，整合所有信息后撰写报告。\n"
-            f"如需输出汇总结论，可追加调用：[TOOL_CALL:note:{create_conclusion_template}] 保存报告要点。"
+            f"可用任务笔记清单：\n{notes_section_text}\n"
+            f"{note_content_section}\n"
+            "请基于以上所有信息撰写最终研究报告。笔记内容已提供，请直接引用。"
         )
 
         response = self._agent.run(prompt)
@@ -71,7 +74,4 @@ class ReportingService:
         if self._config.strip_thinking_tokens:
             report_text = strip_thinking_tokens(report_text)
 
-        report_text = strip_tool_calls(report_text).strip()
-
         return report_text or "报告生成失败，请检查输入。"
-

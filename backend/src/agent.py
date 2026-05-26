@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from queue import Empty, Queue
 from threading import Lock, Thread
 from typing import Any, Callable, Iterator
 
 from hello_agents import HelloAgentsLLM, ToolAwareSimpleAgent
-from hello_agents.tools import ToolRegistry
-from hello_agents.tools.builtin.note_tool import NoteTool
 
 from config import Configuration
 from prompts import (
@@ -19,11 +16,11 @@ from prompts import (
     todo_planner_system_prompt,
 )
 from models import SummaryState, SummaryStateOutput, TodoItem
+from services.note_agent import NoteSubAgent
 from services.planner import PlanningService
 from services.reporter import ReportingService
 from services.search import dispatch_search, prepare_research_context
 from services.summarizer import SummarizationService
-from services.tool_events import ToolCallTracker
 
 logger = logging.getLogger(__name__)
 
@@ -36,21 +33,12 @@ class DeepResearchAgent:
         self.config = config or Configuration.from_env()
         self.llm = self._init_llm()
 
-        self.note_tool = (
-            NoteTool(workspace=self.config.notes_workspace)
+        self.note_agent = (
+            NoteSubAgent(workspace=self.config.notes_workspace)
             if self.config.enable_notes
             else None
         )
-        self.tools_registry: ToolRegistry | None = None
-        if self.note_tool:
-            registry = ToolRegistry()
-            registry.register_tool(self.note_tool)
-            self.tools_registry = registry
 
-        self._tool_tracker = ToolCallTracker(
-            self.config.notes_workspace if self.config.enable_notes else None
-        )
-        self._tool_event_sink_enabled = False
         self._state_lock = Lock()
 
         self.todo_agent = self._create_tool_aware_agent(
@@ -106,39 +94,38 @@ class DeepResearchAgent:
         return HelloAgentsLLM(**llm_kwargs)
 
     def _create_tool_aware_agent(self, *, name: str, system_prompt: str) -> ToolAwareSimpleAgent:
-        """Instantiate a ToolAwareSimpleAgent sharing tool registry and tracker."""
+        """Instantiate a ToolAwareSimpleAgent without tool registry.
+
+        Note operations are handled by NoteSubAgent separately — agents
+        produce clean text output only, never ``[TOOL_CALL:...]`` markers.
+        """
         return ToolAwareSimpleAgent(
             name=name,
             llm=self.llm,
             system_prompt=system_prompt,
-            enable_tool_calling=self.tools_registry is not None,
-            tool_registry=self.tools_registry,
-            tool_call_listener=self._tool_tracker.record,
+            enable_tool_calling=False,
+            tool_registry=None,
         )
-
-    def _set_tool_event_sink(self, sink: Callable[[dict[str, Any]], None] | None) -> None:
-        """Enable or disable immediate tool event callbacks."""
-        self._tool_event_sink_enabled = sink is not None
-        self._tool_tracker.set_event_sink(sink)
 
     def run(self, topic: str) -> SummaryStateOutput:
         """Execute the research workflow and return the final report."""
         state = SummaryState(research_topic=topic)
         state.todo_items = self.planner.plan_todo_list(state)
-        self._drain_tool_events(state)
 
         if not state.todo_items:
             logger.info("No TODO items generated; falling back to single task")
             state.todo_items = [self.planner.create_fallback_task(state)]
 
+        self._create_task_notes(state)
+
         for task in state.todo_items:
             self._execute_task(state, task, emit_stream=False)
 
-        report = self.reporting.generate_report(state)
-        self._drain_tool_events(state)
+        notes_context = self._read_all_task_notes(state)
+        report = self.reporting.generate_report(state, notes_context)
         state.structured_report = report
         state.running_summary = report
-        self._persist_final_report(state, report)
+        self._persist_conclusion_note(state, report)
 
         return SummaryStateOutput(
             running_summary=report,
@@ -153,10 +140,10 @@ class DeepResearchAgent:
         yield {"type": "status", "message": "初始化研究流程"}
 
         state.todo_items = self.planner.plan_todo_list(state)
-        for event in self._drain_tool_events(state, step=0):
-            yield event
         if not state.todo_items:
             state.todo_items = [self.planner.create_fallback_task(state)]
+
+        self._create_task_notes(state)
 
         channel_map: dict[int, dict[str, Any]] = {}
         for index, task in enumerate(state.todo_items, start=1):
@@ -191,11 +178,6 @@ class DeepResearchAgent:
             if step_override is not None:
                 payload["step"] = step_override
             event_queue.put(payload)
-
-        def tool_event_sink(event: dict[str, Any]) -> None:
-            enqueue(event)
-
-        self._set_tool_event_sink(tool_event_sink)
 
         threads: list[Thread] = []
 
@@ -259,18 +241,15 @@ class DeepResearchAgent:
                 if event.get("type") != "__task_done__":
                     yield event
         finally:
-            self._set_tool_event_sink(None)
             for thread in threads:
                 thread.join()
 
-        report = self.reporting.generate_report(state)
-        final_step = len(state.todo_items) + 1
-        for event in self._drain_tool_events(state, step=final_step):
-            yield event
+        notes_context = self._read_all_task_notes(state)
+        report = self.reporting.generate_report(state, notes_context)
         state.structured_report = report
         state.running_summary = report
 
-        note_event = self._persist_final_report(state, report)
+        note_event = self._persist_conclusion_note(state, report)
         if note_event:
             yield note_event
 
@@ -308,12 +287,6 @@ class DeepResearchAgent:
         self._last_search_notices = notices
         task.notices = notices
 
-        if emit_stream:
-            for event in self._drain_tool_events(state, step=step):
-                yield event
-        else:
-            self._drain_tool_events(state)
-
         if notices and emit_stream:
             for notice in notices:
                 if notice:
@@ -327,8 +300,6 @@ class DeepResearchAgent:
         if not search_result or not search_result.get("results"):
             task.status = "skipped"
             if emit_stream:
-                for event in self._drain_tool_events(state, step=step):
-                    yield event
                 yield {
                     "type": "task_status",
                     "task_id": task.id,
@@ -339,12 +310,7 @@ class DeepResearchAgent:
                     "note_path": task.note_path,
                     "step": step,
                 }
-            else:
-                self._drain_tool_events(state)
             return
-        else:
-            if not emit_stream:
-                self._drain_tool_events(state)
 
         sources_summary, context = prepare_research_context(
             search_result,
@@ -358,11 +324,11 @@ class DeepResearchAgent:
             state.web_research_results.append(context)
             state.sources_gathered.append(sources_summary)
 
+        notes_context = self._read_task_note(task)
+
         summary_text: str | None = None
 
         if emit_stream:
-            for event in self._drain_tool_events(state, step=step):
-                yield event
             yield {
                 "type": "sources",
                 "task_id": task.id,
@@ -374,10 +340,10 @@ class DeepResearchAgent:
                 "note_path": task.note_path,
             }
 
-            summary_stream, summary_getter = self.summarizer.stream_task_summary(state, task, context)
+            summary_stream, summary_getter = self.summarizer.stream_task_summary(
+                state, task, context, notes_context,
+            )
             try:
-                for event in self._drain_tool_events(state, step=step):
-                    yield event
                 for chunk in summary_stream:
                     if chunk:
                         yield {
@@ -387,20 +353,17 @@ class DeepResearchAgent:
                             "note_id": task.note_id,
                             "step": step,
                         }
-                    for event in self._drain_tool_events(state, step=step):
-                        yield event
             finally:
                 summary_text = summary_getter()
         else:
-            summary_text = self.summarizer.summarize_task(state, task, context)
-            self._drain_tool_events(state)
+            summary_text = self.summarizer.summarize_task(state, task, context, notes_context)
 
         task.summary = summary_text.strip() if summary_text else "暂无可用信息"
         task.status = "completed"
 
+        self._update_task_note(task)
+
         if emit_stream:
-            for event in self._drain_tool_events(state, step=step):
-                yield event
             yield {
                 "type": "task_status",
                 "task_id": task.id,
@@ -411,25 +374,6 @@ class DeepResearchAgent:
                 "note_path": task.note_path,
                 "step": step,
             }
-        else:
-            self._drain_tool_events(state)
-
-    def _drain_tool_events(
-        self,
-        state: SummaryState,
-        *,
-        step: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """Proxy to the shared tool call tracker."""
-        events = self._tool_tracker.drain(state, step=step)
-        if self._tool_event_sink_enabled:
-            return []
-        return events
-
-    @property
-    def _tool_call_events(self) -> list[dict[str, Any]]:
-        """Expose recorded tool events for legacy integrations."""
-        return self._tool_tracker.as_dicts()
 
     def _serialize_task(self, task: TodoItem) -> dict[str, Any]:
         """Convert task dataclass to serializable dict for frontend."""
@@ -446,94 +390,80 @@ class DeepResearchAgent:
             "stream_token": task.stream_token,
         }
 
-    def _persist_final_report(self, state: SummaryState, report: str) -> dict[str, Any] | None:
-        if not self.note_tool or not report or not report.strip():
+    # ------------------------------------------------------------------
+    # Note sub-agent helpers
+    # ------------------------------------------------------------------
+
+    def _create_task_notes(self, state: SummaryState) -> None:
+        """Create note entries for each planned task via NoteSubAgent."""
+        if not self.note_agent:
+            return
+        for task in state.todo_items:
+            note_id = self.note_agent.create_task_note(
+                task_id=task.id,
+                title=task.title,
+                content=f"任务概览：{task.intent}\n检索查询：{task.query}",
+            )
+            if note_id:
+                task.note_id = note_id
+                task.note_path = self.note_agent.note_path(note_id)
+
+    def _read_task_note(self, task: TodoItem) -> dict[str, Any]:
+        """Read a single task's note content."""
+        if not self.note_agent or not task.note_id:
+            return {}
+        return {task.note_id: self.note_agent.read_note(task.note_id)}
+
+    def _read_all_task_notes(self, state: SummaryState) -> dict[str, Any]:
+        """Read all task notes for report generation."""
+        if not self.note_agent:
+            return {}
+        note_ids = [t.note_id for t in state.todo_items if t.note_id]
+        return self.note_agent.read_all_task_notes(note_ids)
+
+    def _update_task_note(self, task: TodoItem) -> None:
+        """Update a task's note with the latest summary."""
+        if not self.note_agent or not task.note_id:
+            return
+        content_parts = [f"任务状态：{task.status}"]
+        if task.summary:
+            content_parts.append(f"\n任务总结：\n{task.summary}")
+        if task.sources_summary:
+            content_parts.append(f"\n来源概览：\n{task.sources_summary}")
+        self.note_agent.update_note(
+            task.note_id,
+            task_id=task.id,
+            title=f"任务 {task.id}: {task.title}",
+            content="\n".join(content_parts),
+        )
+
+    def _persist_conclusion_note(self, state: SummaryState, report: str) -> dict[str, Any] | None:
+        """Save the final report as a conclusion note via NoteSubAgent."""
+        if not self.note_agent or not report or not report.strip():
             return None
 
         note_title = f"研究报告：{state.research_topic}".strip() or "研究报告"
-        tags = ["deep_research", "report"]
-        content = report.strip()
-
-        note_id = self._find_existing_report_note_id(state)
-        response = ""
-
-        if note_id:
-            response = self.note_tool.run(
-                {
-                    "action": "update",
-                    "note_id": note_id,
-                    "title": note_title,
-                    "note_type": "conclusion",
-                    "tags": tags,
-                    "content": content,
-                }
-            )
-            if response.startswith("❌"):
-                note_id = None
-
-        if not note_id:
-            response = self.note_tool.run(
-                {
-                    "action": "create",
-                    "title": note_title,
-                    "note_type": "conclusion",
-                    "tags": tags,
-                    "content": content,
-                }
-            )
-            note_id = self._extract_note_id_from_text(response)
+        note_id = self.note_agent.create_conclusion_note(
+            title=note_title,
+            content=report.strip(),
+        )
 
         if not note_id:
             return None
 
         state.report_note_id = note_id
-        if self.config.notes_workspace:
-            note_path = Path(self.config.notes_workspace) / f"{note_id}.md"
-            state.report_note_path = str(note_path)
-        else:
-            note_path = None
+        state.report_note_path = self.note_agent.note_path(note_id)
 
         payload = {
             "type": "report_note",
             "note_id": note_id,
             "title": note_title,
-            "content": content,
+            "content": report,
         }
-        if note_path:
-            payload["note_path"] = str(note_path)
+        if state.report_note_path:
+            payload["note_path"] = state.report_note_path
 
         return payload
-
-    def _find_existing_report_note_id(self, state: SummaryState) -> str | None:
-        if state.report_note_id:
-            return state.report_note_id
-
-        for event in reversed(self._tool_tracker.as_dicts()):
-            if event.get("tool") != "note":
-                continue
-
-            parameters = event.get("parsed_parameters") or {}
-            if not isinstance(parameters, dict):
-                continue
-
-            action = parameters.get("action")
-            if action not in {"create", "update"}:
-                continue
-
-            note_type = parameters.get("note_type")
-            if note_type != "conclusion":
-                title = parameters.get("title")
-                if not (isinstance(title, str) and title.startswith("研究报告")):
-                    continue
-
-            note_id = parameters.get("note_id")
-            if not note_id:
-                note_id = self._tool_tracker.extract_note_id(event.get("result", ""))
-
-            if note_id:
-                return note_id
-
-        return None
 
 
 def run_deep_research(topic: str, config: Configuration | None = None) -> SummaryStateOutput:
