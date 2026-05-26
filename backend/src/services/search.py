@@ -97,9 +97,18 @@ def dispatch_search(
             "answer": None,
             "notices": notices,
         }
-    else:
+    elif isinstance(raw_response, dict):
         payload = raw_response
         notices = list(payload.get("notices") or [])
+    else:
+        logger.error("Search backend %s returned unexpected type: %s", search_api, type(raw_response))
+        payload: dict[str, Any] = {
+            "results": [],
+            "backend": search_api,
+            "answer": None,
+            "notices": [f"Search returned unexpected type: {type(raw_response).__name__}"],
+        }
+        notices = payload["notices"]
 
     backend_label = str(payload.get("backend") or search_api)
     answer_text = payload.get("answer")

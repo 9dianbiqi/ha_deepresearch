@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
+from loguru import logger
+
 from agent import DeepResearchAgent
 from models import SummaryStateOutput, TodoItem
 
@@ -42,15 +44,16 @@ class HarnessRunner:
 
     def run(self, request: HarnessRunRequest) -> HarnessRunResult:
         """Execute a research run under harness control."""
+        logger.info("Harness run started: run_id={} topic={!r}", request.run_id, request.topic)
         context = RunContext(request=request, status="running")
         self.event_bus.emit(context, "run_started", topic=request.topic)
-        evaluation = EvaluationResult(score=0.0)
 
         try:
             self._evaluate_policy(context)
             self._execute_agent(context)
             self._compress_context(context)
         except Exception as exc:
+            logger.exception("Harness run failed: run_id={}", request.run_id)
             context.status = "failed"
             context.error = str(exc)
             self.event_bus.emit(context, "run_failed", error=str(exc))
@@ -60,6 +63,10 @@ class HarnessRunner:
             context.metrics["event_count"] = len(context.events)
 
         evaluation = self._evaluate_run(context)
+        logger.info(
+            "Harness run completed: run_id={} status={} score={:.2f} duration={:.1f}s",
+            request.run_id, context.status, evaluation.score, context.metrics["duration_seconds"],
+        )
         context.metrics["evaluation_score"] = evaluation.score
         self._persist_run(context, evaluation)
 
@@ -76,6 +83,7 @@ class HarnessRunner:
 
     def stream(self, request: HarnessRunRequest):
         """Execute a research run while yielding agent stream events."""
+        logger.info("Harness stream started: run_id={} topic={!r}", request.run_id, request.topic)
         context = RunContext(request=request, status="running")
         self.event_bus.emit(context, "run_started", topic=request.topic)
         stream_state: dict[int, TodoItem] = {}
@@ -89,6 +97,7 @@ class HarnessRunner:
                     context,
                     "research_event",
                     source_type=str(event.get("type", "unknown")),
+                    event_payload=event,
                 )
                 self._ingest_stream_event(stream_state, event)
                 if event.get("type") == "final_report":
@@ -106,6 +115,7 @@ class HarnessRunner:
             context.status = "completed"
             self._compress_context(context)
         except Exception as exc:
+            logger.exception("Harness stream failed: run_id={}", request.run_id)
             context.status = "failed"
             context.error = str(exc)
             self.event_bus.emit(context, "run_failed", error=str(exc))
@@ -119,6 +129,10 @@ class HarnessRunner:
             context.metrics["duration_seconds"] = context.duration_seconds
             context.metrics["event_count"] = len(context.events)
             evaluation = self._evaluate_run(context)
+            logger.info(
+                "Harness stream completed: run_id={} status={} score={:.2f} duration={:.1f}s",
+                request.run_id, context.status, evaluation.score, context.metrics["duration_seconds"],
+            )
             context.metrics["evaluation_score"] = evaluation.score
             self._persist_run(context, evaluation)
 
@@ -129,6 +143,8 @@ class HarnessRunner:
     def _evaluate_policy(self, context: RunContext) -> None:
         decisions = self.policy.evaluate(context.request)
         context.policy_decisions = [item.as_dict() for item in decisions]
+        outcomes = {d.capability: d.outcome for d in decisions}
+        logger.info("Policy evaluated: run_id={} outcomes={}", context.run_id, outcomes)
         self.event_bus.emit(
             context,
             "policy_checked",

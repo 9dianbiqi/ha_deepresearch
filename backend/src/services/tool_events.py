@@ -205,7 +205,7 @@ class ToolCallTracker:
 
         return None
 
-    def _extract_note_id(self, response: str) -> Optional[str]:
+    def extract_note_id(self, response: str) -> Optional[str]:
         if not response:
             return None
 

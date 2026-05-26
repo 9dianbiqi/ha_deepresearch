@@ -24,15 +24,6 @@ logger.add(
 )
 
 
-# 添加错误日志文件处理程序
-logger.add(
-    sink=sys.stderr,
-    level="ERROR",
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <4}</level> | <cyan>using_function:{function}</cyan> | <cyan>{file}:{line}</cyan> | <level>{message}</level>",
-    colorize=True,
-)
-
-
 class ResearchRequest(BaseModel):
     """Payload for triggering a research run."""
 

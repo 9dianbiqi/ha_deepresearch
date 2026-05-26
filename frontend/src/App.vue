@@ -145,7 +145,7 @@
               {{ loading ? "研究进行中" : "研究流程完成" }}
             </div>
             <span class="status-meta">
-              任务进度：{{ completedTasks }} / {{ totalTasks || todoTasks.length || 1 }}
+              任务进度：{{ completedTasks }} / {{ totalTasks || todoTasks.length }}
               · 阶段记录 {{ progressLogs.length }} 条
             </span>
           </div>
@@ -446,25 +446,46 @@ const currentTaskToolCalls = computed(
   () => currentTask.value?.toolCalls ?? []
 );
 
+const sanitizeHtml = (html: string): string => {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/\bon\w+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\bon\w+\s*=\s*'[^']*'/gi, "")
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/<object[\s\S]*?<\/object>/gi, "")
+    .replace(/<embed[\s\S]*?>/gi, "");
+};
+
 const renderedTaskSummary = computed(() => {
   const raw = currentTask.value?.summary;
   if (!raw) return "";
-  return marked.parse(raw);
+  return sanitizeHtml(marked.parse(raw) as string);
 });
 
 const renderedReport = computed(() => {
   if (!reportMarkdown.value) return "";
-  return marked.parse(reportMarkdown.value);
+  return sanitizeHtml(marked.parse(reportMarkdown.value) as string);
 });
 
+let _pulseRaf = 0;
+let _pulseTimer = 0;
+
 const pulse = (flag: typeof summaryHighlight) => {
+  cancelAnimationFrame(_pulseRaf);
+  clearTimeout(_pulseTimer);
   flag.value = false;
-  requestAnimationFrame(() => {
+  _pulseRaf = requestAnimationFrame(() => {
     flag.value = true;
-    window.setTimeout(() => {
+    _pulseTimer = window.setTimeout(() => {
       flag.value = false;
     }, 1200);
   });
+};
+
+const clearAnimations = () => {
+  cancelAnimationFrame(_pulseRaf);
+  clearTimeout(_pulseTimer);
+  _pulseRaf = 0;
+  _pulseTimer = 0;
 };
 
 function parseSources(raw: string): SourceItem[] {
@@ -649,6 +670,7 @@ async function copyNotePath(path: string | null | undefined) {
 }
 
 function resetWorkflowState() {
+  clearAnimations();
   todoTasks.value = [];
   activeTaskId.value = null;
   reportMarkdown.value = "";
@@ -1001,6 +1023,7 @@ const startNewResearch = () => {
 };
 
 onBeforeUnmount(() => {
+  clearAnimations();
   if (currentController) {
     currentController.abort();
     currentController = null;

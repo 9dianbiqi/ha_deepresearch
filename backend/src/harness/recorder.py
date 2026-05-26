@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from loguru import logger
+
 from .evaluator import EvaluationResult
 from .models import HarnessRunRecord, RecorderConfig, RunContext
 
@@ -45,10 +47,22 @@ class JsonlRunRecorder:
             for event in context.events:
                 handle.write(json.dumps(event.as_dict(), ensure_ascii=False))
                 handle.write("\n")
+        index_entry = {
+            "run_id": record.run_id,
+            "topic": record.topic,
+            "status": record.status,
+            "started_at": record.started_at.isoformat() if hasattr(record.started_at, "isoformat") else str(record.started_at),
+            "completed_at": record.completed_at.isoformat() if hasattr(record.completed_at, "isoformat") else str(record.completed_at),
+            "score": evaluation.score,
+        }
         with index_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record.as_dict(), ensure_ascii=False))
+            handle.write(json.dumps(index_entry, ensure_ascii=False))
             handle.write("\n")
 
+        logger.info(
+            "Run persisted: run_id={} events={} score={:.2f}",
+            context.run_id, len(context.events), evaluation.score,
+        )
         return record
 
     def load(self, run_id: str) -> dict[str, object]:

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
+from loguru import logger
+
 from config import SearchAPI
 
 from .models import HarnessRunRequest
@@ -55,7 +57,9 @@ class HarnessPolicy:
             reasons = "; ".join(
                 f"{item.capability}: {item.reason}" for item in blocked
             )
+            logger.warning("Policy blocked execution: {}", reasons)
             raise PermissionError(reasons)
+        logger.debug("Policy check passed: all capabilities allowed")
 
     def _evaluate_capability(
         self,

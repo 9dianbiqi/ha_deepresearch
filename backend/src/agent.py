@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Lock, Thread
@@ -297,10 +296,14 @@ class DeepResearchAgent:
         """Run search + summarization for a single task."""
         task.status = "in_progress"
 
+        with self._state_lock:
+            loop_count = state.research_loop_count
+            state.research_loop_count += 1
+
         search_result, notices, answer_text, backend = dispatch_search(
             task.query,
             self.config,
-            state.research_loop_count,
+            loop_count,
         )
         self._last_search_notices = notices
         task.notices = notices
@@ -354,7 +357,6 @@ class DeepResearchAgent:
         with self._state_lock:
             state.web_research_results.append(context)
             state.sources_gathered.append(sources_summary)
-            state.research_loop_count += 1
 
         summary_text: str | None = None
 
@@ -526,23 +528,12 @@ class DeepResearchAgent:
 
             note_id = parameters.get("note_id")
             if not note_id:
-                note_id = self._tool_tracker._extract_note_id(event.get("result", ""))  # type: ignore[attr-defined]
+                note_id = self._tool_tracker.extract_note_id(event.get("result", ""))
 
             if note_id:
                 return note_id
 
         return None
-
-    @staticmethod
-    def _extract_note_id_from_text(response: str) -> str | None:
-        if not response:
-            return None
-
-        match = re.search(r"ID:\s*([^\n]+)", response)
-        if not match:
-            return None
-
-        return match.group(1).strip()
 
 
 def run_deep_research(topic: str, config: Configuration | None = None) -> SummaryStateOutput:
