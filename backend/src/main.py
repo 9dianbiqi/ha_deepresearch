@@ -160,9 +160,11 @@ def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
     )
 
 
-def create_app() -> FastAPI:
+def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
     app = FastAPI(title="HelloAgents Deep Researcher")
-    harness_runner = HarnessRunner.build_default(base_path="./output/harness_runs")
+    harness_runner = harness_runner or HarnessRunner.build_default(
+        base_path="./output/harness_runs"
+    )
 
     app.add_middleware(
         CORSMiddleware,

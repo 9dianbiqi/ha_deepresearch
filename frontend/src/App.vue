@@ -268,7 +268,7 @@
               :class="{ 'block-highlight': summaryHighlight }"
             >
               <h3>任务总结</h3>
-              <pre class="block-pre">{{ currentTaskSummary || "暂无可用信息" }}</pre>
+              <div class="markdown-body" v-html="renderedTaskSummary || '暂无可用信息'"></div>
             </section>
 
             <section
@@ -327,7 +327,7 @@
           :class="{ 'block-highlight': reportHighlight }"
         >
           <h3>最终报告</h3>
-          <pre class="block-pre">{{ reportMarkdown }}</pre>
+          <div class="markdown-body" v-html="renderedReport"></div>
         </div>
       </section>
 
@@ -337,11 +337,17 @@
 
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, reactive, ref } from "vue";
+import { marked } from "marked";
 
 import {
   runResearchStream,
   type ResearchStreamEvent
 } from "./services/api";
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
 
 interface SourceItem {
   title: string;
@@ -439,6 +445,17 @@ const currentTaskNotePath = computed(() => currentTask.value?.notePath ?? "");
 const currentTaskToolCalls = computed(
   () => currentTask.value?.toolCalls ?? []
 );
+
+const renderedTaskSummary = computed(() => {
+  const raw = currentTask.value?.summary;
+  if (!raw) return "";
+  return marked.parse(raw);
+});
+
+const renderedReport = computed(() => {
+  if (!reportMarkdown.value) return "";
+  return marked.parse(reportMarkdown.value);
+});
 
 const pulse = (flag: typeof summaryHighlight) => {
   flag.value = false;
@@ -1720,8 +1737,79 @@ select:focus {
   background: linear-gradient(180deg, rgba(79, 70, 229, 0.8), rgba(37, 99, 235, 0.75));
 }
 
-.summary-block .block-pre,
-.sources-block .block-pre {
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #1f2937;
+  background: rgba(248, 250, 252, 0.9);
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  overflow: auto;
+  max-height: 420px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(129, 140, 248, 0.6) rgba(226, 232, 240, 0.7);
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 12px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.markdown-body h1 { font-size: 18px; }
+.markdown-body h2 { font-size: 16px; }
+.markdown-body h3 { font-size: 15px; }
+.markdown-body h4 { font-size: 14px; }
+
+.markdown-body p {
+  margin: 6px 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.markdown-body li {
+  margin: 3px 0;
+}
+.markdown-body strong {
+  font-weight: 600;
+}
+.markdown-body a {
+  color: #4f46e5;
+  text-decoration: underline;
+}
+.markdown-body code {
+  background: rgba(0,0,0,0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+}
+.markdown-body pre {
+  background: rgba(0,0,0,0.04);
+  padding: 12px;
+  border-radius: 10px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.markdown-body blockquote {
+  border-left: 3px solid #6366f1;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #475569;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.3);
+  margin: 16px 0;
+}
+
+.summary-block .markdown-body,
+.sources-block .markdown-body {
   max-height: 360px;
 }
 
