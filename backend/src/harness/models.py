@@ -27,6 +27,7 @@ class HarnessRunRequest:
     metadata: dict[str, Any] = field(default_factory=dict)
     permission_mode: str = "default"
     caller_mode: str = "public"
+    parent_run_id: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -150,18 +151,7 @@ class HarnessRunRecord:
             "running_summary": output.running_summary if output else None,
             "report_markdown": output.report_markdown if output else None,
             "todo_items": [
-                {
-                    "id": item.id,
-                    "title": item.title,
-                    "intent": item.intent,
-                    "query": item.query,
-                    "status": item.status,
-                    "summary": item.summary,
-                    "sources_summary": item.sources_summary,
-                    "note_id": item.note_id,
-                    "note_path": item.note_path,
-                }
-                for item in (output.todo_items if output else [])
+                item.to_dict() for item in (output.todo_items if output else [])
             ],
         }
 

@@ -91,8 +91,12 @@ class HarnessRunner:
 
         try:
             self._evaluate_policy(context)
+            prior_context = self._load_prior_context(context.request)
             agent = DeepResearchAgent(config=context.request.config)
-            for event in agent.run_stream(context.request.topic):
+            for event in agent.run_stream(
+                context.request.topic,
+                prior_context=prior_context,
+            ):
                 self.event_bus.emit(
                     context,
                     "research_event",
@@ -153,8 +157,12 @@ class HarnessRunner:
         self.policy.assert_executable(decisions)
 
     def _execute_agent(self, context: RunContext) -> None:
+        prior_context = self._load_prior_context(context.request)
         agent = DeepResearchAgent(config=context.request.config)
-        context.result = agent.run(context.request.topic)
+        context.result = agent.run(
+            context.request.topic,
+            prior_context=prior_context,
+        )
         context.status = "completed"
         self.event_bus.emit(
             context,
@@ -162,6 +170,30 @@ class HarnessRunner:
             todo_count=len(context.result.todo_items),
             has_report=bool((context.result.report_markdown or "").strip()),
         )
+
+    def _load_prior_context(self, request: HarnessRunRequest) -> dict[str, object] | None:
+        """Load ``reasoning_memory`` from a previous run for multi-turn research."""
+        if not request.parent_run_id:
+            return None
+        try:
+            record = self.recorder.load(request.parent_run_id)
+            compressed = record.get("compressed_context") or {}
+            reasoning = compressed.get("reasoning_memory") or {}
+            if reasoning:
+                logger.info(
+                    "Loaded prior context from run_id=%s: findings=%d sources=%d open_questions=%d",
+                    request.parent_run_id,
+                    len(reasoning.get("key_findings") or []),
+                    len(reasoning.get("key_sources") or []),
+                    len(reasoning.get("open_questions") or []),
+                )
+            return dict(reasoning)
+        except FileNotFoundError:
+            logger.warning(
+                "Parent run %s not found — proceeding without prior context",
+                request.parent_run_id,
+            )
+            return None
 
     def _compress_context(self, context: RunContext) -> None:
         self.context_manager.finalize(context)

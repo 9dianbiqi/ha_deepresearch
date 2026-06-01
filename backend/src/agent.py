@@ -107,10 +107,16 @@ class DeepResearchAgent:
             tool_registry=None,
         )
 
-    def run(self, topic: str) -> SummaryStateOutput:
+    def run(
+        self,
+        topic: str,
+        prior_context: dict[str, Any] | None = None,
+    ) -> SummaryStateOutput:
         """Execute the research workflow and return the final report."""
         state = SummaryState(research_topic=topic)
-        state.todo_items = self.planner.plan_todo_list(state)
+        state.todo_items = self.planner.plan_todo_list(
+            state, prior_context=prior_context,
+        )
 
         if not state.todo_items:
             logger.info("No TODO items generated; falling back to single task")
@@ -133,13 +139,19 @@ class DeepResearchAgent:
             todo_items=state.todo_items,
         )
 
-    def run_stream(self, topic: str) -> Iterator[dict[str, Any]]:
+    def run_stream(
+        self,
+        topic: str,
+        prior_context: dict[str, Any] | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Execute the workflow yielding incremental progress events."""
         state = SummaryState(research_topic=topic)
         logger.debug("Starting streaming research: topic=%s", topic)
         yield {"type": "status", "message": "初始化研究流程"}
 
-        state.todo_items = self.planner.plan_todo_list(state)
+        state.todo_items = self.planner.plan_todo_list(
+            state, prior_context=prior_context,
+        )
         if not state.todo_items:
             state.todo_items = [self.planner.create_fallback_task(state)]
 
@@ -242,7 +254,9 @@ class DeepResearchAgent:
                     yield event
         finally:
             for thread in threads:
-                thread.join()
+                thread.join(timeout=120)
+                if thread.is_alive():
+                    logger.warning("Task thread %s did not finish within timeout", thread.name)
 
         notes_context = self._read_all_task_notes(state)
         report = self.reporting.generate_report(state, notes_context)
@@ -272,94 +286,149 @@ class DeepResearchAgent:
         emit_stream: bool,
         step: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Run search + summarization for a single task."""
+        """Run search + summarization for a single task with retry on poor results."""
         task.status = "in_progress"
+        max_retries = 3
+        original_query = task.query
 
-        with self._state_lock:
-            loop_count = state.research_loop_count
-            state.research_loop_count += 1
+        for attempt in range(max_retries):
+            with self._state_lock:
+                loop_count = state.research_loop_count
+                state.research_loop_count += 1
 
-        search_result, notices, answer_text, backend = dispatch_search(
-            task.query,
-            self.config,
-            loop_count,
-        )
-        self._last_search_notices = notices
-        task.notices = notices
+            search_result, notices, answer_text, backend = dispatch_search(
+                task.query,
+                self.config,
+                loop_count,
+            )
+            self._last_search_notices = notices
+            task.notices = notices
 
-        if notices and emit_stream:
-            for notice in notices:
-                if notice:
+            if notices and emit_stream:
+                for notice in notices:
+                    if notice:
+                        yield {
+                            "type": "status",
+                            "message": notice,
+                            "task_id": task.id,
+                            "step": step,
+                        }
+
+            # No search results — refine query and retry
+            if not search_result or not search_result.get("results"):
+                if attempt < max_retries - 1:
+                    old_query = task.query
+                    task.query = self._refine_query(task, attempt)
+                    task.retry_count += 1
+                    task.refined_queries.append(old_query)
+                    logger.info(
+                        "Task %d attempt %d: no results for query=%r → refined to %r",
+                        task.id, attempt + 1, old_query, task.query,
+                    )
+                    if emit_stream:
+                        yield {
+                            "type": "task_retry",
+                            "task_id": task.id,
+                            "previous_query": old_query,
+                            "refined_query": task.query,
+                            "attempt": attempt + 1,
+                            "reason": "no_search_results",
+                            "step": step,
+                        }
+                    continue
+                task.status = "skipped"
+                task.query = original_query  # restore for record
+                if emit_stream:
                     yield {
-                        "type": "status",
-                        "message": notice,
+                        "type": "task_status",
                         "task_id": task.id,
+                        "status": "skipped",
+                        "title": task.title,
+                        "intent": task.intent,
+                        "note_id": task.note_id,
+                        "note_path": task.note_path,
+                        "step": step,
+                    }
+                return
+
+            sources_summary, context = prepare_research_context(
+                search_result,
+                answer_text,
+                self.config,
+            )
+
+            task.sources_summary = sources_summary
+
+            with self._state_lock:
+                state.web_research_results.append(context)
+                state.sources_gathered.append(sources_summary)
+
+            notes_context = self._read_task_note(task)
+
+            summary_text: str | None = None
+
+            if emit_stream:
+                yield {
+                    "type": "sources",
+                    "task_id": task.id,
+                    "latest_sources": sources_summary,
+                    "raw_context": context,
+                    "step": step,
+                    "backend": backend,
+                    "note_id": task.note_id,
+                    "note_path": task.note_path,
+                }
+
+                summary_stream, summary_getter = self.summarizer.stream_task_summary(
+                    state, task, context, notes_context,
+                )
+                try:
+                    for chunk in summary_stream:
+                        if chunk:
+                            yield {
+                                "type": "task_summary_chunk",
+                                "task_id": task.id,
+                                "content": chunk,
+                                "note_id": task.note_id,
+                                "step": step,
+                            }
+                finally:
+                    summary_text = summary_getter()
+            else:
+                summary_text = self.summarizer.summarize_task(
+                    state, task, context, notes_context,
+                )
+
+            task.summary = summary_text.strip() if summary_text else "暂无可用信息"
+
+            # Quality check — refine and retry if insufficient
+            quality = self._check_summary_quality(task.summary)
+            if quality["passed"]:
+                break
+
+            if attempt < max_retries - 1:
+                old_query = task.query
+                task.query = self._refine_query(task, attempt)
+                task.retry_count += 1
+                task.refined_queries.append(old_query)
+                logger.info(
+                    "Task %d attempt %d: summary insufficient (reasons=%s) "
+                    "→ refined query to %r",
+                    task.id, attempt + 1, quality["reasons"], task.query,
+                )
+                if emit_stream:
+                    yield {
+                        "type": "task_retry",
+                        "task_id": task.id,
+                        "previous_query": old_query,
+                        "refined_query": task.query,
+                        "attempt": attempt + 1,
+                        "reason": ",".join(quality["reasons"]),
                         "step": step,
                     }
 
-        if not search_result or not search_result.get("results"):
-            task.status = "skipped"
-            if emit_stream:
-                yield {
-                    "type": "task_status",
-                    "task_id": task.id,
-                    "status": "skipped",
-                    "title": task.title,
-                    "intent": task.intent,
-                    "note_id": task.note_id,
-                    "note_path": task.note_path,
-                    "step": step,
-                }
-            return
-
-        sources_summary, context = prepare_research_context(
-            search_result,
-            answer_text,
-            self.config,
-        )
-
-        task.sources_summary = sources_summary
-
-        with self._state_lock:
-            state.web_research_results.append(context)
-            state.sources_gathered.append(sources_summary)
-
-        notes_context = self._read_task_note(task)
-
-        summary_text: str | None = None
-
-        if emit_stream:
-            yield {
-                "type": "sources",
-                "task_id": task.id,
-                "latest_sources": sources_summary,
-                "raw_context": context,
-                "step": step,
-                "backend": backend,
-                "note_id": task.note_id,
-                "note_path": task.note_path,
-            }
-
-            summary_stream, summary_getter = self.summarizer.stream_task_summary(
-                state, task, context, notes_context,
-            )
-            try:
-                for chunk in summary_stream:
-                    if chunk:
-                        yield {
-                            "type": "task_summary_chunk",
-                            "task_id": task.id,
-                            "content": chunk,
-                            "note_id": task.note_id,
-                            "step": step,
-                        }
-            finally:
-                summary_text = summary_getter()
-        else:
-            summary_text = self.summarizer.summarize_task(state, task, context, notes_context)
-
-        task.summary = summary_text.strip() if summary_text else "暂无可用信息"
         task.status = "completed"
+        task.query = original_query  # restore for record
 
         self._update_task_note(task)
 
@@ -377,18 +446,57 @@ class DeepResearchAgent:
 
     def _serialize_task(self, task: TodoItem) -> dict[str, Any]:
         """Convert task dataclass to serializable dict for frontend."""
-        return {
-            "id": task.id,
-            "title": task.title,
-            "intent": task.intent,
-            "query": task.query,
-            "status": task.status,
-            "summary": task.summary,
-            "sources_summary": task.sources_summary,
-            "note_id": task.note_id,
-            "note_path": task.note_path,
-            "stream_token": task.stream_token,
-        }
+        return task.to_dict()
+
+    # ------------------------------------------------------------------
+    # Summary quality & query refinement
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_summary_quality(summary: str) -> dict[str, Any]:
+        """Rule-based quality check for a task summary.
+
+        Returns a dict with ``passed`` (bool) and ``reasons`` (list[str]).
+        """
+        passed = True
+        reasons: list[str] = []
+
+        if not summary or summary.strip() == "暂无可用信息":
+            passed = False
+            reasons.append("empty_or_fallback")
+
+        if len(summary.strip()) < 50:
+            passed = False
+            reasons.append("too_short")
+
+        has_structure = any(
+            marker in summary for marker in ("###", "- ", "* ", "1. ", "2. ")
+        )
+        if not has_structure:
+            passed = False
+            reasons.append("no_structure")
+
+        return {"passed": passed, "reasons": reasons}
+
+    @staticmethod
+    def _refine_query(task: TodoItem, attempt: int) -> str:
+        """Generate a broader or alternative search query after a failed attempt.
+
+        * attempt 0 — extract keywords from ``intent``
+        * attempt 1 — use the task title plus English fallback keywords
+        """
+        if attempt == 0:
+            keywords = (
+                task.intent.replace("，", ",")
+                .replace("、", ",")
+                .replace("；", ",")
+                .split(",")
+            )
+            refined = " ".join(k.strip() for k in keywords if k.strip())
+            return refined or f"{task.title} 深入分析"
+
+        # attempt >= 1: broader English-oriented query
+        return f"{task.title} overview latest research"
 
     # ------------------------------------------------------------------
     # Note sub-agent helpers
@@ -466,7 +574,3 @@ class DeepResearchAgent:
         return payload
 
 
-def run_deep_research(topic: str, config: Configuration | None = None) -> SummaryStateOutput:
-    """Convenience function mirroring the class-based API."""
-    agent = DeepResearchAgent(config=config)
-    return agent.run(topic)

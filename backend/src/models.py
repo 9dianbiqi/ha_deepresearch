@@ -1,7 +1,7 @@
 """State models used by the deep research workflow."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 @dataclass(kw_only=True)
@@ -19,25 +19,39 @@ class TodoItem:
     note_id: Optional[str] = field(default=None)
     note_path: Optional[str] = field(default=None)
     stream_token: Optional[str] = field(default=None)
+    retry_count: int = field(default=0)
+    refined_queries: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert task to a JSON-serializable dict (single source of truth)."""
+        return {
+            "id": self.id,
+            "title": self.title,
+            "intent": self.intent,
+            "query": self.query,
+            "status": self.status,
+            "summary": self.summary,
+            "sources_summary": self.sources_summary,
+            "note_id": self.note_id,
+            "note_path": self.note_path,
+            "stream_token": self.stream_token,
+            "retry_count": self.retry_count,
+            "refined_queries": self.refined_queries,
+        }
 
 
 @dataclass(kw_only=True)
 class SummaryState:
     research_topic: Optional[str] = field(default=None)  # Report topic
     search_query: Optional[str] = field(default=None)  # Deprecated placeholder
-    web_research_results: list = field(default_factory=list)
-    sources_gathered: list = field(default_factory=list)
+    web_research_results: list[str] = field(default_factory=list)
+    sources_gathered: list[str] = field(default_factory=list)
     research_loop_count: int = field(default=0)  # Research loop count
     running_summary: Optional[str] = field(default=None)  # Legacy summary field
-    todo_items: list = field(default_factory=list)
+    todo_items: list[TodoItem] = field(default_factory=list)
     structured_report: Optional[str] = field(default=None)
     report_note_id: Optional[str] = field(default=None)
     report_note_path: Optional[str] = field(default=None)
-
-
-@dataclass(kw_only=True)
-class SummaryStateInput:
-    research_topic: Optional[str] = field(default=None)  # Report topic
 
 
 @dataclass(kw_only=True)

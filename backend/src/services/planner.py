@@ -23,13 +23,22 @@ class PlanningService:
         self._agent = planner_agent
         self._config = config
 
-    def plan_todo_list(self, state: SummaryState) -> List[TodoItem]:
+    def plan_todo_list(
+        self,
+        state: SummaryState,
+        prior_context: dict[str, Any] | None = None,
+    ) -> List[TodoItem]:
         """Ask the planner agent to break the topic into actionable tasks."""
 
         prompt = todo_planner_instructions.format(
             current_date=get_current_date(),
             research_topic=state.research_topic,
         )
+
+        if prior_context:
+            prior_block = self._format_prior_context(prior_context)
+            prompt = prior_block + "\n\n" + prompt
+            logger.info("Planner prompt augmented with prior research context")
 
         response = self._agent.run(prompt)
         self._agent.clear_history()
@@ -71,6 +80,39 @@ class PlanningService:
             intent="收集主题的核心背景与最新动态",
             query=f"{state.research_topic} 最新进展" if state.research_topic else "基础背景梳理",
         )
+
+    @staticmethod
+    def _format_prior_context(prior: dict[str, Any]) -> str:
+        """Build a context block summarising the previous research run."""
+
+        parts: list[str] = [
+            "## 上一轮研究发现（请勿重复研究以下已完成的主题）",
+            "",
+        ]
+
+        key_findings = prior.get("key_findings") or []
+        if key_findings:
+            parts.append("### 已发现的关键结论")
+            for finding in key_findings[:5]:
+                parts.append(f"- {finding}")
+            parts.append("")
+
+        open_questions = prior.get("open_questions") or []
+        if open_questions:
+            parts.append("### 待深入探究的问题（请让新任务聚焦于此）")
+            for question in open_questions:
+                parts.append(f"- {question}")
+            parts.append("")
+
+        key_sources = prior.get("key_sources") or []
+        if key_sources:
+            parts.append("### 上一轮关键来源（可复用）")
+            for source in key_sources[:3]:
+                parts.append(f"- {source}")
+            parts.append("")
+
+        parts.append("请基于以上历史上下文规划新任务，避免重复已完成的调研。")
+        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Parsing helpers

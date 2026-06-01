@@ -329,6 +329,46 @@
           <h3>最终报告</h3>
           <div class="markdown-body" v-html="renderedReport"></div>
         </div>
+
+        <!-- 继续追问 / 新研究操作区 -->
+        <div v-if="reportMarkdown && !loading" class="follow-up-bar">
+          <div v-if="!continueMode" class="follow-up-actions">
+            <button class="btn" @click="startNewResearch">
+              📝 研究新主题
+            </button>
+            <button
+              class="btn btn-primary"
+              :disabled="!currentRunId"
+              @click="continueMode = true"
+            >
+              🔍 继续追问
+            </button>
+          </div>
+
+          <form
+            v-else
+            class="continue-form"
+            @submit.prevent="handleContinue"
+          >
+            <label class="field">
+              <span>追问主题（将基于上一轮研究发现继续深入）</span>
+              <textarea
+                v-model="form.topic"
+                placeholder="基于刚才的研究结果，进一步追问…"
+                rows="2"
+                required
+              ></textarea>
+            </label>
+            <div class="continue-actions">
+              <button type="submit" class="btn btn-primary" :disabled="loading">
+                开始追问
+              </button>
+              <button type="button" class="btn" @click="continueMode = false">
+                取消
+              </button>
+            </div>
+          </form>
+        </div>
       </section>
 
     </div>
@@ -341,7 +381,9 @@ import { marked } from "marked";
 
 import {
   runResearchStream,
-  type ResearchStreamEvent
+  runContinueStream,
+  type ContinueRequest,
+  type ResearchStreamEvent,
 } from "./services/api";
 
 marked.setOptions({
@@ -396,6 +438,8 @@ const isExpanded = ref(false);
 const todoTasks = ref<TodoTaskView[]>([]);
 const activeTaskId = ref<number | null>(null);
 const reportMarkdown = ref("");
+const currentRunId = ref<string | null>(null);
+const continueMode = ref(false);
 
 const summaryHighlight = ref(false);
 const sourcesHighlight = ref(false);
@@ -680,6 +724,8 @@ function resetWorkflowState() {
   reportHighlight.value = false;
   toolHighlight.value = false;
   logsCollapsed.value = false;
+  continueMode.value = false;
+  // currentRunId is purposely NOT reset — user may continue from same run
 }
 
 function findTask(taskId: unknown): TodoTaskView | undefined {
@@ -735,6 +781,11 @@ const handleSubmit = async () => {
     await runResearchStream(
       payload,
       (event: ResearchStreamEvent) => {
+        // Capture run_id for potential follow-up research
+        if (typeof event.run_id === "string" && event.run_id && !currentRunId.value) {
+          currentRunId.value = event.run_id;
+        }
+
         if (event.type === "status") {
           const message =
             typeof event.message === "string" && event.message.trim()
@@ -988,6 +1039,168 @@ const handleSubmit = async () => {
       progressLogs.value.push("已取消当前研究任务");
     } else {
       error.value = err instanceof Error ? err.message : "请求失败";
+    }
+  } finally {
+    loading.value = false;
+    if (currentController === controller) {
+      currentController = null;
+    }
+  }
+};
+
+const handleContinue = async () => {
+  if (!currentRunId.value) {
+    error.value = "未找到上一轮研究记录，无法继续";
+    return;
+  }
+  if (!form.topic.trim()) {
+    error.value = "请输入追问的研究主题";
+    return;
+  }
+
+  resetWorkflowState();
+  error.value = "";
+  loading.value = true;
+
+  const controller = new AbortController();
+  currentController = controller;
+
+  const continuePayload: ContinueRequest = {
+    topic: form.topic.trim(),
+    parent_run_id: currentRunId.value,
+    search_api: form.searchApi || undefined,
+  };
+
+  try {
+    await runContinueStream(
+      continuePayload,
+      (event: ResearchStreamEvent) => {
+        if (typeof event.run_id === "string" && event.run_id && !currentRunId.value) {
+          currentRunId.value = event.run_id;
+        }
+
+        if (event.type === "status") {
+          const message =
+            typeof event.message === "string" && event.message.trim()
+              ? event.message
+              : "流程状态更新";
+          progressLogs.value.push(message);
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (task && message) {
+            task.notices.push(message);
+            applyNoteMetadata(task, payload);
+          }
+          return;
+        }
+
+        if (event.type === "todo_list") {
+          const list = event.tasks as TodoTaskView[] | undefined;
+          todoTasks.value = (list ?? []).map((t) => ({
+            ...t,
+            notices: [] as string[],
+          }));
+          summaryHighlight.value = false;
+          sourcesHighlight.value = false;
+          reportHighlight.value = false;
+          progressLogs.value.push(`研究任务已拆分为 ${todoTasks.value.length} 个子任务`);
+          if (todoTasks.value.length > 0) {
+            activeTaskId.value = todoTasks.value[0].id;
+          }
+          return;
+        }
+
+        if (event.type === "task_status") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (!task) return;  // defensive — task should exist from todo_list
+          const status = typeof payload.status === "string" && payload.status.trim()
+            ? payload.status
+            : task.status;
+          task.status = status;
+          if (typeof payload.title === "string" && payload.title.trim()) task.title = payload.title.trim();
+          if (typeof payload.intent === "string" && payload.intent.trim()) task.intent = payload.intent.trim();
+          if (typeof payload.note_path === "string") task.notePath = payload.note_path;
+          applyNoteMetadata(task, payload);
+          if (status === "completed") {
+            pulse(summaryHighlight);
+            progressLogs.value.push(`任务「${task.title}」已完成`);
+          } else if (status === "skipped" || status === "failed") {
+            progressLogs.value.push(`任务「${task.title}」${status === "skipped" ? "已跳过" : "执行失败"}`);
+          }
+          return;
+        }
+
+        if (event.type === "sources") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (!task || !activeTaskId.value) return;
+          if (typeof payload.latest_sources === "string" && payload.latest_sources.trim()) {
+            task.sourcesSummary = payload.latest_sources.trim();
+          }
+          applyNoteMetadata(task, payload);
+          pulse(sourcesHighlight);
+          const logSummaryStr = task.sourcesSummary ? task.sourcesSummary.slice(0, 80) : "来源更新";
+          progressLogs.value.push(`任务「${task.title}」来源更新：${logSummaryStr}`);
+          return;
+        }
+
+        if (event.type === "task_summary_chunk") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (!task) return;
+          const content = typeof payload.content === "string" ? payload.content : "";
+          task.summary = (task.summary || "") + content;
+          applyNoteMetadata(task, payload);
+          return;
+        }
+
+        if (event.type === "task_retry") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          const refined = typeof payload.refined_query === "string" ? payload.refined_query : "";
+          const reason = typeof payload.reason === "string" ? payload.reason : "";
+          progressLogs.value.push(
+            `任务「${task?.title || "未知"}」补充搜索：${refined}（原因：${reason}）`
+          );
+          return;
+        }
+
+        if (event.type === "tool_call") {
+          return;
+        }
+
+        if (event.type === "final_report") {
+          const report =
+            typeof event.report === "string" && event.report.trim()
+              ? event.report.trim()
+              : "";
+          reportMarkdown.value = report || "报告生成失败，未获得有效内容";
+          pulse(reportHighlight);
+          progressLogs.value.push("最终报告已生成");
+          return;
+        }
+
+        if (event.type === "error") {
+          const detail =
+            typeof event.detail === "string" && event.detail.trim()
+              ? event.detail
+              : "研究过程中发生错误";
+          error.value = detail;
+          progressLogs.value.push("研究失败，已停止流程");
+        }
+      },
+      { signal: controller.signal }
+    );
+
+    if (!reportMarkdown.value) {
+      reportMarkdown.value = "暂无生成的报告";
+    }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      progressLogs.value.push("已取消当前追问任务");
+    } else {
+      error.value = err instanceof Error ? err.message : "追问失败";
     }
   } finally {
     loading.value = false;
