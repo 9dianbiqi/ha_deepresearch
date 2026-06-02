@@ -161,7 +161,7 @@ class HarnessRunRecord:
             started_at=context.started_at,
             completed_at=context.completed_at,
             status=context.status,
-            config_snapshot=context.request.config.model_dump(),
+            config_snapshot=context.request.config.model_dump(mode="json"),
             metrics=dict(context.metrics),
             error=context.error,
             events=[event.as_dict() for event in context.events],

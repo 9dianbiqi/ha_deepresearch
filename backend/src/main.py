@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import sys
+
+from dotenv import load_dotenv
+
+load_dotenv()
 from typing import Any, Dict, Iterator, Optional
 
 from fastapi import FastAPI, HTTPException

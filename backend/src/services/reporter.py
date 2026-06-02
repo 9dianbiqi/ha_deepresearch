@@ -25,46 +25,52 @@ class ReportingService:
     ) -> str:
         """Generate a structured report based on completed tasks and notes."""
 
+        max_summary_chars = 800  # truncate verbose summaries for the reporter
+
         tasks_block = []
         for task in state.todo_items:
-            summary_block = task.summary or "暂无可用信息"
-            sources_block = task.sources_summary or "暂无来源"
+            summary = (task.summary or "暂无可用信息").strip()
+            if len(summary) > max_summary_chars:
+                summary = summary[:max_summary_chars] + "\n\n... [摘要已截断]"
+
+            # Compact source list — title + URL only, not full content
+            sources_compact = (task.sources_summary or "").strip()
+            if sources_compact:
+                source_lines = sources_compact.splitlines()
+                compact = []
+                for line in source_lines:
+                    stripped = line.strip()
+                    if stripped and ("http" in stripped or not stripped.startswith("*")):
+                        compact.append(stripped)
+                    elif stripped:
+                        compact.append(stripped[:120])
+                sources_compact = "\n".join(compact[:8])  # keep at most 8 lines
+
             tasks_block.append(
                 f"### 任务 {task.id}: {task.title}\n"
-                f"- 任务目标：{task.intent}\n"
-                f"- 检索查询：{task.query}\n"
-                f"- 执行状态：{task.status}\n"
-                f"- 任务总结：\n{summary_block}\n"
-                f"- 来源概览：\n{sources_block}\n"
+                f"- 目标：{task.intent}\n"
+                f"- 状态：{task.status}\n"
+                f"- 总结：\n{summary}\n"
+                + (f"- 来源：\n{sources_compact}\n" if sources_compact else "")
             )
 
-        note_references = []
-        for task in state.todo_items:
-            if task.note_id:
-                note_references.append(
-                    f"- 任务 {task.id}《{task.title}》：note_id={task.note_id}"
-                )
-
-        notes_section_text = "\n".join(note_references) if note_references else "- 暂无可用任务笔记"
-
-        note_content_section = ""
-        if notes_context:
-            parts = []
-            for note_id, note_data in notes_context.items():
-                content = note_data.get("content", "")
-                if content:
-                    parts.append(f"### 笔记 {note_id}\n{content}\n")
-            if parts:
-                note_content_section = (
-                    "\n任务笔记完整内容（已由系统自动同步，无需手动读取）：\n" + "\n".join(parts)
-                )
+        # Compact note reference list instead of full note content
+        note_ids = [t.note_id for t in state.todo_items if t.note_id]
+        note_section = ""
+        if note_ids:
+            note_items = [
+                f"- 任务 {t.id}《{t.title}》: {t.note_id}"
+                for t in state.todo_items if t.note_id
+            ]
+            note_section = "可用笔记：\n" + "\n".join(note_items)
+        else:
+            note_section = "- 暂无可用任务笔记"
 
         prompt = (
-            f"研究主题：{state.research_topic}\n"
-            f"任务概览：\n{''.join(tasks_block)}\n"
-            f"可用任务笔记清单：\n{notes_section_text}\n"
-            f"{note_content_section}\n"
-            "请基于以上所有信息撰写最终研究报告。笔记内容已提供，请直接引用。"
+            f"研究主题：{state.research_topic}\n\n"
+            f"{''.join(tasks_block)}\n"
+            f"{note_section}\n\n"
+            "请基于以上所有信息撰写最终研究报告。"
         )
 
         response = self._agent.run(prompt)

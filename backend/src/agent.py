@@ -65,7 +65,10 @@ class DeepResearchAgent:
     # ------------------------------------------------------------------
     def _init_llm(self) -> HelloAgentsLLM:
         """Instantiate HelloAgentsLLM following configuration preferences."""
-        llm_kwargs: dict[str, Any] = {"temperature": 0.0}
+        llm_kwargs: dict[str, Any] = {
+            "temperature": 0.0,
+            "timeout": self.config.llm_timeout,
+        }
 
         model_id = self.config.llm_model_id or self.config.local_llm
         if model_id:

@@ -86,6 +86,11 @@ class Configuration(BaseModel):
         title="LLM Model ID",
         description="Optional model identifier for custom OpenAI-compatible services",
     )
+    llm_timeout: float = Field(
+        default=60.0,
+        title="LLM Timeout",
+        description="Request timeout in seconds for LLM API calls",
+    )
 
     @classmethod
     def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
