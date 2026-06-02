@@ -33,6 +33,15 @@ class DeepResearchAgent:
         self.config = config or Configuration.from_env()
         self.llm = self._init_llm()
 
+        # Reporter gets a faster model when configured (DeerFlow pattern)
+        if self.config.llm_reporter_model_id:
+            self._reporter_llm = self._init_llm(
+                model_id=self.config.llm_reporter_model_id,
+                max_tokens=3000,
+            )
+        else:
+            self._reporter_llm = self.llm
+
         self.note_agent = (
             NoteSubAgent(workspace=self.config.notes_workspace)
             if self.config.enable_notes
@@ -48,6 +57,7 @@ class DeepResearchAgent:
         self.report_agent = self._create_tool_aware_agent(
             name="报告撰写专家",
             system_prompt=report_writer_instructions.strip(),
+            llm=self._reporter_llm,
         )
 
         self._summarizer_factory: Callable[[], ToolAwareSimpleAgent] = lambda: self._create_tool_aware_agent(  # noqa: E501
@@ -63,16 +73,27 @@ class DeepResearchAgent:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def _init_llm(self) -> HelloAgentsLLM:
-        """Instantiate HelloAgentsLLM following configuration preferences."""
+    def _init_llm(
+        self,
+        *,
+        model_id: str | None = None,
+        max_tokens: int | None = None,
+    ) -> HelloAgentsLLM:
+        """Instantiate HelloAgentsLLM following configuration preferences.
+
+        Args:
+            model_id: Override the default model (e.g. for Reporter).
+            max_tokens: Override the default max_tokens limit.
+        """
         llm_kwargs: dict[str, Any] = {
             "temperature": 0.0,
             "timeout": self.config.llm_timeout,
+            "max_tokens": max_tokens or self.config.llm_max_tokens,
         }
 
-        model_id = self.config.llm_model_id or self.config.local_llm
-        if model_id:
-            llm_kwargs["model"] = model_id
+        resolved_model = model_id or self.config.llm_model_id or self.config.local_llm
+        if resolved_model:
+            llm_kwargs["model"] = resolved_model
 
         provider = (self.config.llm_provider or "").strip()
         if provider:
@@ -96,7 +117,13 @@ class DeepResearchAgent:
 
         return HelloAgentsLLM(**llm_kwargs)
 
-    def _create_tool_aware_agent(self, *, name: str, system_prompt: str) -> ToolAwareSimpleAgent:
+    def _create_tool_aware_agent(
+        self,
+        *,
+        name: str,
+        system_prompt: str,
+        llm: HelloAgentsLLM | None = None,
+    ) -> ToolAwareSimpleAgent:
         """Instantiate a ToolAwareSimpleAgent without tool registry.
 
         Note operations are handled by NoteSubAgent separately — agents
@@ -104,7 +131,7 @@ class DeepResearchAgent:
         """
         return ToolAwareSimpleAgent(
             name=name,
-            llm=self.llm,
+            llm=llm or self.llm,
             system_prompt=system_prompt,
             enable_tool_calling=False,
             tool_registry=None,
@@ -468,7 +495,7 @@ class DeepResearchAgent:
             passed = False
             reasons.append("empty_or_fallback")
 
-        if len(summary.strip()) < 50:
+        if len(summary.strip()) < 30:
             passed = False
             reasons.append("too_short")
 

@@ -91,6 +91,16 @@ class Configuration(BaseModel):
         title="LLM Timeout",
         description="Request timeout in seconds for LLM API calls",
     )
+    llm_max_tokens: int = Field(
+        default=2000,
+        title="LLM Max Tokens",
+        description="Maximum output tokens per LLM call",
+    )
+    llm_reporter_model_id: Optional[str] = Field(
+        default=None,
+        title="LLM Reporter Model ID",
+        description="Optional faster model for the Reporter agent",
+    )
 
     @classmethod
     def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
