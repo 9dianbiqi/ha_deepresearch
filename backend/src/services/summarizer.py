@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from typing import Tuple
+from typing import Any, Tuple
 
 from hello_agents import ToolAwareSimpleAgent
 
 from models import SummaryState, TodoItem
 from config import Configuration
 from utils import strip_thinking_tokens
-from services.notes import build_note_guidance
-from services.text_processing import strip_tool_calls
 
 
 class SummarizationService:
@@ -25,10 +23,16 @@ class SummarizationService:
         self._agent_factory = summarizer_factory
         self._config = config
 
-    def summarize_task(self, state: SummaryState, task: TodoItem, context: str) -> str:
+    def summarize_task(
+        self,
+        state: SummaryState,
+        task: TodoItem,
+        context: str,
+        notes_context: dict[str, Any] | None = None,
+    ) -> str:
         """Generate a task-specific summary using the summarizer agent."""
 
-        prompt = self._build_prompt(state, task, context)
+        prompt = self._build_prompt(state, task, context, notes_context or {})
 
         agent = self._agent_factory()
         try:
@@ -40,16 +44,18 @@ class SummarizationService:
         if self._config.strip_thinking_tokens:
             summary_text = strip_thinking_tokens(summary_text)
 
-        summary_text = strip_tool_calls(summary_text).strip()
-
         return summary_text or "暂无可用信息"
 
     def stream_task_summary(
-        self, state: SummaryState, task: TodoItem, context: str
+        self,
+        state: SummaryState,
+        task: TodoItem,
+        context: str,
+        notes_context: dict[str, Any] | None = None,
     ) -> Tuple[Iterator[str], Callable[[], str]]:
         """Stream the summary text for a task while collecting full output."""
 
-        prompt = self._build_prompt(state, task, context)
+        prompt = self._build_prompt(state, task, context, notes_context or {})
         remove_thinking = self._config.strip_thinking_tokens
         raw_buffer = ""
         visible_output = ""
@@ -107,12 +113,29 @@ class SummarizationService:
             else:
                 cleaned = visible_output
 
-            return strip_tool_calls(cleaned).strip()
+            return cleaned.strip()
 
         return generator(), get_summary
 
-    def _build_prompt(self, state: SummaryState, task: TodoItem, context: str) -> str:
-        """Construct the summarization prompt shared by both modes."""
+    def _build_prompt(
+        self,
+        state: SummaryState,
+        task: TodoItem,
+        context: str,
+        notes_context: dict[str, Any],
+    ) -> str:
+        """Construct the summarization prompt with pre-loaded note content."""
+
+        note_section = ""
+        if notes_context and task.note_id and task.note_id in notes_context:
+            note_data = notes_context[task.note_id]
+            note_content = note_data.get("content", "")
+            if note_content:
+                note_section = (
+                    f"\n任务笔记（ID: {task.note_id}，已由系统自动同步）：\n"
+                    f"{note_content}\n"
+                    "请参考以上笔记内容，避免重复已有信息。\n"
+                )
 
         return (
             f"任务主题：{state.research_topic}\n"
@@ -120,6 +143,6 @@ class SummarizationService:
             f"任务目标：{task.intent}\n"
             f"检索查询：{task.query}\n"
             f"任务上下文：\n{context}\n"
-            f"{build_note_guidance(task)}\n"
-            "请按照以上协作要求先同步笔记，然后返回一份面向用户的 Markdown 总结（仍遵循任务总结模板）。"
+            f"{note_section}"
+            "请返回一份面向用户的 Markdown 总结（遵循任务总结模板）。"
         )

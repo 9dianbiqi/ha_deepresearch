@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from loguru import logger
+
 from .models import EvaluationFinding, HarnessRunRecord, RunContext
 
 
@@ -36,12 +38,17 @@ class RuleBasedEvaluator:
         """Return baseline quality signals for the run."""
         output = context.result
         compressed_context = context.compressed_context
-        return self._evaluate_payload(
+        result = self._evaluate_payload(
             todo_items=output.todo_items if output else [],
             report_markdown=(output.report_markdown or "") if output else "",
             compressed_context=compressed_context,
             has_output=output is not None,
         )
+        logger.info(
+            "Evaluation complete: run_id={} score={:.2f} findings={}",
+            context.run_id, result.score, len(result.findings),
+        )
+        return result
 
     def evaluate_record(self, record: HarnessRunRecord) -> EvaluationResult:
         """Evaluate a persisted record without re-running the workflow."""

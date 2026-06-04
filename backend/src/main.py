@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import sys
+
+from dotenv import load_dotenv
+
+load_dotenv()
 from typing import Any, Dict, Iterator, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -24,15 +28,6 @@ logger.add(
 )
 
 
-# 添加错误日志文件处理程序
-logger.add(
-    sink=sys.stderr,
-    level="ERROR",
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <4}</level> | <cyan>using_function:{function}</cyan> | <cyan>{file}:{line}</cyan> | <level>{message}</level>",
-    colorize=True,
-)
-
-
 class ResearchRequest(BaseModel):
     """Payload for triggering a research run."""
 
@@ -40,6 +35,10 @@ class ResearchRequest(BaseModel):
     search_api: SearchAPI | None = Field(
         default=None,
         description="Override the default search backend configured via env",
+    )
+    parent_run_id: str | None = Field(
+        default=None,
+        description="Previous run_id for multi-turn follow-up research",
     )
 
 
@@ -52,6 +51,17 @@ class ResearchResponse(BaseModel):
     todo_items: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Structured TODO items with summaries and sources",
+    )
+
+
+class ContinueRequest(BaseModel):
+    """Payload for continuing a previous research run with a follow-up topic."""
+
+    topic: str = Field(..., description="Follow-up research topic")
+    parent_run_id: str = Field(..., description="run_id of the previous research to build upon")
+    search_api: SearchAPI | None = Field(
+        default=None,
+        description="Override the default search backend",
     )
 
 
@@ -104,20 +114,7 @@ def _build_config(payload: ResearchRequest) -> Configuration:
 
 def _serialize_todo_items(items: list[Any]) -> list[dict[str, Any]]:
     """Normalize todo items for API responses."""
-    return [
-        {
-            "id": item.id,
-            "title": item.title,
-            "intent": item.intent,
-            "query": item.query,
-            "status": item.status,
-            "summary": item.summary,
-            "sources_summary": item.sources_summary,
-            "note_id": item.note_id,
-            "note_path": item.note_path,
-        }
-        for item in items
-    ]
+    return [item.to_dict() if hasattr(item, "to_dict") else item for item in items]
 
 
 def _normalize_harness_request(
@@ -134,6 +131,7 @@ def _normalize_harness_request(
         metadata=dict(metadata or {}),
         permission_mode=permission_mode,
         caller_mode=caller_mode,
+        parent_run_id=payload.parent_run_id,
     )
 
 
@@ -160,9 +158,11 @@ def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
     )
 
 
-def create_app() -> FastAPI:
+def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
     app = FastAPI(title="HelloAgents Deep Researcher")
-    harness_runner = HarnessRunner.build_default(base_path="./output/harness_runs")
+    harness_runner = harness_runner or HarnessRunner.build_default(
+        base_path="./output/harness_runs"
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -235,6 +235,40 @@ def create_app() -> FastAPI:
                 yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
             except Exception as exc:  # pragma: no cover - defensive guardrail
                 logger.exception("Streaming research failed")
+                error_payload = {"type": "error", "detail": str(exc)}
+                yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_iterator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.post("/research/continue/stream")
+    def stream_continue_research(payload: ContinueRequest) -> StreamingResponse:
+        """SSE endpoint for follow-up research that builds on a previous run."""
+        try:
+            research_payload = ResearchRequest(
+                topic=payload.topic,
+                search_api=payload.search_api,
+                parent_run_id=payload.parent_run_id,
+            )
+            request = _normalize_harness_request(research_payload, caller_mode="public")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        def event_iterator() -> Iterator[str]:
+            try:
+                for event in harness_runner.stream(request):
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except PermissionError as exc:
+                error_payload = {"type": "error", "detail": str(exc)}
+                yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
+            except Exception as exc:  # pragma: no cover - defensive guardrail
+                logger.exception("Streaming continue research failed")
                 error_payload = {"type": "error", "detail": str(exc)}
                 yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
 

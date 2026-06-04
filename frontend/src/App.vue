@@ -145,7 +145,7 @@
               {{ loading ? "研究进行中" : "研究流程完成" }}
             </div>
             <span class="status-meta">
-              任务进度：{{ completedTasks }} / {{ totalTasks || todoTasks.length || 1 }}
+              任务进度：{{ completedTasks }} / {{ totalTasks || todoTasks.length }}
               · 阶段记录 {{ progressLogs.length }} 条
             </span>
           </div>
@@ -268,7 +268,7 @@
               :class="{ 'block-highlight': summaryHighlight }"
             >
               <h3>任务总结</h3>
-              <pre class="block-pre">{{ currentTaskSummary || "暂无可用信息" }}</pre>
+              <div class="markdown-body" v-html="renderedTaskSummary || '暂无可用信息'"></div>
             </section>
 
             <section
@@ -327,7 +327,47 @@
           :class="{ 'block-highlight': reportHighlight }"
         >
           <h3>最终报告</h3>
-          <pre class="block-pre">{{ reportMarkdown }}</pre>
+          <div class="markdown-body" v-html="renderedReport"></div>
+        </div>
+
+        <!-- 报告操作区 -->
+        <div v-if="reportMarkdown && !loading" class="follow-up-bar">
+          <div v-if="!continueMode" class="follow-up-actions">
+            <button class="download-report-btn" @click="downloadReport">
+              📥 下载报告
+            </button>
+            <button
+              class="continue-ask-btn"
+              :disabled="!currentRunId"
+              @click="continueMode = true"
+            >
+              🔍 继续追问
+            </button>
+          </div>
+
+          <form
+            v-else
+            class="continue-form"
+            @submit.prevent="handleContinue"
+          >
+            <label class="field">
+              <span>追问主题（将基于上一轮研究发现继续深入）</span>
+              <textarea
+                v-model="form.topic"
+                placeholder="基于刚才的研究结果，进一步追问…"
+                rows="2"
+                required
+              ></textarea>
+            </label>
+            <div class="continue-actions">
+              <button type="submit" class="continue-submit-btn" :disabled="loading">
+                开始追问
+              </button>
+              <button type="button" class="continue-cancel-btn" @click="continueMode = false">
+                取消
+              </button>
+            </div>
+          </form>
         </div>
       </section>
 
@@ -337,11 +377,19 @@
 
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, reactive, ref } from "vue";
+import { marked } from "marked";
 
 import {
   runResearchStream,
-  type ResearchStreamEvent
+  runContinueStream,
+  type ContinueRequest,
+  type ResearchStreamEvent,
 } from "./services/api";
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
 
 interface SourceItem {
   title: string;
@@ -390,6 +438,8 @@ const isExpanded = ref(false);
 const todoTasks = ref<TodoTaskView[]>([]);
 const activeTaskId = ref<number | null>(null);
 const reportMarkdown = ref("");
+const currentRunId = ref<string | null>(null);
+const continueMode = ref(false);
 
 const summaryHighlight = ref(false);
 const sourcesHighlight = ref(false);
@@ -440,14 +490,46 @@ const currentTaskToolCalls = computed(
   () => currentTask.value?.toolCalls ?? []
 );
 
+const sanitizeHtml = (html: string): string => {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/\bon\w+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\bon\w+\s*=\s*'[^']*'/gi, "")
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/<object[\s\S]*?<\/object>/gi, "")
+    .replace(/<embed[\s\S]*?>/gi, "");
+};
+
+const renderedTaskSummary = computed(() => {
+  const raw = currentTask.value?.summary;
+  if (!raw) return "";
+  return sanitizeHtml(marked.parse(raw) as string);
+});
+
+const renderedReport = computed(() => {
+  if (!reportMarkdown.value) return "";
+  return sanitizeHtml(marked.parse(reportMarkdown.value) as string);
+});
+
+let _pulseRaf = 0;
+let _pulseTimer = 0;
+
 const pulse = (flag: typeof summaryHighlight) => {
+  cancelAnimationFrame(_pulseRaf);
+  clearTimeout(_pulseTimer);
   flag.value = false;
-  requestAnimationFrame(() => {
+  _pulseRaf = requestAnimationFrame(() => {
     flag.value = true;
-    window.setTimeout(() => {
+    _pulseTimer = window.setTimeout(() => {
       flag.value = false;
     }, 1200);
   });
+};
+
+const clearAnimations = () => {
+  cancelAnimationFrame(_pulseRaf);
+  clearTimeout(_pulseTimer);
+  _pulseRaf = 0;
+  _pulseTimer = 0;
 };
 
 function parseSources(raw: string): SourceItem[] {
@@ -632,6 +714,7 @@ async function copyNotePath(path: string | null | undefined) {
 }
 
 function resetWorkflowState() {
+  clearAnimations();
   todoTasks.value = [];
   activeTaskId.value = null;
   reportMarkdown.value = "";
@@ -641,6 +724,8 @@ function resetWorkflowState() {
   reportHighlight.value = false;
   toolHighlight.value = false;
   logsCollapsed.value = false;
+  continueMode.value = false;
+  // currentRunId is purposely NOT reset — user may continue from same run
 }
 
 function findTask(taskId: unknown): TodoTaskView | undefined {
@@ -696,6 +781,11 @@ const handleSubmit = async () => {
     await runResearchStream(
       payload,
       (event: ResearchStreamEvent) => {
+        // Capture run_id for potential follow-up research
+        if (typeof event.run_id === "string" && event.run_id && !currentRunId.value) {
+          currentRunId.value = event.run_id;
+        }
+
         if (event.type === "status") {
           const message =
             typeof event.message === "string" && event.message.trim()
@@ -958,6 +1048,168 @@ const handleSubmit = async () => {
   }
 };
 
+const handleContinue = async () => {
+  if (!currentRunId.value) {
+    error.value = "未找到上一轮研究记录，无法继续";
+    return;
+  }
+  if (!form.topic.trim()) {
+    error.value = "请输入追问的研究主题";
+    return;
+  }
+
+  resetWorkflowState();
+  error.value = "";
+  loading.value = true;
+
+  const controller = new AbortController();
+  currentController = controller;
+
+  const continuePayload: ContinueRequest = {
+    topic: form.topic.trim(),
+    parent_run_id: currentRunId.value,
+    search_api: form.searchApi || undefined,
+  };
+
+  try {
+    await runContinueStream(
+      continuePayload,
+      (event: ResearchStreamEvent) => {
+        if (typeof event.run_id === "string" && event.run_id && !currentRunId.value) {
+          currentRunId.value = event.run_id;
+        }
+
+        if (event.type === "status") {
+          const message =
+            typeof event.message === "string" && event.message.trim()
+              ? event.message
+              : "流程状态更新";
+          progressLogs.value.push(message);
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (task && message) {
+            task.notices.push(message);
+            applyNoteMetadata(task, payload);
+          }
+          return;
+        }
+
+        if (event.type === "todo_list") {
+          const list = event.tasks as TodoTaskView[] | undefined;
+          todoTasks.value = (list ?? []).map((t) => ({
+            ...t,
+            notices: [] as string[],
+          }));
+          summaryHighlight.value = false;
+          sourcesHighlight.value = false;
+          reportHighlight.value = false;
+          progressLogs.value.push(`研究任务已拆分为 ${todoTasks.value.length} 个子任务`);
+          if (todoTasks.value.length > 0) {
+            activeTaskId.value = todoTasks.value[0].id;
+          }
+          return;
+        }
+
+        if (event.type === "task_status") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (!task) return;  // defensive — task should exist from todo_list
+          const status = typeof payload.status === "string" && payload.status.trim()
+            ? payload.status
+            : task.status;
+          task.status = status;
+          if (typeof payload.title === "string" && payload.title.trim()) task.title = payload.title.trim();
+          if (typeof payload.intent === "string" && payload.intent.trim()) task.intent = payload.intent.trim();
+          if (typeof payload.note_path === "string") task.notePath = payload.note_path;
+          applyNoteMetadata(task, payload);
+          if (status === "completed") {
+            pulse(summaryHighlight);
+            progressLogs.value.push(`任务「${task.title}」已完成`);
+          } else if (status === "skipped" || status === "failed") {
+            progressLogs.value.push(`任务「${task.title}」${status === "skipped" ? "已跳过" : "执行失败"}`);
+          }
+          return;
+        }
+
+        if (event.type === "sources") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (!task || !activeTaskId.value) return;
+          if (typeof payload.latest_sources === "string" && payload.latest_sources.trim()) {
+            task.sourcesSummary = payload.latest_sources.trim();
+          }
+          applyNoteMetadata(task, payload);
+          pulse(sourcesHighlight);
+          const logSummaryStr = task.sourcesSummary ? task.sourcesSummary.slice(0, 80) : "来源更新";
+          progressLogs.value.push(`任务「${task.title}」来源更新：${logSummaryStr}`);
+          return;
+        }
+
+        if (event.type === "task_summary_chunk") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          if (!task) return;
+          const content = typeof payload.content === "string" ? payload.content : "";
+          task.summary = (task.summary || "") + content;
+          applyNoteMetadata(task, payload);
+          return;
+        }
+
+        if (event.type === "task_retry") {
+          const payload = event as Record<string, unknown>;
+          const task = findTask(payload.task_id);
+          const refined = typeof payload.refined_query === "string" ? payload.refined_query : "";
+          const reason = typeof payload.reason === "string" ? payload.reason : "";
+          progressLogs.value.push(
+            `任务「${task?.title || "未知"}」补充搜索：${refined}（原因：${reason}）`
+          );
+          return;
+        }
+
+        if (event.type === "tool_call") {
+          return;
+        }
+
+        if (event.type === "final_report") {
+          const report =
+            typeof event.report === "string" && event.report.trim()
+              ? event.report.trim()
+              : "";
+          reportMarkdown.value = report || "报告生成失败，未获得有效内容";
+          pulse(reportHighlight);
+          progressLogs.value.push("最终报告已生成");
+          return;
+        }
+
+        if (event.type === "error") {
+          const detail =
+            typeof event.detail === "string" && event.detail.trim()
+              ? event.detail
+              : "研究过程中发生错误";
+          error.value = detail;
+          progressLogs.value.push("研究失败，已停止流程");
+        }
+      },
+      { signal: controller.signal }
+    );
+
+    if (!reportMarkdown.value) {
+      reportMarkdown.value = "暂无生成的报告";
+    }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      progressLogs.value.push("已取消当前追问任务");
+    } else {
+      error.value = err instanceof Error ? err.message : "追问失败";
+    }
+  } finally {
+    loading.value = false;
+    if (currentController === controller) {
+      currentController = null;
+    }
+  }
+};
+
 const cancelResearch = () => {
   if (!loading.value || !currentController) {
     return;
@@ -983,7 +1235,22 @@ const startNewResearch = () => {
   form.searchApi = "";
 };
 
+/** 下载最终报告为 .md 文件 */
+const downloadReport = () => {
+  if (!reportMarkdown.value) return;
+  const blob = new Blob([reportMarkdown.value], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `research-report-${timestamp}.md`;
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
 onBeforeUnmount(() => {
+  clearAnimations();
   if (currentController) {
     currentController.abort();
     currentController = null;
@@ -1720,8 +1987,79 @@ select:focus {
   background: linear-gradient(180deg, rgba(79, 70, 229, 0.8), rgba(37, 99, 235, 0.75));
 }
 
-.summary-block .block-pre,
-.sources-block .block-pre {
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #1f2937;
+  background: rgba(248, 250, 252, 0.9);
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  overflow: auto;
+  max-height: 420px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(129, 140, 248, 0.6) rgba(226, 232, 240, 0.7);
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 12px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.markdown-body h1 { font-size: 18px; }
+.markdown-body h2 { font-size: 16px; }
+.markdown-body h3 { font-size: 15px; }
+.markdown-body h4 { font-size: 14px; }
+
+.markdown-body p {
+  margin: 6px 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.markdown-body li {
+  margin: 3px 0;
+}
+.markdown-body strong {
+  font-weight: 600;
+}
+.markdown-body a {
+  color: #4f46e5;
+  text-decoration: underline;
+}
+.markdown-body code {
+  background: rgba(0,0,0,0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+}
+.markdown-body pre {
+  background: rgba(0,0,0,0.04);
+  padding: 12px;
+  border-radius: 10px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.markdown-body blockquote {
+  border-left: 3px solid #6366f1;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #475569;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.3);
+  margin: 16px 0;
+}
+
+.summary-block .markdown-body,
+.sources-block .markdown-body {
   max-height: 360px;
 }
 
@@ -2266,6 +2604,101 @@ select:focus {
 
 .new-research-btn:active {
   transform: translateY(0);
+}
+
+/* ============================================
+   报告操作区 (Follow-up Bar)
+   ============================================ */
+
+.follow-up-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 下载报告 + 继续追问 按钮 — 统一渐变风格 */
+.download-report-btn,
+.continue-ask-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border: none;
+  border-radius: 12px;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.download-report-btn:hover,
+.continue-ask-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+}
+
+.download-report-btn:active,
+.continue-ask-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.continue-ask-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* 追问表单操作按钮 */
+.continue-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.continue-submit-btn {
+  padding: 12px 24px;
+  border-radius: 16px;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
+
+.continue-submit-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.28);
+}
+
+.continue-submit-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.continue-cancel-btn {
+  padding: 10px 18px;
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.continue-cancel-btn:hover {
+  background: rgba(148, 163, 184, 0.2);
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #0f172a;
 }
 
 /* 全屏状态下的结果面板 */

@@ -4,6 +4,13 @@ const baseURL =
 export interface ResearchRequest {
   topic: string;
   search_api?: string;
+  parent_run_id?: string;
+}
+
+export interface ContinueRequest {
+  topic: string;
+  parent_run_id: string;
+  search_api?: string;
 }
 
 export interface ResearchStreamEvent {
@@ -15,28 +22,14 @@ export interface StreamOptions {
   signal?: AbortSignal;
 }
 
-export async function runResearchStream(
-  payload: ResearchRequest,
+/**
+ * Shared SSE stream consumer — reads a fetch Response body line by line
+ * parsing ``data: {json}\n\n`` frames and calling ``onEvent`` for each.
+ */
+async function consumeSSE(
+  response: Response,
   onEvent: (event: ResearchStreamEvent) => void,
-  options: StreamOptions = {}
 ): Promise<void> {
-  const response = await fetch(`${baseURL}/research/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream"
-    },
-    body: JSON.stringify(payload),
-    signal: options.signal
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(
-      errorText || `研究请求失败，状态码：${response.status}`
-    );
-  }
-
   const body = response.body;
   if (!body) {
     throw new Error("浏览器不支持流式响应，无法获取研究进度");
@@ -93,4 +86,54 @@ export async function runResearchStream(
       break;
     }
   }
+}
+
+export async function runResearchStream(
+  payload: ResearchRequest,
+  onEvent: (event: ResearchStreamEvent) => void,
+  options: StreamOptions = {}
+): Promise<void> {
+  const response = await fetch(`${baseURL}/research/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream"
+    },
+    body: JSON.stringify(payload),
+    signal: options.signal
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(
+      errorText || `研究请求失败，状态码：${response.status}`
+    );
+  }
+
+  return consumeSSE(response, onEvent);
+}
+
+export async function runContinueStream(
+  payload: ContinueRequest,
+  onEvent: (event: ResearchStreamEvent) => void,
+  options: StreamOptions = {}
+): Promise<void> {
+  const response = await fetch(`${baseURL}/research/continue/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream"
+    },
+    body: JSON.stringify(payload),
+    signal: options.signal
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(
+      errorText || `继续研究请求失败，状态码：${response.status}`
+    );
+  }
+
+  return consumeSSE(response, onEvent);
 }

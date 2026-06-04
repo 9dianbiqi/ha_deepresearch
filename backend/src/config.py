@@ -86,6 +86,21 @@ class Configuration(BaseModel):
         title="LLM Model ID",
         description="Optional model identifier for custom OpenAI-compatible services",
     )
+    llm_timeout: float = Field(
+        default=60.0,
+        title="LLM Timeout",
+        description="Request timeout in seconds for LLM API calls",
+    )
+    llm_max_tokens: int = Field(
+        default=2000,
+        title="LLM Max Tokens",
+        description="Maximum output tokens per LLM call",
+    )
+    llm_reporter_model_id: Optional[str] = Field(
+        default=None,
+        title="LLM Reporter Model ID",
+        description="Optional faster model for the Reporter agent",
+    )
 
     @classmethod
     def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
@@ -98,28 +113,6 @@ class Configuration(BaseModel):
             env_key = field_name.upper()
             if env_key in os.environ:
                 raw_values[field_name] = os.environ[env_key]
-
-        # Additional mappings for explicit env names
-        env_aliases = {
-            "local_llm": os.getenv("LOCAL_LLM"),
-            "llm_provider": os.getenv("LLM_PROVIDER"),
-            "llm_api_key": os.getenv("LLM_API_KEY"),
-            "llm_model_id": os.getenv("LLM_MODEL_ID"),
-            "llm_base_url": os.getenv("LLM_BASE_URL"),
-            "lmstudio_base_url": os.getenv("LMSTUDIO_BASE_URL"),
-            "ollama_base_url": os.getenv("OLLAMA_BASE_URL"),
-            "max_web_research_loops": os.getenv("MAX_WEB_RESEARCH_LOOPS"),
-            "fetch_full_page": os.getenv("FETCH_FULL_PAGE"),
-            "strip_thinking_tokens": os.getenv("STRIP_THINKING_TOKENS"),
-            "use_tool_calling": os.getenv("USE_TOOL_CALLING"),
-            "search_api": os.getenv("SEARCH_API"),
-            "enable_notes": os.getenv("ENABLE_NOTES"),
-            "notes_workspace": os.getenv("NOTES_WORKSPACE"),
-        }
-
-        for key, value in env_aliases.items():
-            if value is not None:
-                raw_values.setdefault(key, value)
 
         if overrides:
             for key, value in overrides.items():
