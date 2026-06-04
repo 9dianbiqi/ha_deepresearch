@@ -330,14 +330,14 @@
           <div class="markdown-body" v-html="renderedReport"></div>
         </div>
 
-        <!-- 继续追问 / 新研究操作区 -->
+        <!-- 报告操作区 -->
         <div v-if="reportMarkdown && !loading" class="follow-up-bar">
           <div v-if="!continueMode" class="follow-up-actions">
-            <button class="btn" @click="startNewResearch">
-              📝 研究新主题
+            <button class="download-report-btn" @click="downloadReport">
+              📥 下载报告
             </button>
             <button
-              class="btn btn-primary"
+              class="continue-ask-btn"
               :disabled="!currentRunId"
               @click="continueMode = true"
             >
@@ -360,10 +360,10 @@
               ></textarea>
             </label>
             <div class="continue-actions">
-              <button type="submit" class="btn btn-primary" :disabled="loading">
+              <button type="submit" class="continue-submit-btn" :disabled="loading">
                 开始追问
               </button>
-              <button type="button" class="btn" @click="continueMode = false">
+              <button type="button" class="continue-cancel-btn" @click="continueMode = false">
                 取消
               </button>
             </div>
@@ -1233,6 +1233,20 @@ const startNewResearch = () => {
   isExpanded.value = false;
   form.topic = "";
   form.searchApi = "";
+};
+
+/** 下载最终报告为 .md 文件 */
+const downloadReport = () => {
+  if (!reportMarkdown.value) return;
+  const blob = new Blob([reportMarkdown.value], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `research-report-${timestamp}.md`;
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 };
 
 onBeforeUnmount(() => {
@@ -2590,6 +2604,101 @@ select:focus {
 
 .new-research-btn:active {
   transform: translateY(0);
+}
+
+/* ============================================
+   报告操作区 (Follow-up Bar)
+   ============================================ */
+
+.follow-up-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 下载报告 + 继续追问 按钮 — 统一渐变风格 */
+.download-report-btn,
+.continue-ask-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border: none;
+  border-radius: 12px;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.download-report-btn:hover,
+.continue-ask-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+}
+
+.download-report-btn:active,
+.continue-ask-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.continue-ask-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* 追问表单操作按钮 */
+.continue-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.continue-submit-btn {
+  padding: 12px 24px;
+  border-radius: 16px;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
+
+.continue-submit-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.28);
+}
+
+.continue-submit-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.continue-cancel-btn {
+  padding: 10px 18px;
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.continue-cancel-btn:hover {
+  background: rgba(148, 163, 184, 0.2);
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #0f172a;
 }
 
 /* 全屏状态下的结果面板 */
