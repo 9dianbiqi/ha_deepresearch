@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from hello_agents import ToolAwareSimpleAgent
@@ -9,6 +10,8 @@ from hello_agents import ToolAwareSimpleAgent
 from models import SummaryState
 from config import Configuration
 from utils import strip_thinking_tokens
+
+logger = logging.getLogger(__name__)
 
 
 class ReportingService:
@@ -73,8 +76,16 @@ class ReportingService:
             "请基于以上所有信息撰写最终研究报告。"
         )
 
-        response = self._agent.run(prompt)
-        self._agent.clear_history()
+        try:
+            response = self._agent.run(prompt)
+        except Exception as exc:
+            logger.exception("Reporter LLM call failed")
+            return (
+                f"报告生成失败: {str(exc)[:200]}\n\n"
+                f"各任务总结已保存在左侧任务清单中，可下载笔记查看。"
+            )
+        finally:
+            self._agent.clear_history()
 
         report_text = response.strip()
         if self._config.strip_thinking_tokens:
