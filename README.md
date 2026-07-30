@@ -2,6 +2,13 @@
 
 **🌐 Language** &nbsp;|&nbsp; [**中文**](#中文) &nbsp;|&nbsp; [**English**](#english)
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
+![Vue.js](https://img.shields.io/badge/Vue.js-3-4FC08D?logo=vuedotjs&logoColor=white)
+![SSE](https://img.shields.io/badge/Streaming-SSE-6A5ACD)
+
+**Deep research workflow + governed agent harness**
+
 </div>
 
 ---
@@ -10,7 +17,18 @@
 
 # HelloAgents 深度研究助手
 
-一个基于 [HelloAgents](https://github.com/hello-agents/hello-agents) 的深度研究应用，配备轻量级治理运行时（Harness Runtime），用于运行管控、回放、评估和压缩研究记忆。
+一个基于 [Datawhale Hello-Agents](https://github.com/datawhalechina/hello-agents) 的深度研究应用。它不仅完成“规划 → 检索 → 总结 → 报告”的研究流程，还通过轻量级治理运行时（Harness Runtime）记录策略决策、评估结果和可审计的运行轨迹。
+
+## ✨ 项目亮点
+
+| 能力 | 价值 |
+|------|------|
+| 多搜索后端 | 支持 DuckDuckGo、Tavily、Perplexity、SearXNG，并提供重试与降级 |
+| SSE 实时反馈 | 前端持续展示任务规划、检索进度和最终报告 |
+| 运行治理 | 对能力调用执行策略判断，并记录 `run_id`、事件和决策 |
+| 可评估、可审计 | 保存结构化运行记录，支持评分、历史查询与问题复盘 |
+| 压缩研究记忆 | 复用压缩上下文继续追问，避免每轮从零开始 |
+| 工程化验证 | 覆盖策略、评估器和 Harness API 的自动化测试 |
 
 ## 🎯 功能
 
@@ -31,6 +49,23 @@
 | **治理层** | 运行管控 | `HarnessRunner → Policy → Context Compression → Evaluation → Persistence` |
 
 > 治理层不是第二个业务工作流，而是围绕研究执行层的运行时控制层。
+
+```mermaid
+flowchart LR
+    U["研究主题"] --> UI["Vue 3 界面"]
+    UI --> API["FastAPI / SSE"]
+    API -.-> UI
+    API --> H["HarnessRunner"]
+    H --> POL["Policy"]
+    POL --> A["DeepResearchAgent"]
+    A --> P["Planner"]
+    P --> S["Search Backends"]
+    S --> M["Summarizer"]
+    M --> R["Reporter"]
+    R --> C["Context Compression"]
+    C --> E["Evaluation"]
+    E --> REC["Persistence"]
+```
 
 详细架构文档：[docs/ARCHITECTURE_OPTIMIZED.md](docs/ARCHITECTURE_OPTIMIZED.md)
 
@@ -72,7 +107,7 @@ helloagents-deepresearch/
 │   │       ├── compressor.py       # 上下文压缩
 │   │       ├── context_manager.py  # 上下文生命周期
 │   │       ├── recorder.py         # 运行持久化
-│   │       ├── replay.py           # 重放
+│   │       ├── replay.py           # 历史运行记录加载
 │   │       ├── scenarios.py        # 评估场景
 │   │       └── event_bus.py        # 事件总线
 │   └── tests/                      # 测试套件
@@ -122,6 +157,12 @@ npm run dev
 
 后端默认地址：`http://localhost:8000`
 
+## 📚 文档导览
+
+- [优化后的系统架构](docs/ARCHITECTURE_OPTIMIZED.md)
+- [技术深度分析](docs/TECHNICAL_DEEP_DIVE.md)
+- [版本变更记录](CHANGELOG.md)
+
 ## 📦 治理运行时输出
 
 受管控的运行持久化在：
@@ -140,7 +181,13 @@ npm run dev
 - 保持研究 Agent 简单
 - 将运行管控集中到治理层
 - 复用压缩上下文支持多轮追问
-- 持续扩展评估和回放能力
+- 持续扩展评估，并补齐真正的重新执行能力
+
+## 🔎 来源与许可
+
+本项目以 [Datawhale Hello-Agents 第 14 章自动化深度研究智能体](https://github.com/datawhalechina/hello-agents/blob/main/docs/chapter14/Chapter14-Automated-Deep-Research-Agent.md) 为基础，并扩展了治理运行时、评估、历史记录查询、上下文压缩、多轮追问和测试。
+
+上游教程仓库采用 **CC BY-NC-SA 4.0**；同时，本仓库的 `backend/pyproject.toml` 保留了原始代码中的 **MIT / Lance Martin** 元数据。由于仓库包含不同来源的材料，在完成逐文件来源梳理前，不应将整个仓库简单声明为单一 MIT 许可。使用或再分发时，请同时遵守相应上游材料的许可与署名要求。
 
 ---
 
@@ -148,7 +195,18 @@ npm run dev
 
 # HelloAgents Deep Research
 
-A Deep Research application built on [HelloAgents](https://github.com/hello-agents/hello-agents) with a lightweight harness runtime for run governance, replay, evaluation, and compressed research memory.
+A Deep Research application built on [Datawhale Hello-Agents](https://github.com/datawhalechina/hello-agents). Beyond the core plan → search → summarize → report workflow, it adds a lightweight harness runtime that records policy decisions, evaluation results, and auditable execution traces.
+
+## ✨ Highlights
+
+| Capability | Why it matters |
+|------------|----------------|
+| Multiple search backends | DuckDuckGo, Tavily, Perplexity, and SearXNG with retry and fallback |
+| SSE progress streaming | The UI continuously displays planning, search progress, and the final report |
+| Run governance | Applies capability policies and records `run_id`, events, and decisions |
+| Evaluation and inspection | Persists structured runs for scoring, history inspection, and debugging |
+| Compressed research memory | Reuses compact context for follow-up research instead of starting over |
+| Engineering checks | Automated coverage for policies, evaluators, and Harness API behavior |
 
 ## 🎯 What It Does
 
@@ -169,6 +227,23 @@ Two stable layers in the backend:
 | **Governance** | Run control | `HarnessRunner → Policy → Context Compression → Evaluation → Persistence` |
 
 > The harness is not a second business workflow — it is the runtime control layer around the existing Deep Research workflow.
+
+```mermaid
+flowchart LR
+    U["Research topic"] --> UI["Vue 3 UI"]
+    UI --> API["FastAPI / SSE"]
+    API -.-> UI
+    API --> H["HarnessRunner"]
+    H --> POL["Policy"]
+    POL --> A["DeepResearchAgent"]
+    A --> P["Planner"]
+    P --> S["Search Backends"]
+    S --> M["Summarizer"]
+    M --> R["Reporter"]
+    R --> C["Context Compression"]
+    C --> E["Evaluation"]
+    E --> REC["Persistence"]
+```
 
 Detailed architecture notes: [docs/ARCHITECTURE_OPTIMIZED.md](docs/ARCHITECTURE_OPTIMIZED.md)
 
@@ -210,7 +285,7 @@ helloagents-deepresearch/
 │   │       ├── compressor.py       # Context compression
 │   │       ├── context_manager.py  # Context lifecycle
 │   │       ├── recorder.py         # Run persistence
-│   │       ├── replay.py           # Replay
+│   │       ├── replay.py           # Persisted run loading
 │   │       ├── scenarios.py        # Evaluation scenarios
 │   │       └── event_bus.py        # In-memory event bus
 │   └── tests/                      # Test suite
@@ -260,6 +335,12 @@ npm run dev
 
 Default backend address: `http://localhost:8000`
 
+## 📚 Documentation
+
+- [Optimized architecture](docs/ARCHITECTURE_OPTIMIZED.md)
+- [Technical deep dive](docs/TECHNICAL_DEEP_DIVE.md)
+- [Changelog](CHANGELOG.md)
+
 ## 📦 Harness Outputs
 
 Managed runs are persisted under:
@@ -278,4 +359,10 @@ Each run produces:
 - Keep the research agent simple
 - Centralize run governance in the harness layer
 - Reuse compressed context for follow-up research
-- Expand evaluation and replay over time
+- Expand evaluation and add true re-execution over time
+
+## 🔎 Attribution and License Status
+
+This project is based on [Chapter 14: Automated Deep Research Agent](https://github.com/datawhalechina/hello-agents/blob/main/docs/chapter14/Chapter14-Automated-Deep-Research-Agent.md) from Datawhale Hello-Agents, with additional work on run governance, evaluation, persisted-run inspection, context compression, follow-up research, and tests.
+
+The upstream tutorial repository is licensed under **CC BY-NC-SA 4.0**, while `backend/pyproject.toml` retains **MIT / Lance Martin** metadata from the original code. Because the repository contains material from different sources, it should not be represented as uniformly MIT-licensed until file-level provenance has been reconciled. Reuse and redistribution must follow the applicable upstream license and attribution requirements.
