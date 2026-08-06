@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, List, Optional
+from threading import Lock
+from typing import Any, List
 
-from hello_agents import ToolAwareSimpleAgent
+from hello_agents import SimpleAgent
 
-from models import SummaryState, TodoItem
 from config import Configuration
+from models import SummaryState, TodoItem
 from prompts import get_current_date, todo_planner_instructions
+from research.operations import OperationScope
 from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
@@ -19,17 +21,20 @@ logger = logging.getLogger(__name__)
 class PlanningService:
     """Wraps the planner agent to produce structured TODO items."""
 
-    def __init__(self, planner_agent: ToolAwareSimpleAgent, config: Configuration) -> None:
+    def __init__(self, planner_agent: SimpleAgent, config: Configuration) -> None:
+        """Initialize the service with its planner agent and configuration."""
         self._agent = planner_agent
         self._config = config
+        self._agent_lock = Lock()
 
     def plan_todo_list(
         self,
         state: SummaryState,
         prior_context: dict[str, Any] | None = None,
+        *,
+        operation_scope: OperationScope | None = None,
     ) -> List[TodoItem]:
         """Ask the planner agent to break the topic into actionable tasks."""
-
         prompt = todo_planner_instructions.format(
             current_date=get_current_date(),
             research_topic=state.research_topic,
@@ -40,10 +45,19 @@ class PlanningService:
             prompt = prior_block + "\n\n" + prompt
             logger.info("Planner prompt augmented with prior research context")
 
-        response = self._agent.run(prompt)
-        self._agent.clear_history()
+        with self._agent_lock:
+            try:
+                if operation_scope is None:
+                    response = self._agent.run(prompt)
+                else:
+                    response = self._agent.run(
+                        prompt,
+                        _research_operation_scope=operation_scope,
+                    )
+            finally:
+                self._agent.clear_history()
 
-        logger.info("Planner raw output (truncated): %s", response[:500])
+        logger.info("Planner response received")
 
         tasks_payload = self._extract_tasks(response)
         todo_items: List[TodoItem] = []
@@ -54,7 +68,7 @@ class PlanningService:
             query = str(item.get("query") or state.research_topic).strip()
 
             if not query:
-                query = state.research_topic
+                query = state.research_topic or ""
 
             task = TodoItem(
                 id=idx,
@@ -64,16 +78,12 @@ class PlanningService:
             )
             todo_items.append(task)
 
-        state.todo_items = todo_items
-
-        titles = [task.title for task in todo_items]
-        logger.info("Planner produced %d tasks: %s", len(todo_items), titles)
+        logger.info("Planner produced %d tasks", len(todo_items))
         return todo_items
 
     @staticmethod
     def create_fallback_task(state: SummaryState) -> TodoItem:
         """Create a minimal fallback task when planning failed."""
-
         return TodoItem(
             id=1,
             title="基础背景梳理",
@@ -84,7 +94,6 @@ class PlanningService:
     @staticmethod
     def _format_prior_context(prior: dict[str, Any]) -> str:
         """Build a context block summarising the previous research run."""
-
         parts: list[str] = [
             "## 上一轮研究发现（请勿重复研究以下已完成的主题）",
             "",
@@ -119,7 +128,6 @@ class PlanningService:
     # ------------------------------------------------------------------
     def _extract_tasks(self, raw_response: str) -> List[dict[str, Any]]:
         """Parse planner output into a list of task dictionaries."""
-
         text = raw_response.strip()
         if self._config.strip_thinking_tokens:
             text = strip_thinking_tokens(text)
@@ -140,9 +148,8 @@ class PlanningService:
 
         return tasks
 
-    def _extract_json_payload(self, text: str) -> Optional[dict[str, Any] | list]:
+    def _extract_json_payload(self, text: str) -> dict[str, Any] | list | None:
         """Try to locate and parse a JSON object or array from the text."""
-
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:

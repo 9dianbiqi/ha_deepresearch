@@ -1,886 +1,802 @@
-# HelloAgents Deep Research — 技术深度分析
+# HelloAgents Deep Research 技术详解
 
-> 版本: 0.0.1 | 作者: 基于源码逆向分析 | 日期: 2026-05-31
+本文描述当前代码的实际运行契约。核心代码位于 `backend/src/research/`；`harness/` 只保留策略和旧接口适配，不再代表独立架构层。
 
----
+## 1. 范围与非目标
 
-## 目录
+当前实现的目标是：在不升级 `hello-agents==0.2.9` 的前提下，把同步、流式、follow-up、策略、operation 审计和持久化统一到一个应用生命周期。
 
-1. [系统概览](#1-系统概览)
-2. [架构设计](#2-架构设计)
-3. [多智能体协作体系](#3-多智能体协作体系)
-4. [上下文工程](#4-上下文工程)
-5. [记忆系统](#5-记忆系统)
-6. [流式事件协议与实时通信](#6-流式事件协议与实时通信)
-7. [治理与安全层 (Harness)](#7-治理与安全层-harness)
-8. [搜索与知识检索](#8-搜索与知识检索)
-9. [数据模型与状态管理](#9-数据模型与状态管理)
-10. [设计模式与工程实践](#10-设计模式与工程实践)
-11. [前端架构](#11-前端架构)
-12. [数据流全景](#12-数据流全景)
+明确不包含：
 
----
+- 升级、fork 或 vendor hello-agents；
+- 依赖 hello-agents 私有字段；
+- 完整 Event Sourcing；
+- 全异步 coordinator；
+- 分布式 worker、消息 broker 或数据库；
+- 对 in-flight 0.2.9 LLM 调用的硬取消；
+- 在请求完成关键路径中做整次运行评分。
 
-## 1. 系统概览
+## 2. 源码地图
 
-HelloAgents Deep Research 是一个**全本地化的深度研究助手**，接收一个开放研究主题，自动将其拆解为可执行的子任务，调度多搜索引擎检索信息，对每个任务进行 LLM 摘要，最终生成结构化 Markdown 研究报告。
-
-### 1.1 技术栈
-
-| 层 | 技术 |
-|---|------|
-| HTTP 框架 | FastAPI (Python 3.10+) |
-| Agent 框架 | `hello-agents` v0.2.9 |
-| LLM 后端 | 兼容 OpenAI API（支持 Ollama / LMStudio / 智谱 GLM 等） |
-| 搜索引擎 | DuckDuckGo / Tavily / Perplexity / SearXNG |
-| 前端 | Vue 3 + TypeScript + Vite 6 |
-| Markdown 渲染 | marked.js v15 |
-| 持久化 | 文件系统 JSONL / JSON |
-| 日志 | loguru (后端) |
-
-### 1.2 核心能力
-
-```
-用户输入: "开源Agent框架在2026年的发展现状"
-     │
-     ▼
-  规划 → [任务1: 主流框架对比, 任务2: 技术趋势, 任务3: 应用案例, ...]
-     │
-     ▼
-  并行执行 → 每个任务: 搜索 → 摘要 → 笔记持久化
-     │
-     ▼
-  报告生成 → 结构化 Markdown 报告（背景/洞见/证据/风险/参考来源）
-```
-
----
-
-## 2. 架构设计
-
-### 2.1 分层架构
-
-系统采用严格的**三层分离**架构：
-
-```
-┌──────────────────────────────────────────────────────┐
-│  HTTP 传输层 (main.py)                                │
-│  - 请求标准化 (HarnessRunRequest)                      │
-│  - 响应序列化 (ResearchResponse / HarnessResponse)     │
-│  - SSE 流式传输                                       │
-│  - CORS / 异常处理                                    │
-└────────────────────┬─────────────────────────────────┘
-                     │
-┌────────────────────▼─────────────────────────────────┐
-│  Harness 治理层 (harness/)                             │
-│  - 策略执行 (HarnessPolicy)                            │
-│  - 事件记录 (InMemoryEventBus)                         │
-│  - 上下文压缩 (ContextCompressor)                       │
-│  - 质量评估 (RuleBasedEvaluator)                       │
-│  - 持久化 (JsonlRunRecorder)                           │
-│  - 生命周期编排 (HarnessRunner)                         │
-└────────────────────┬─────────────────────────────────┘
-                     │
-┌────────────────────▼─────────────────────────────────┐
-│  研究执行层 (agent.py + services/)                      │
-│  - 任务规划 (PlanningService)                          │
-│  - 搜索调度 (dispatch_search)                          │
-│  - 任务摘要 (SummarizationService)                     │
-│  - 报告生成 (ReportingService)                         │
-│  - 笔记管理 (NoteSubAgent)                             │
-└──────────────────────────────────────────────────────┘
+```text
+backend/src/
+├── main.py                         FastAPI composition root 与 HTTP/SSE 投影
+├── agent.py                        ResearchCoordinator；历史类名 DeepResearchAgent
+├── config.py                       frozen Pydantic Configuration
+├── models.py                       ResearchState、TodoItem、legacy output
+├── research/
+│   ├── application.py              唯一 Application 生命周期
+│   ├── session.py                  RunSession transition、控制与事件提交
+│   ├── contracts.py                command/event/snapshot/result 类型
+│   ├── ports.py                    coordinator/repository/policy/observer Protocol
+│   ├── operations.py               OperationScope、OperationSpec、governance
+│   ├── adapters.py                 LLM/Search/GitHub typed adapters
+│   ├── context.py                  follow-up projection 与 prompt context assembly
+│   ├── repository.py               schema-v1 原子文件仓库
+│   ├── validation.py               在线 terminal correctness validation
+│   ├── legacy_sse.py               内部事件到旧 SSE 的纯投影
+│   ├── observers.py                observer 组合与安全边界
+│   └── evaluation.py               离线 RunSnapshot assessment
+├── services/
+│   ├── planner.py                  任务规划
+│   ├── search.py                   搜索、重试、fallback、cache
+│   ├── summarizer.py               逐任务摘要
+│   ├── reporter.py                 最终报告
+│   ├── github_research.py          GitHub REST 数据收集
+│   └── note_agent.py               NoteToolAdapter；保留 NoteSubAgent alias
+└── harness/
+    ├── runner.py                   Application 的兼容 facade
+    ├── policy.py                   command 与 operation capability 策略
+    ├── evaluator.py                offline evaluator 兼容 API
+    ├── recorder.py                 canonical repository 兼容 API
+    ├── compressor.py               follow-up projection 兼容 API
+    ├── models.py                   历史名称与 response adapter
+    └── scenarios.py                offline/benchmark fixtures
 ```
 
-**关键设计原则：层间单向依赖。** 研究执行层完全不知道 Harness 层的存在——它只接收 `Configuration` 对象，返回 `SummaryStateOutput`。Harness 层通过**装饰器/外观模式**在研究执行前后插入治理逻辑。
+## 3. Canonical contracts
 
-### 2.2 核心执行路径
+### 3.1 ResearchCommand
 
-#### 同步路径 (`POST /research`)
+`ResearchCommand` 是冻结 dataclass：
 
 ```python
-# main.py:185-200
-def run_research(payload: ResearchRequest) -> ResearchResponse:
-    request = _normalize_harness_request(payload, caller_mode="public")
-    result = harness_runner.run(request)    # ← Harness 接管
-    # ...
-```
-
-`HarnessRunner.run()` 内部执行的固定生命周期（[runner.py:45-82](backend/src/harness/runner.py#L45-L82)）：
-
-```
-1. RunContext 创建 → event_bus.emit("run_started")
-2. _evaluate_policy()    → 权限检查，拒绝则抛 PermissionError
-3. _execute_agent()      → new DeepResearchAgent(config).run(topic)
-4. _compress_context()   → ContextCompressor 生成压缩记忆
-5. finally:
-     _evaluate_run()     → RuleBasedEvaluator 打分
-     _persist_run()      → JsonlRunRecorder 写盘
-```
-
-#### 流式路径 (`POST /research/stream`)
-
-流式路径的差异在于步骤 3 —— 不走 `agent.run()`，而是直接迭代 `agent.run_stream()`：
-
-```python
-# runner.py:94-105
-agent = DeepResearchAgent(config=context.request.config)
-for event in agent.run_stream(context.request.topic):
-    self.event_bus.emit(context, "research_event", ...)   # 旁路记录
-    self._ingest_stream_event(stream_state, event)         # 状态重建
-    yield {"run_id": context.run_id, **event}              # SSE 透传
-```
-
-这里有一个**精妙的设计**：harness 在消费 agent 流的同时做了三件事：
-1. **记录** — 每个事件写入 event_bus
-2. **重建** — 从流事件中增量重建 `TodoItem` 列表（供后续评估/持久化使用）
-3. **透传** — 不做修改直接 yield 给上层（FastAPI → SSE → 前端）
-
-### 2.3 架构决策记录 (ADR)
-
-| 决策 | 理由 | 权衡 |
-|------|------|------|
-| Harness 不侵入 Agent | 保持研究逻辑独立可测试 | 流事件协议成为隐式契约，需手动保持同步 |
-| 使用 dataclass 而非 Pydantic 做领域模型 | 轻量、无验证开销 | 缺少自动序列化/反序列化 |
-| 同步和流式两套执行路径 | 同时支持批量和实时场景 | 代码有一定重复 |
-| 文件系统持久化而非数据库 | 零依赖、易调试 | 不支持并发写入、无查询能力 |
-| 单文件 Vue 组件 (2416行) | 快速开发 | 可维护性挑战 |
-
----
-
-## 3. 多智能体协作体系
-
-本系统是一个**异质多智能体协作系统**，包含 **4 个功能性 Agent** 和 **1 个工具型 SubAgent**，各司其职、通过结构化数据传递协作。
-
-### 3.1 Agent 角色定义
-
-```
-                    DeepResearchAgent (编排器)
-                    ═══════════════════════════
-                    不直接执行 LLM 调用
-                    负责: 生命周期管理、状态协调、线程调度
-                           │
-          ┌───────────────┼───────────────┬────────────────┐
-          │               │               │                │
-          ▼               ▼               ▼                ▼
-   PlanningService  Summarization   ReportingService  NoteSubAgent
-   ┌─────────────┐  Service         ┌──────────────┐  ┌────────────┐
-   │ 研究规划专家  │  ┌────────────┐  │ 报告撰写专家   │  │ 笔记工具    │
-   │              │  │ 任务总结专家 │  │              │  │ (非 LLM)   │
-   │ 输入: topic  │  │ (×N 实例)  │  │ 输入: 全部    │  │            │
-   │ 输出:        │  │            │  │ 任务摘要+笔记  │  │ CRUD 操作  │
-   │ TodoItem[]  │  │ 输入: 搜索  │  │ 输出:         │  │ 文件系统    │
-   │              │  │ 上下文+笔记  │  │ Markdown报告  │  │ 读写       │
-   └─────────────┘  │ 输出: 摘要  │  └──────────────┘  └────────────┘
-                    └────────────┘
-```
-
-### 3.2 Agent 实例化策略
-
-不同 Agent 采用不同的实例化策略，体现了对**上下文隔离**的深度思考：
-
-| Agent | 实例化策略 | 生命周期 | 原因 |
-|-------|-----------|---------|------|
-| 研究规划专家 | **单例** — `DeepResearchAgent.__init__` 中创建 | 整个 Agent 生命周期 | 规划只调用一次，无上下文污染风险 |
-| 任务总结专家 | **工厂模式** — `_summarizer_factory` 每次创建新实例 | 单次摘要调用 | 每个任务有不同上下文，必须隔离 |
-| 报告撰写专家 | **单例** | 整个 Agent 生命周期 | 只调用一次 |
-| NoteSubAgent | **单例** | 整个 Agent 生命周期 | 无状态工具，线程安全 |
-
-关键代码（[agent.py:53-56](backend/src/agent.py#L53-L56)）：
-
-```python
-self._summarizer_factory: Callable[[], ToolAwareSimpleAgent] = lambda: (
-    self._create_tool_aware_agent(
-        name="任务总结专家",
-        system_prompt=task_summarizer_instructions.strip(),
-    )
+ResearchCommand(
+    topic: str,
+    config: Configuration,
+    run_id: str = uuid4().hex,
+    metadata: Mapping[str, Any] = {},
+    permission_mode: str = "default",
+    caller_mode: str = "public",
+    parent_run_id: str | None = None,
 )
 ```
 
-**为什么 Summarizer 必须用工厂模式？** 因为 `run_stream()` 中多个任务并行执行（多线程）。如果共享同一个 Agent 实例，线程 A 调用 `agent.stream_run(prompt_a)` 的同时线程 B 调用 `agent.stream_run(prompt_b)`，两个 prompt 会互相污染。工厂模式确保每个线程拿到独立的 Agent 实例。
+构造边界会：
 
-### 3.3 Agent 间通信协议
+- 拒绝空白 topic；
+- 仅接受 `default` / `strict` permission mode；
+- 仅接受 `public` / `internal` caller mode；
+- deep-copy frozen `Configuration`；
+- 把 metadata 转为可 JSON 序列化且递归冻结的值；
+- 把 `run_id` 与可选 `parent_run_id` 规范化为小写 UUID hex。
 
-Agent 之间**不直接通信**——它们通过 `DeepResearchAgent` 编排器和共享 `SummaryState` 进行数据传递：
+文件路径从规范化 UUID 生成，不接受路径片段、扩展名或任意调用方文本。
 
-```
-PlanningService ──(TodoItem[])──→ SummaryState.todo_items
-                                       │
-dispatch_search ──(search_result)──→ SummaryState.web_research_results
-                                       │
-SummarizationService ──(summary)──→ TodoItem.summary (每个任务)
-                                       │
-ReportingService ←── 读取 SummaryState 中所有任务摘要 ──→ 生成报告
-```
+### 3.2 RunSession 与 ResearchState
 
-通信格式是**结构化 Python 对象**（dataclass），不依赖自然语言。这比纯文本 Agent 间通信更可靠。
+每个 command 创建一个 `RunSession`：
 
-### 3.4 Tool Calling 的设计取舍
-
-项目做了一个刻意的设计决策（[agent.py:102-108](backend/src/agent.py#L102-L108)）：
-
-```python
-def _create_tool_aware_agent(self, *, name, system_prompt):
-    return ToolAwareSimpleAgent(
-        name=name,
-        llm=self.llm,
-        system_prompt=system_prompt,
-        enable_tool_calling=False,   # ← 关闭 Tool Calling
-        tool_registry=None,           # ← 不注册工具
-    )
+```text
+RunSession
+├── command: immutable ResearchCommand
+├── state: one mutable ResearchState
+├── status / timestamps / error
+├── metrics / policy_decisions / followup_context
+├── cancellation_token / monotonic deadline
+├── ordered immutable ResearchEvent list
+└── operation pairing and first-rejection state
 ```
 
-**所有研究 Agent 的 `enable_tool_calling=False`。** 这意味着 LLM 不会被注入工具定义，模型输出是纯文本（Markdown / JSON），不产生 function call。
+`ResearchState` 记录 topic、canonical todo items、最终报告、笔记标识和 GitHub context。worker 不直接修改它；coordinator 收到 detached worker message 后调用 session transition 合并。
 
-**为什么这样做？**
+生命周期状态：
 
-1. **职责分离**：笔记 CRUD 全部由 `NoteSubAgent` 在 Agent 文本流之外处理。模型不需要知道"笔记工具"的存在。
-2. **确定性输出**：模型输出纯 Markdown，不会混入 `<function_call>` 标签或 JSON tool call，前端渲染和解析更简单。
-3. **减少 Token 消耗**：工具定义的 system prompt 不发送，节省上下文窗口。
-
-**代价**：失去了让模型主动调用搜索/计算工具的能力。搜索是由硬编码编排流程触发的，而非模型决策。
-
----
-
-## 4. 上下文工程
-
-上下文工程是 LLM 应用的核心挑战。本系统在多个层面做了精细的上下文管理。
-
-### 4.1 Prompt 模板设计
-
-系统使用 **System Prompt + 结构化 User Prompt** 模式：
-
-```
-┌──────────────────────────────────────────┐
-│  System Prompt (不变)                      │
-│  - 角色定义                                │
-│  - 行为约束 (GOAL / FORMAT / NOTES)        │
-│  - 输出格式要求                             │
-├──────────────────────────────────────────┤
-│  User Prompt (每次调用动态构造)              │
-│  - CONTEXT: 当前日期 + 研究主题              │
-│  - 搜索结果 + 来源                          │
-│  - 笔记内容 (避免重复)                       │
-│  - 已有的任务进展                            │
-└──────────────────────────────────────────┘
+```text
+pending -> running -> completed
+                   -> failed
+                   -> cancelled
+                   -> rejected
 ```
 
-三个 Prompt 模板各有不同的设计策略（[prompts.py](backend/src/prompts.py)）：
+只有 terminal prepare/confirm 可以结束已启动 session。四类 terminal event 互斥且只能提交一次。
 
-| Prompt | 策略 | 关键约束 |
-|--------|------|---------|
-| `todo_planner_instructions` | JSON 模式 | `{"tasks": [...]}` 严格格式 |
-| `task_summarizer_instructions` | 多维拓展 | 原理/应用/优缺点/工程实践/对比/历史演变 |
-| `report_writer_instructions` | 五段式模板 | 背景/洞见/证据/风险/来源 |
+### 3.3 ResearchEvent
 
-### 4.2 上下文构造与防重复策略
-
-每次调用 Summarizer 时，上下文是精心构造的（[summarizer.py:120-148](backend/src/summarizer.py#L120-L148)）：
-
-```python
-def _build_prompt(self, state, task, context, notes_context):
-    note_section = ""
-    if notes_context and task.note_id and task.note_id in notes_context:
-        note_data = notes_context[task.note_id]
-        note_content = note_data.get("content", "")
-        if note_content:
-            note_section = (
-                f"\n任务笔记（ID: {task.note_id}，已由系统自动同步）：\n"
-                f"{note_content}\n"
-                "请参考以上笔记内容，避免重复已有信息。\n"   # ← 关键指令
-            )
-    return (
-        f"任务主题：{state.research_topic}\n"
-        f"任务名称：{task.title}\n"
-        f"任务目标：{task.intent}\n"
-        f"检索查询：{task.query}\n"
-        f"任务上下文：\n{context}\n"
-        f"{note_section}"
-        "请返回一份面向用户的 Markdown 总结（遵循任务总结模板）。"
-    )
-```
-
-**上下文防重复机制**：
-1. 如果任务的笔记已存在（之前执行过的结果），将笔记内容嵌入 prompt
-2. 明确告诉模型"请参考以上笔记内容，避免重复已有信息"
-3. 这样后续任务可以看到前面任务的产出，形成**渐进式知识积累**
-
-### 4.3 Thinking Token 剥离
-
-许多模型（如 DeepSeek-R1、Qwen3）在输出中嵌入 `</think>` 标签包裹的推理过程。系统提供全局开关处理（[utils.py:19-26](backend/src/utils.py#L19-L26)）：
-
-```python
-def strip_thinking_tokens(text: str) -> str:
-    while "<think>" in text and "</think>" in text:
-        start = text.find("<think>")
-        end = text.find("</think>") + len("</think>")
-        text = text[:start] + text[end:]
-    return text
-```
-
-**流式场景下的剥离更复杂**（[summarizer.py:65-107](backend/src/summarizer.py#L65-L107)）：因为 chunk 逐个到达，`<think>` 可能跨 chunk 边界。系统使用了一个**有限状态自动机**来跟踪缓冲区：
-
-```
-状态: NORMAL → 遇到<think> → INSIDE_THINK → 遇到</think> → NORMAL
-```
-
-只有在 `NORMAL` 状态下收到的文本才会 yield 出去。`finally` 块确保流结束后清空缓冲区。
-
-### 4.4 Harness 层的上下文压缩
-
-`ContextCompressor` 将完整的研究输出压缩为**两种可复用格式**（[compressor.py](backend/src/harness/compressor.py)）：
+`ResearchEvent` 是冻结、schema-versioned 事实：
 
 ```python
 {
-    "run_summary": {           # 用于展示和回放
-        "completed_tasks": [   # 摘要截断到 280 字符
-            {"task_id": 1, "title": "...", "summary_excerpt": "...", "sources_excerpt": "..."}
-        ],
-        "incomplete_tasks": [...],
-        "report_excerpt": "..."  # 截断到 1000 字符
-    },
-    "reasoning_memory": {      # 用于后续研究的上下文注入
-        "key_findings": [...],     # 每条截断到 180 字符
-        "key_sources": [...],      # 每条截断到 180 字符
-        "open_questions": [...]    # 未完成任务标题
-    }
+  "schema_version": 1,
+  "type": "operation_started",
+  "run_id": "...",
+  "task_id": 1,
+  "operation_id": "...",
+  "sequence": 8,
+  "occurred_at": "...+00:00",
+  "payload": {...}
 }
 ```
 
-`reasoning_memory` 的设计是**前瞻性的**——虽然当前版本尚未实现多轮研究对话，但数据结构已经为"将上一次研究的发现注入下一次研究的上下文"做好了准备。
+payload 在 event 构造时复制、校验 JSON 可序列化，并递归冻结。`RunSession` 在同一锁内先修改 state、再分配 sequence、再 commit event；observer 通知在 commit 之后排队处理。
 
----
+当前内部事件包括：
 
-## 5. 记忆系统
+- run：started、completed、failed、cancelled、rejected；
+- plan/task：plan created、task started/completed/skipped/failed/retry；
+- data/report：repository detected、sources collected、summary delta、report note、report generated；
+- operation：started、completed、failed、rejected。
 
-本系统的记忆分为 **三个层次**，形成了完整的记忆金字塔。
+### 3.4 RunSnapshot 与 ResearchRunResult
 
-### 5.1 记忆架构全景
+`RunSnapshot` 是 immutable persistence value，包含：
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│  L3: 持久化记忆 (Harness Persistence)                            │
-│  - 完整运行记录 ({run_id}.json)                                  │
-│  - 事件日志 ({run_id}.events.jsonl)                              │
-│  - 运行索引 (runs.jsonl)                                        │
-│  - 评估结果                                                      │
-│  生命周期: 永久                                                   │
-├────────────────────────────────────────────────────────────────┤
-│  L2: 压缩记忆 (Compressed Context)                               │
-│  - run_summary (已完成任务/未完成任务/报告摘要)                     │
-│  - reasoning_memory (关键发现/来源/待解决问题)                     │
-│  生命周期: 跨运行 (设计为后续研究的上下文注入)                       │
-├────────────────────────────────────────────────────────────────┤
-│  L1: 工作记忆 (NoteTool + SummaryState)                          │
-│  - 任务笔记 (notes/*.md) ── 每个任务的搜索+摘要结果               │
-│  - SummaryState ── 运行中的可变状态                               │
-│  - 笔记索引 (notes_index.json)                                   │
-│  生命周期: 单次运行 (可跨运行恢复)                                  │
-└────────────────────────────────────────────────────────────────┘
-```
+- run/topic/status/timestamps/parent；
+- detached output；
+- flat, versioned follow-up context；
+- safe metrics 与 policy decisions；
+- `Configuration.safe_snapshot()`；
+- immutable events；
+- optional stable `RunError`；
+- `schema_version=1`。
 
-### 5.2 L1: 工作记忆 — NoteTool 笔记系统
+`ResearchRunResult` 是进程内返回值，兼容输出仍使用 `SummaryStateOutput`，并额外返回 run status、stable error、metrics、follow-up context、policy decisions 和 `evaluation_status="pending"`。
 
-**这是系统最核心的记忆机制。** 每个研究任务都有对应的持久化笔记。
+## 4. 唯一 Application 生命周期
 
-**创建** — `NoteSubAgent.create_task_note()`（[note_agent.py:35-61](backend/src/services/note_agent.py#L35-L61)）：
+`ResearchApplicationService.execute()` 的签名：
 
 ```python
-def create_task_note(self, *, task_id, title, content=""):
-    tags = ["deep_research", f"task_{task_id}"]
-    payload = {
-        "action": "create",
-        "task_id": task_id,
-        "title": f"任务 {task_id}: {title}",
-        "note_type": "task_state",
-        "tags": tags,
-        "content": content,
-    }
-    response = self._tool.run(payload)
-    note_id = self._parse_note_id(response)
-    return note_id
+execute(
+    command: ResearchCommand,
+    *,
+    observer: ResearchEventObserver = NULL_OBSERVER,
+    cancellation: CancellationToken = NEVER_CANCELLED,
+) -> ResearchRunResult
 ```
 
-**更新** — 任务摘要完成后立即更新笔记（[agent.py:415-429](backend/src/agent.py#L415-L429)）：
+它是同步方法，也是唯一应用级执行入口。
+
+### 4.1 正常路径
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant A as ResearchApplicationService
+    participant S as RunSession
+    participant R as ResearchCoordinator
+    participant P as FileRunRepository
+    participant O as Observer
+
+    C->>A: execute(command, observer, token)
+    A->>A: reserve run_id + policy preflight
+    A->>P: load parent snapshot (optional)
+    A->>S: create + start
+    S-->>O: run_started
+    A->>R: execute(session, prior_context)
+    R->>S: plan/task/operation/report transitions
+    A->>S: validate terminal state
+    A->>S: project follow-up context
+    A->>S: prepare completed snapshot
+    A->>P: save(snapshot)
+    P-->>A: durable
+    A->>S: confirm completed
+    S-->>O: run_completed
+    A-->>C: ResearchRunResult
+```
+
+Application 对同一 `run_id` 维护进程内 active set。重复活动 ID 返回 `run_already_active`，而不是让两个生命周期写同一运行。
+
+### 4.2 Parent load
+
+提供 `parent_run_id` 时：
+
+1. repository 必须返回 `RunSnapshot`；
+2. snapshot ID 必须等于请求 ID；
+3. status 必须是 `COMPLETED` 且有 `completed_at`；
+4. follow-up context 必须恰好包含 schema、source ID、findings、sources、questions；
+5. `source_run_id` 必须与父 ID 相同；
+6. 数量和文本预算必须满足 projector 约束。
+
+读取暂时失败后，Application 会再次读取，以区分同进程中“父运行仍活跃、尚未 durable”的 `parent_pending` 与真正的 `parent_not_found`。
+
+### 4.3 Terminal correctness 与 quality assessment 的边界
+
+`validate_terminal_state(session)` 是在线 correctness check，只验证：
+
+- canonical report 是非空文本；
+- 每个计划任务均为 `completed`、`failed`、`skipped` 或 `cancelled`。
+
+这不是质量评分。整次运行分数与 findings 由离线服务读取 persisted snapshot 生成，不能改变在线结果。
+
+### 4.4 错误结果
+
+Application 使用稳定 code，禁止把原始 exception 文本返回给客户端：
+
+| 场景 | RunStatus | code |
+|---|---|---|
+| command preflight deny | `rejected` | `policy_rejected` |
+| dynamic operation deny | `rejected` | `operation_rejected` |
+| cancellation | `cancelled` | `cancelled` |
+| monotonic deadline | `cancelled` | `deadline_exceeded` |
+| parent 不存在/未 durable/损坏 | `failed` | `parent_not_found` / `parent_pending` / `parent_corrupt` |
+| policy 实现异常 | `failed` | `policy_error` |
+| coordinator 异常 | `failed` | `coordinator_failed` |
+| terminal 校验失败 | `failed` | `terminal_validation_failed` |
+| context 投影失败 | `failed` | `context_projection_failed` |
+| required save 失败 | `failed` | `persistence_failed` |
+
+当前仅 completed snapshot 由 Application 自动保存。其他终态会安全返回并发布 terminal event，但 canonical run repository 中没有对应记录。
+
+## 5. Coordinator 与并发
+
+### 5.1 普通主题
+
+普通研究流程：
+
+```text
+planner LLM
+-> canonical plan install
+-> bounded task workers
+     -> search/cache/retry/fallback
+     -> context preparation
+     -> summarizer stream
+     -> optional summary quality retry
+-> coordinator merges worker messages
+-> optional task note updates
+-> reporter LLM
+-> optional conclusion note
+-> canonical report transition
+```
+
+在线 `ENABLE_QUALITY_GATE` 只检查单个摘要并可能细化 query 重试。它与离线 `ResearchAssessment` 的用途和生命周期不同。
+
+### 5.2 GitHub 主题
+
+启用 `ENABLE_GITHUB_RESEARCH` 后，coordinator 可识别仓库目标。`GovernedGitHubAdapter` 先授权 `github:read`，再创建 client 并收集有界仓库 context。canonical event/output 保留受控 repository metadata、source strategy 和稳定 notice code；token、HTTP header 和任意外部错误文本不进入普通 event。
+
+GitHub 仓库路径使用既有的固定研究任务和报告 context，不另建 lifecycle。
+
+### 5.3 Worker ownership
+
+任务 worker 接收冻结的 `_TaskWorkItem`，其中包含文本输入、config snapshot、scope 坐标和 typed adapters。worker 通过 bounded queue 发送：
+
+- sources；
+- summary delta；
+- retry；
+- completed；
+- skipped。
+
+只有 coordinator thread 调用 `RunSession.start_task/record_sources/append_task_summary/complete_task/...`。这保证 canonical state 和 event sequence 不依赖 worker 完成顺序。
+
+### 5.4 有界执行
+
+单次运行 worker 数量：
 
 ```python
-def _update_task_note(self, task):
-    content_parts = [f"任务状态：{task.status}"]
-    if task.summary:
-        content_parts.append(f"\n任务总结：\n{task.summary}")
-    if task.sources_summary:
-        content_parts.append(f"\n来源概览：\n{task.sources_summary}")
-    self.note_agent.update_note(...)
+min(config.max_concurrent_tasks, len(work_items))
 ```
 
-**读取** — 后续任务的 Prompt 构造时读取已有笔记，实现知识传递（[agent.py:329](backend/src/agent.py#L329)）：
+结果 queue 容量与 worker 数量成比例。executor 在退出时 `shutdown(wait=True, cancel_futures=True)`，不创建 daemon worker。控制异常会设置 stop event、请求 cancellation，并等待已启动 worker 收尾。
+
+## 6. Governed operations
+
+### 6.1 OperationScope
+
+`OperationScope` 是显式、不可变的 per-invocation context：
 
 ```python
-notes_context = self._read_task_note(task)  # 读取当前任务笔记
-# 传递给 summarizer，让模型看到已有进展
+OperationScope(
+    operations: GovernedOperations,
+    task_id: int | None = None,
+    task_attempt: int = 1,
+    fallback_index: int = 1,
+)
 ```
 
-**结论笔记** — 最终报告也保存为 `note_type="conclusion"` 的特殊笔记（[agent.py:431-457](backend/src/agent.py#L431-L457)）。
+它不使用 thread-local “当前 run”。同一个 coordinator 实例也不会把 run scope 存在对象字段中。
 
-**笔记系统的设计价值**：
-- **知识累积**：任务 3 的摘要可以看到任务 1、2 的产出
-- **断点续传**：笔记是文件系统持久化的，理论上可以从失败的任务恢复
-- **可追溯**：每个结论都有笔记 ID 可回溯来源
+### 6.2 OperationSpec
 
-### 5.3 L2: 压缩记忆 — ContextCompressor
+`scope.spec()` 创建：
 
-详细分析见 [4.4 节](#44-harness-层的上下文压缩)。`reasoning_memory` 是本系统记忆体系中最具前瞻性的设计——它从完整的研究输出中提取**结构化关键信息**，为未来的多轮对话式深度研究做准备。
+- dotted `operation_name`；
+- 一个或多个 `domain:action` capability；
+- allowlisted resource；
+- UUID operation ID；
+- task attempt、operation attempt、fallback index。
 
-### 5.4 L3: 持久化记忆 — JsonlRunRecorder
+`pairing_key` 是 `(operation_id, task_attempt, fallback_index, operation_attempt)`。重复 start、重复 terminal、start 后 reject、没有 start 的 completed/failed 都会触发 invalid transition。
 
-`JsonlRunRecorder` 以**三种文件格式**持久化每次运行（[recorder.py:25-66](backend/src/harness/recorder.py#L25-L66)）：
+### 6.3 GovernedOperations.call
 
-```
-output/harness_runs/
-├── {run_id}.json           # 完整运行快照 (可审计)
-├── {run_id}.events.jsonl   # 逐事件日志 (可回放调试)
-└── runs.jsonl              # 追加索引 (可列举)
-```
-
-三种格式各有用途：
-
-| 格式 | 内容 | 用途 |
-|------|------|------|
-| `.json` | 完整记录（输入/输出/评估/策略） | 审计、查询 |
-| `.events.jsonl` | 按时间序的事件流 | 回放、调试、性能分析 |
-| `runs.jsonl` | 一行一条索引（id/topic/status/score） | 列出所有历史运行 |
-
----
-
-## 6. 流式事件协议与实时通信
-
-### 6.1 SSE 事件类型定义
-
-系统定义了 **9 种 SSE 事件类型**，构成前后端通信的完整协议：
-
-| 事件类型 | 发出者 | 含义 | 关键字段 |
-|---------|--------|------|---------|
-| `status` | agent | 状态通知 (含搜索 backend 消息) | `message`, `task_id` |
-| `todo_list` | agent | 规划完成，任务列表就绪 | `tasks: TodoItem[]` |
-| `task_status` | agent | 任务状态变更 | `task_id`, `status` (in_progress/completed/skipped/failed) |
-| `sources` | agent | 搜索完成，来源就绪 | `latest_sources`, `raw_context`, `backend` |
-| `task_summary_chunk` | agent | 摘要流式增量 | `content` (部分 Markdown) |
-| `tool_call` | agent | 笔记工具操作通知 | `note_id` |
-| `final_report` | agent | 最终报告就绪 | `report` (完整 Markdown) |
-| `done` | agent | 研究流程结束 | — |
-| `error` | harness | 流式过程异常 | `detail` |
-
-### 6.2 并行任务的事件多路复用
-
-当有 3 个并行任务时，每个任务独立产生 `sources` → `task_summary_chunk` → `task_status` 事件序列。前端通过 `task_id` 和 `stream_token` 进行**事件分发**：
-
-```
-时间线 →
-Task 1: [task_status:in_progress] [sources] [chunk][chunk][chunk] [task_status:completed]
-Task 2:     [task_status:in_progress] [sources] [chunk][chunk] [task_status:completed]
-Task 3:         [task_status:in_progress] [sources] [chunk][chunk][chunk] [task_status:completed]
-
-所有事件通过单一 Queue → SSE 通道串行传输，前端按 task_id 分发到对应 UI 区域
+```text
+pure cancellation/deadline check
+-> capability evaluation
+-> append safe decisions
+-> pure cancellation/deadline check
+-> atomic operation admission + start
+-> callback
+-> pure cancellation/deadline check
+-> completed or failed
 ```
 
-### 6.3 前端 SSE 消费
+callback 返回值原样交还 typed caller，但不会复制进 event。失败只记录 stable code 和 duration。
 
-[api.ts](frontend/src/services/api.ts) 使用原生 `fetch` + `ReadableStream` 解析 SSE：
+### 6.4 GovernedOperations.stream
 
-```typescript
-const reader = body.getReader();
-const decoder = new TextDecoder("utf-8");
-let buffer = "";
+stream 是 lazy 的：创建 iterator 本身不会授权或发出 start；首次迭代才执行同样的 authorize/start 流程。每次拉取 chunk 前后检查 cancellation/deadline。正常耗尽记录 completed，异常、关闭或控制信号记录 failed，并尽力关闭底层 iterator。
 
-while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
+### 6.5 Rejection admission latch
 
-    // 按 \n\n 分割 SSE 事件
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-        const rawEvent = buffer.slice(0, boundary).trim();
-        buffer = buffer.slice(boundary + 2);
-        if (rawEvent.startsWith("data:")) {
-            const event = JSON.parse(rawEvent.slice(5).trim());
-            onEvent(event);       // 回调通知 Vue 组件
-        }
-        boundary = buffer.indexOf("\n\n");
-    }
-    if (done) break;
+`operation_rejected` 与“关闭后续 start admission”在同一个 session critical section 中提交。observer 能看到 rejection 时，任何新 operation 都已经不能 start。
+
+并发控制的优先级是：
+
+```text
+first committed operation rejection
+> competing raw cancellation/deadline
+```
+
+因此 Agent 和 Application 最终都归一为 first rejection 的 `operation_id`。拒绝前 active operation 不会被伪装成 rejected；它仍然完成或以 cancellation/deadline failed 收尾。
+
+## 7. Typed external adapters
+
+### 7.1 LLM
+
+`GovernedHelloAgentsLLM` 包装 delegate 的公开方法：
+
+```python
+invoke(messages, **kwargs) -> str
+stream_invoke(messages, **kwargs) -> Iterator[str]
+```
+
+服务通过内部关键字传入 `OperationScope`。wrapper 移除该关键字，创建 `planner.complete`、`summarizer.stream`、`reporter.complete` 等 spec，然后调用 hello-agents delegate。resource 只包含 role、model ID 和 SHA-256 prompt hash。
+
+wrapper 不访问 `_client`、`_history` 等私有字段。并发 summarizer 通过 factory 创建独立 `SimpleAgent`，避免共享可变 history。
+
+### 7.2 Search
+
+`HelloAgentsSearchAdapter.run(parameters)` 对接公开 `SearchTool.run()`。实例按 worker thread 懒创建，避免跨线程复用可能有状态的工具对象。
+
+`dispatch_search()` 保留：
+
+- configured backend；
+- 每 backend 最多 3 次物理尝试；
+- 非 DuckDuckGo backend 失败后的 DuckDuckGo fallback；
+- 显式启用的首轮 search cache（默认关闭）；
+- structured result、answer、source formatting；
+- 可取消 backoff。
+
+Perplexity 每个真实尝试需要 `search:web` 与 `search:premium`。如果 premium policy 拒绝，异常作为 control flow 立即上抛，不能降级到免费的 backend 以绕过策略。
+
+cache read/write 也在同一 search scope 下审计。cache 必须由调用方显式 opt-in；持久化时只保留有界的 schema-v1 安全投影，URL 去除 userinfo、fragment 和已知敏感 query 参数，同时保留用于资源身份的普通参数及其重复值、空值，且不写入 `raw_content`、直接答案或 provider 扩展字段。默认应用在 ASGI startup 从解析后的 workspace parent 信任根扫描直属 cache 条目，拒绝 symlink/reparse 路径，并清除 legacy/未知 schema、过期文件和本应用遗留临时文件；扫描通过 512 条目、1 秒和单文件 256 KiB 的预算限制启动成本，直接 cache read 复用同一有界读取与精确 schema 校验。event 只记录 SHA-256 query hash；原 query 和 raw result 不进入 operation event。
+
+### 7.3 GitHub
+
+`GovernedGitHubAdapter.collect_repository_context()` 先构造 `github.collect` spec，再在 `github:read` 允许后创建 `GitHubResearchClient`。safe resource 只有 owner、repo、resource kind。
+
+### 7.4 Note
+
+`NoteToolAdapter` 支持 create/read/update/conclusion/batch read。生产路径传入 scope，因此 `NoteTool` 只会在 governed callback 内懒构造和执行。
+
+写操作需要 `notes:write`；当前 read/update 兼容契约同时要求 `notes:read` 和 `notes:write`。`NoteSubAgent` 只是保留的类名 alias，并不是另一个 Agent lifecycle。
+
+## 8. Policy
+
+`HarnessPolicy` 名称保留兼容，但实现同时满足 `CommandPolicy` 与 operation policy Protocol。
+
+command preflight 根据 config 推导：
+
+```text
+research:run
+llm:invoke
+search:web
+report:export
++ search:premium   when Perplexity
++ github:read      when GitHub research enabled
++ notes:read/write when notes enabled
+```
+
+真实 operation 仍逐项重新执行 `evaluate_capability()`；preflight 只是快速拒绝，不是副作用授权边界。
+
+| outcome | 行为 |
+|---|---|
+| `allow` | 继续 |
+| `deny` | 阻断 |
+| `ask` | 当前阻断；无审批 UI |
+
+unknown capability 默认 deny。policy reason 在记录前转为固定可信文案，不透传自定义 secret-bearing reason。
+
+## 9. Persistence
+
+### 9.1 目录与 envelope
+
+默认 composition root：
+
+```python
+HarnessRunner.build_default(base_path="./output/harness_runs")
+```
+
+从 `backend/` 启动时，文件为：
+
+```text
+backend/output/harness_runs/runs/<canonical-run-id>.json
+```
+
+文件顶层结构：
+
+```json
+{
+  "schema_version": 1,
+  "snapshot": { "...": "canonical snapshot" },
+  "followup_context": { "...": "detached compact context" }
 }
 ```
 
-### 6.4 Harness 的流事件摄入
+顶层 follow-up context 必须与 snapshot 内值一致。加载器严格校验 envelope shape、schema、run ID、event ID、时间、status、error 和敏感 key。
 
-Harness 在流式路径中通过 `_ingest_stream_event()` 从事件流重建 `TodoItem` 状态（[runner.py:179-251](backend/src/harness/runner.py#L179-L251)）：
+### 9.2 原子写入
 
-```
-事件流: todo_list → task_status → sources → task_summary_chunk × N → task_status → final_report
-                          │            │              │
-                          ▼            ▼              ▼
-重建逻辑:           创建 TodoItem   更新来源     追加摘要文本片段
-```
+写入在 repository root 对应的进程内共享 `RLock` 下完成：
 
-这个**事件溯源 (Event Sourcing)** 模式使得 Harness 可以在流结束后拥有完整的 `SummaryStateOutput`，用于压缩、评估和持久化。
-
----
-
-## 7. 治理与安全层 (Harness)
-
-### 7.1 设计哲学
-
-Harness 是"运行时治理层"，不是第二个业务工作流。它的稳定执行形态为：
-
-```
-FastAPI → request normalization → HarnessRunner → DeepResearchAgent
-                                                      │
-                  ┌───────────────────────────────────┘
-                  ▼
-          compression / evaluation / persistence
+```text
+serialize + redact
+-> deserialize self-check
+-> NamedTemporaryFile in runs/
+-> UTF-8 JSON
+-> flush + fsync
+-> os.replace target
 ```
 
-**核心原则**：
-- `DeepResearchAgent` 对研究执行负责
-- `HarnessRunner` 对运行治理负责
-- 两者互不侵入，通过 `Configuration` 和 `SummaryStateOutput` 进行数据交换
+失败时只清理经过目录与命名验证的临时文件。不会针对未经验证的计算路径做递归删除。
 
-### 7.2 能力型权限模型
+### 9.3 Redaction
 
-`HarnessPolicy` 定义了一套**基于能力的权限模型**（[policy.py](backend/src/harness/policy.py)）：
+配置仅保留：
+
+```text
+llm_provider, llm_model_id, llm_reporter_model_id,
+search_api, max_web_research_loops, max_concurrent_tasks,
+fetch_full_page, strip_thinking_tokens, use_tool_calling,
+enable_notes, enable_quality_gate, enable_github_research,
+run_timeout_seconds
+```
+
+API keys、tokens、base URLs、notes workspace、完整 config、raw source bodies 和 prompts 均不属于 canonical config projection。
+
+### 9.4 Durable completion
+
+`prepare_terminal(COMPLETED)` 创建即将保存的 snapshot 和 terminal event，但不修改 session status，也不通知 observer。repository save 成功后，`confirm_terminal()` 才设置 completed 和提交事件。
+
+因此：
+
+- `run_completed` observer 回调内立刻 load 能成功；
+- SSE `done` 只可能来自该 committed event；
+- save 失败只有 `run_failed`，没有 `run_completed`；
+- cancellation 在成功 save 已经完成后到达不会把 durable completion 改写为 cancelled。
+
+## 10. Follow-up context
+
+### 10.1 Projector
+
+`FollowupContextProjector` 从 `session.to_legacy_output()` 的 detached view 读取 task summary/status/source line：
 
 ```python
-def required_capabilities(self, request):
-    capabilities = ["research:run", "search:web", "report:export"]
-    if request.config.search_api == SearchAPI.PERPLEXITY:
-        capabilities.append("search:premium")          # 高级搜索需额外权限
-    if request.config.enable_notes:
-        capabilities.extend(["notes:read", "notes:write"])  # 笔记功能
-    return capabilities
+FollowupContext(
+    source_run_id: str,
+    key_findings: tuple[str, ...],   # <= 5, item <= 180 chars
+    key_sources: tuple[str, ...],    # <= 3, item <= 180 chars
+    open_questions: tuple[str, ...], # <= 10
+    schema_version: int = 1,
+)
 ```
 
-每种能力返回三种结果之一：
+它不读取 SSE 或 raw web body。
 
-| 结果 | 含义 | 行为 |
-|------|------|------|
-| `allow` | 许可 | 继续执行 |
-| `deny` | 禁止 | 抛出 `PermissionError` → HTTP 403 |
-| `ask` | 需审批 | 当前版本等同于 `deny`（未来可接入审批 UI） |
+### 10.2 Assembler
 
-**权限决策示例**：
+`ResearchContextAssembler` 把已验证的 typed context 转为给 planner/coordinator 的有界 dict。父快照不直接注入 prompt；只有 allowlisted compact fields 会进入下一轮。
 
-| 场景 | `search:premium` | `notes:write` (enable_notes=False) |
-|------|------------------|-----------------------------------|
-| `permission_mode="default"` | `allow` | `deny` |
-| `permission_mode="strict"` | `ask` → 阻断 | `deny` |
+### 10.3 Compatibility envelope
 
-### 7.3 质量评估引擎
+旧调用方仍可得到 `run_summary` / `reasoning_memory` 外壳，但其内容来自同一 projector。不存在另一份可变 follow-up state。
 
-`RuleBasedEvaluator` 采用**扣分制**进行质量评分（[evaluator.py](backend/src/harness/evaluator.py)）：
+## 11. Offline assessment
 
-```
-初始分数: 1.0
-
-- 无输出        → 直接归零 (score=0.0)
-- 无任务        → -0.2
-- 报告为空      → -0.5
-- 有未完成任务  → -0.2
-- 有任务无摘要  → -0.1
-- 无压缩上下文  → -0.1
-
-下限: 0.0
-```
-
-评估结果随运行记录一起持久化，可用于**回归测试**和**质量监控**。
-
-### 7.4 事件溯源与可观测性
-
-`InMemoryEventBus` 是 Harness 的神经中枢（[event_bus.py](backend/src/event_bus.py)）：
+`research.evaluation` 的 public values：
 
 ```python
-class InMemoryEventBus:
-    def emit(self, context, event_type, **payload) -> HarnessEvent:
-        event = HarnessEvent(
-            event_type=event_type,
-            run_id=context.run_id,
-            payload=dict(payload),
-            sequence=len(context.events) + 1,   # 自增序列号
-        )
-        context.events.append(event)
-        return event
+AssessmentFinding(
+    severity: str,
+    message: str,
+    code: str | None = None,
+)
+
+ResearchAssessment(
+    run_id: str,
+    evaluated_at: datetime,       # timezone-aware
+    score: float,                 # 0.0 .. 1.0
+    findings: tuple[AssessmentFinding, ...] = (),
+    schema_version: int = 1,
+)
 ```
 
-在一次完整运行中触发的事件类型：
+`OfflineEvaluationService.evaluate(snapshot: RunSnapshot) -> ResearchAssessment` 只读取：
 
-```
-run_started → policy_checked → research_event × N → run_completed/run_failed
-                                                         │
-                                               context_compressed
-```
-
-每个事件带时间戳和序列号，形成完整的**可审计轨迹**。
-
----
-
-## 8. 搜索与知识检索
-
-### 8.1 多后端搜索架构
-
-搜索层通过 `SearchTool(backend="hybrid")` 统一抽象多种搜索后端（[search.py:76-86](backend/src/services/search.py#L76-L86)）：
-
-```python
-raw_response = _GLOBAL_SEARCH_TOOL.run({
-    "input": query,
-    "backend": search_api,     # duckduckgo / tavily / perplexity / searxng
-    "mode": "structured",
-    "fetch_full_page": config.fetch_full_page,
-    "max_results": 5,
-    "max_tokens_per_source": 2000,
-    "loop_count": loop_count,
-})
+```text
+snapshot.output
+snapshot.followup_context
 ```
 
-### 8.2 搜索缓存策略
+当前规则保持旧评分语义：missing output 直接 0；missing tasks/report、incomplete tasks、missing summaries、missing follow-up context 分别产生扣分 finding，最终 score 下限为 0。
 
-缓存位于 `notes_workspace/../cache/search/`，以 MD5 哈希为键：
+服务不读取或改变在线 session；测试会在 evaluate 前后比较 `snapshot.as_dict()` 及其稳定 JSON bytes。`as_dict()` 返回 detached JSON-ready value，调用方修改序列化结果不会修改 assessment。
 
-```python
-def _cache_key(query, config):
-    content = f"{query}_{search_api}_{config.fetch_full_page}"
-    return hashlib.md5(content.encode()).hexdigest()
+`harness.evaluator.EvaluationResult` 和 `RuleBasedEvaluator` 保留旧返回形状，但内部委托 `OfflineEvaluationService`，不复制 scoring implementation。
+
+Application 当前只标记 `evaluation_status="pending"`。没有自动后台 worker、assessment 文件或 assessment HTTP endpoint，文档和客户端不能把 `pending` 理解为“评分已经完成”。
+
+## 12. SSE 与兼容 facade
+
+### 12.1 HarnessRunner
+
+`HarnessRunner` 持有：
+
+- 一个 `ResearchApplicationService`；
+- 与 Application 相同对象的 repository；
+- bounded top-level executor 和 admission semaphore；
+- bounded event queue；
+- `LegacySseProjector`。
+
+`run(request)` 提交一次 `application.execute()` 并适配 `ResearchRunResult`。`stream(request)` 仍只提交这一次 execute，同时把 observer 收到的 typed events 放入 queue。`load_record(run_id)` 直接调用 repository。
+
+facade 不做 policy、context、evaluation 或 persistence orchestration。它也不从 SSE 字典还原任务状态。
+
+### 12.2 Stream close
+
+closeable iterator 的 `close()`：
+
+1. 标记 consumer closed；
+2. 若尚无 terminal，调用共享 `CancellationToken.cancel()`；
+3. 尝试取消尚未开始的 future；
+4. 不在 HTTP disconnect 路径等待 in-flight LLM。
+
+Application future 若已经执行，会继续协作收尾。因为 0.2.9 限制，底层 LLM 返回前可能仍占用 worker。
+
+### 12.3 LegacySseProjector
+
+projector 对每种公开 event 使用字段 allowlist。兼容 event 始终含：
+
+```text
+type, run_id, schema_version, sequence
 ```
 
-**缓存策略**：
-- **什么被缓存**：完整的结构化搜索结果（JSON）
-- **缓存时机**：仅 `loop_count == 0` 时（首次搜索）
-- **缓存命中**：直接返回，跳过网络请求
-- **缓存失效**：手动删除文件
+任务、仓库、notice、backend 和 terminal code 还会经过类型/枚举 allowlist。内部 operation audit 不暴露给旧前端。
 
-### 8.3 搜索结果的上下文构造
+### 12.4 Agent direct compatibility
 
-`dispatch_search` 返回四个值（[search.py:59-64](backend/src/services/search.py#L59-L64)）：
+`DeepResearchAgent.run()` 与 `run_stream()` 仍存在，但只是 coordinator 的 direct adapter。它们不拥有 Application 的 parent load、required persistence 和 canonical terminal 语义。特别是 direct `run_stream()` 的 `done` 是非 canonical 兼容 sentinel。
 
-```python
-return (payload,          # dict: 完整搜索响应 {"results": [...], "answer": "...", ...}
-        notices,          # list[str]: 来自搜索后端的通知消息
-        answer_text,      # str|None: AI 直接答案 (如 Perplexity 的答案)
-        backend_label)    # str: 实际使用的后端标识
+新代码和 HTTP composition 必须使用 `ResearchApplicationService.execute()`。
+
+## 13. 取消与 deadline
+
+### 13.1 CancellationToken
+
+token 使用 `threading.Event` 加 `RLock`。raw `cancel()` 与 `RunSession.start_operation()` 共享 operation guard，使取消和 start commit 形成明确顺序：
+
+- cancel 先获得 guard：start 抛 `CancellationRequestedError`，无 start event；
+- start 先获得 guard：先 commit start，后续取消通过 failed terminal 配对。
+
+特殊 `NEVER_CANCELLED` token 使用 no-op guard，避免无关 session 因共享 singleton 被串行化。
+
+### 13.2 Deadline
+
+`RunSession` 构造时把 `RUN_TIMEOUT_SECONDS` 转为 monotonic deadline。所有 deadline 比较使用 monotonic clock，不受系统墙钟调整影响。
+
+`session.wait(timeout)` 会取调用 timeout 与剩余 deadline 的较小值，搜索 backoff 因此可以被 cancellation/deadline 打断。
+
+### 13.3 Rejection precedence
+
+run-level `raise_if_run_controlled()` 先检查 session 的 first rejection，再检查 cancellation/deadline。这防止 observer 在看到 `operation_rejected` 后直接取消 token，导致上层错误被错误降级成 cancelled。
+
+active governed operation 的内部 post-check 仍使用纯 `raise_if_cancelled()`，因此它保留自己真实的 completed/cancelled/deadline terminal，而不是被改写成另一个 operation 的 rejection。
+
+### 13.4 0.2.9 hard-cancel limitation
+
+`HelloAgentsLLM.invoke()` / `stream_invoke()` 没有 run cancellation 参数，也没有安全的 public abort handle。项目只能在调用前、返回后、stream chunk 边界检查。
+
+所以：
+
+- 不声称 client disconnect 能立即停止远程生成；
+- 不杀线程；
+- 不访问私有 HTTP client 尝试 abort；
+- 等调用返回后再提交 operation/run 控制终态。
+
+## 14. Windows console compatibility
+
+`hello-agents==0.2.9` 的 `SearchTool(backend="hybrid")` 构造会打印 emoji-bearing notice。CP936 stdout 在 strict errors 下可能无法编码。
+
+`HelloAgentsSearchAdapter` 只在首次、每线程懒构造工具时调用安全 guard：
+
+```text
+read real sys.stdout encoding/errors
+-> probe whether notice sample is encodable
+-> if needed: stdout.reconfigure(errors="backslashreplace")
+-> construct SearchTool
 ```
 
-然后 `prepare_research_context()` 将其格式化为 LLM 可消费的文本（[search.py:134-151](backend/src/services/search.py#L134-L151)）：
+重要约束：
 
-```
-AI直接答案：
-(answer_text)
+- 不把 `sys.stdout` 替换成临时 stream；
+- 不使用会影响其他 worker 的 redirect；
+- 不捕获或吞掉同时发生的 LLM/stdout 输出；
+- 不改变可编码 console 的设置；
+- 无 encoding 信息时不擅自修改。
 
-信息来源: {title}
-URL: {url}
-信息内容: {content}
-详细信息内容限制为 2000 个 token: {raw_content[:8000]}... [truncated]
-```
+测试在真实 venv 子进程中设置 `PYTHONIOENCODING=cp936`、`PYTHONUTF8=0`，验证 lazy import/构造能完成；另有并发输出 sentinel 测试验证 stdout identity 未变化。
 
----
+## 15. HTTP API
 
-## 9. 数据模型与状态管理
+### 15.1 Routes
 
-### 9.1 领域模型层次
+| Method | Path | Request/response |
+|---|---|---|
+| `GET` | `/healthz` | `{"status":"ok"}` |
+| `POST` | `/research` | `ResearchRequest` -> `ResearchResponse` |
+| `POST` | `/research/stream` | `ResearchRequest` -> SSE |
+| `POST` | `/research/continue/stream` | `ContinueRequest` -> SSE |
+| `POST` | `/harness/run` | `HarnessRequest` -> compatibility `HarnessResponse` |
+| `GET` | `/runs/{run_id}` | canonical `RunSnapshot.as_dict()` |
+| `GET` | `/harness/runs/{run_id}` | deprecated query alias |
+| `GET` | `/harness/scenarios` | offline/benchmark fixture metadata |
 
-```
-SummaryState (运行级可变状态)
-├── research_topic: str
-├── research_loop_count: int           # 搜索循环计数
-├── web_research_results: list[str]    # 累积的搜索上下文
-├── sources_gathered: list[str]        # 累积的来源列表
-├── todo_items: list[TodoItem]         # 任务列表
-├── structured_report: str             # 最终报告
-├── report_note_id / report_note_path  # 结论笔记
-└── (deprecated) search_query, running_summary
+`ResearchRequest`：
 
-TodoItem (任务级状态)
-├── id, title, intent, query           # 不可变 (规划阶段确定)
-├── status: pending|in_progress|completed|skipped|failed
-├── summary: str                       # LLM 生成的摘要
-├── sources_summary: str               # 格式化的来源列表
-├── notices: list[str]                 # 搜索后端通知
-├── note_id / note_path                # 关联的笔记文件
-└── stream_token: str                  # 前端流式路由标识
-
-SummaryStateOutput (不可变输出)
-├── running_summary: str              # 向后兼容
-├── report_markdown: str              # 最终报告
-└── todo_items: list[TodoItem]        # 完整任务列表
+```json
+{
+  "topic": "required string",
+  "search_api": "optional enum",
+  "parent_run_id": "optional canonical UUID"
+}
 ```
 
-### 9.2 状态生命周期
+`ContinueRequest` 要求 `parent_run_id`。`HarnessRequest` 额外包含 `permission_mode` 和 JSON `metadata`。
 
-```
-初始化                      执行中                        完成
-  │                          │                            │
-  ▼                          ▼                            ▼
-SummaryState()          state.todo_items              SummaryStateOutput
-  todo_items=[]         state.sources_gathered          (不可变快照)
-  loop_count=0          task.status="completed"
-                        task.summary="..."
-                              │
-                              ▼
-                        Note (持久化到文件系统)
-```
+同步 `/research` 为旧兼容形状，只返回 `report_markdown` 和 `todo_items`。`/harness/run` 还返回 `run_id`、status、metrics、compressed context 与 policy decisions；findings 当前为空，因为 Application 不在线评分。
 
-### 9.3 线程安全
+### 15.2 HTTP error mapping
 
-`DeepResearchAgent` 使用 `threading.Lock` 保护共享状态（[agent.py:42](backend/src/agent.py#L42)）：
+| code | HTTP |
+|---|---:|
+| `invalid_command` | 400 |
+| `policy_rejected` / `operation_rejected` | 403 |
+| `parent_not_found` | 404 |
+| `parent_pending` / `run_already_active` / `runner_busy` / `cancelled` | 409 |
+| `deadline_exceeded` | 408 |
+| repository/persistence/policy/coordinator/validation/application errors | 500 |
 
-```python
-self._state_lock = Lock()
+SSE 一旦建立连接，运行失败通过 terminal `error` event 表达，而不是在流中途改变 HTTP status。
 
-# 使用处 (agent.py:280-283):
-with self._state_lock:
-    loop_count = state.research_loop_count
-    state.research_loop_count += 1
-```
+## 16. Configuration
 
-受保护的临界区很小——仅 `research_loop_count` 的自增和 `web_research_results` / `sources_gathered` 的追加。每个任务的 `TodoItem` 对象由各自的线程独立修改，不存在竞争。
+`Configuration` 是 frozen Pydantic model。`from_env()` 按字段名大写读取环境变量，再应用非 `None` overrides。
 
----
+| Field / env | Default | Validation / use |
+|---|---|---|
+| `llm_provider` / `LLM_PROVIDER` | `ollama` | provider selector |
+| `local_llm` / `LOCAL_LLM` | `llama3.2` | fallback model |
+| `llm_model_id` / `LLM_MODEL_ID` | `None` | custom model |
+| `llm_reporter_model_id` / `LLM_REPORTER_MODEL_ID` | `None` | optional reporter model |
+| `llm_api_key` / `LLM_API_KEY` | `None` | secret, never persisted |
+| `llm_base_url` / `LLM_BASE_URL` | `None` | custom API base, never persisted |
+| `ollama_base_url` / `OLLAMA_BASE_URL` | `http://localhost:11434` | normalized to `/v1` |
+| `lmstudio_base_url` / `LMSTUDIO_BASE_URL` | `http://localhost:1234/v1` | local OpenAI-compatible base |
+| `llm_timeout` / `LLM_TIMEOUT` | `60.0` | per-call timeout |
+| `llm_max_tokens` / `LLM_MAX_TOKENS` | `2000` | output limit |
+| `search_api` / `SEARCH_API` | `duckduckgo` | enum: perplexity/tavily/duckduckgo/searxng/advanced |
+| `max_web_research_loops` / `MAX_WEB_RESEARCH_LOOPS` | `3` | workflow setting |
+| `max_concurrent_tasks` / `MAX_CONCURRENT_TASKS` | `4` | 1–16 |
+| `fetch_full_page` / `FETCH_FULL_PAGE` | `true` | source fetching |
+| `enable_notes` / `ENABLE_NOTES` | `true` | NoteTool boundary |
+| `notes_workspace` / `NOTES_WORKSPACE` | `./notes` | secret-sensitive path, not persisted |
+| `enable_quality_gate` / `ENABLE_QUALITY_GATE` | `true` | per-summary retry gate |
+| `enable_github_research` / `ENABLE_GITHUB_RESEARCH` | `true` | repository detection |
+| `github_token` / `GITHUB_TOKEN` | `None` | secret, never persisted |
+| `github_api_base_url` / `GITHUB_API_BASE_URL` | `https://api.github.com` | not persisted |
+| `run_timeout_seconds` / `RUN_TIMEOUT_SECONDS` | `None` | finite, `0 < value <= 86400` |
+| `strip_thinking_tokens` / `STRIP_THINKING_TOKENS` | `true` | response cleanup |
+| `use_tool_calling` / `USE_TOOL_CALLING` | `false` | structured output mode |
 
-## 10. 设计模式与工程实践
+Tavily、Perplexity、SearXNG 的 tool-specific env 由 hello-agents/SearchTool 读取。前端只读取 `VITE_API_BASE_URL`。
 
-### 10.1 已应用的设计模式
+`HOST`、`PORT` 和 `CORS_ORIGINS` 不属于 `Configuration`，而是由 composition root 单独读取的传输层环境变量，因此不会进入研究运行快照。`src/main.py` 默认监听 `127.0.0.1:8000`；CORS 使用显式 HTTP(S) origin allowlist，默认只覆盖本地开发端口 5173、5174 和 3000，拒绝 `*`、路径及带凭据的 origin。通过 Uvicorn CLI 启动时，CLI 的 host/port 参数优先；`LOG_LEVEL` 当前仍固定在入口中。
 
-| 模式 | 应用位置 | 说明 |
-|------|---------|------|
-| **外观 (Facade)** | `HarnessRunner` | 统一封装 policy → agent → compression → evaluation → persistence |
-| **工厂方法 (Factory Method)** | `SummarizationService` | `_summarizer_factory` 为每次调用创建新 Agent |
-| **策略 (Strategy)** | `RuleBasedEvaluator` / `HarnessPolicy` | 可替换的评估和权限策略 |
-| **依赖注入 (DI)** | `create_app(harness_runner)` / 各 Service 构造函数 | 便于测试 mock |
-| **模板方法 (Template Method)** | `HarnessRunner.run()` / `.stream()` | 固定生命周期骨架 |
-| **事件溯源 (Event Sourcing)** | `InMemoryEventBus` + `_ingest_stream_event` | 从事件流重建聚合状态 |
-| **建造者 (Builder)** | `HarnessScenario.build_request()` | 构建 `HarnessRunRequest` |
+## 17. 开发、测试与构建
 
-### 10.2 配置管理
+### 17.1 安装
 
-`Configuration` 使用 Pydantic `BaseModel` + 环境变量映射（[config.py:91-107](backend/src/config.py#L91-L107)）：
-
-```python
-@classmethod
-def from_env(cls, overrides=None):
-    raw_values = {}
-    for field_name in cls.model_fields.keys():
-        env_key = field_name.upper()      # max_web_research_loops → MAX_WEB_RESEARCH_LOOPS
-        if env_key in os.environ:
-            raw_values[field_name] = os.environ[env_key]
-    if overrides:
-        raw_values.update(overrides)
-    return cls(**raw_values)
+```powershell
+cd backend
+uv sync --frozen --group dev
 ```
 
-支持**运行时覆盖**（如 API 请求中指定不同的 `search_api`）。
+package metadata 显式安装 top-level modules，并发现 `research*`、`harness*`、`services*`。root requirement 与 lock 都固定 `hello-agents==0.2.9`。
 
-### 10.3 错误处理策略
+### 17.2 启动
 
-系统采用**分层错误处理**：
+```powershell
+cd backend
+uv run uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 
-```
-服务层:  捕获具体异常 → 记录日志 → 优雅降级 (任务标记为 skipped)
-Agent层: try/except per task → 单个任务失败不影响其他任务
-Harness: try/except 包裹全部 → context.status = "failed" → 评估 + 持久化
-HTTP层:  按异常类型映射 HTTP 状态码 → ValueError→400, PermissionError→403, else→500
-流式层:  捕获异常 → SSE error 事件 (不中断连接)
-```
-
----
-
-## 11. 前端架构
-
-### 11.1 单文件组件设计
-
-前端是单个 `App.vue` 组件（2416 行），通过 `v-if` 在两套布局间切换：
-
-```
-状态: idle → 显示居中的输入卡片
-状态: running/completed → 显示全屏研究面板
-  ├── 左侧栏: 研究信息 + 进度指示
-  └── 右侧面板: 任务列表 + 任务详情 + 最终报告
+cd ../frontend
+npm ci
+npm run dev
 ```
 
-### 11.2 XSS 防护
+Vite 端口是 5174；API 默认地址是 8000。
 
-前端对 Markdown 渲染做了 XSS 清洗（去除 `<script>`、`on*` handlers、`<iframe>`、`<object>`、`<embed>`），然后通过 `marked.js` 渲染。
+若需外部访问，应将应用置于带认证和 TLS 的反向代理之后，显式选择监听地址，并将 `CORS_ORIGINS` 收窄为部署前端的实际 origin。
 
-### 11.3 实时任务进度
+### 17.3 后端验证
 
-每个任务根据 `stream_token` 进行前端路由，支持：
-- 动画时间线（pending → in_progress → completed）
-- 增量 Markdown 渲染（摘要 chunk 逐段显示）
-- 来源链接悬停预览
-- 工具调用日志展示
-
----
-
-## 12. 数据流全景
-
-```
-┌──────────────┐     HTTP/SSE      ┌──────────────┐     Python      ┌─────────────────┐
-│   用户浏览器    │ ◄──────────────► │   FastAPI     │ ◄────────────► │  DeepResearch   │
-│  (Vue 3 SPA)  │                  │  (main.py)    │                │  Agent          │
-│               │                  │               │                │                 │
-│  - 输入topic   │                  │  - 请求标准化   │                │  - 规划          │
-│  - 实时看板    │                  │  - SSE 推送    │                │  - 搜索+摘要     │
-│  - Markdown   │                  │  - 异常映射    │                │  - 报告生成      │
-│    渲染       │                  │               │                │  - 笔记管理      │
-└──────────────┘                  └──────┬────────┘                └────────┬────────┘
-                                         │                                  │
-                                         │ HarnessRunner                    │
-                                         │ ┌──────────────┐                │
-                                         │ │ Policy       │ ◄── 权限检查    │
-                                         │ │ EventBus     │ ◄── 事件记录    │
-                                         │ │ Compressor   │ ◄── 上下文压缩   │
-                                         │ │ Evaluator    │ ◄── 质量评分    │
-                                         │ │ Recorder     │ ◄── 持久化      │
-                                         │ └──────────────┘                │
-                                         └─────────────────────────────────┘
-                                                       │
-                                                       ▼
-                                              ┌─────────────────┐
-                                              │   文件系统        │
-                                              │  - notes/*.md   │
-                                              │  - harness_runs/ │
-                                              │  - cache/search/ │
-                                              └─────────────────┘
+```powershell
+cd backend
+uv run --with pytest python -m pytest -q
+uv run ruff check src tests
+uv run mypy src
+uv run python -m compileall -q src
 ```
 
----
+real-framework contract tests会验证 distribution version 0.2.9，以及 LLM、SimpleAgent、ToolAwareSimpleAgent、SearchTool、NoteTool 的公开方法确实来自已安装 distribution。测试只在对应 import 触发 `ModuleNotFoundError` 时安装最小 fallback，不会因模块尚未导入就覆盖 `sys.modules`。
 
-## 附录 A: 关键文件索引
+### 17.4 前端验证
 
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| [agent.py](backend/src/agent.py) | 460 | 核心编排器 |
-| [main.py](backend/src/main.py) | 286 | FastAPI 入口 + 路由 |
-| [config.py](backend/src/config.py) | 122 | 配置模型 |
-| [models.py](backend/src/models.py) | 59 | 领域数据模型 |
-| [prompts.py](backend/src/prompts.py) | 94 | LLM Prompt 模板 |
-| [utils.py](backend/src/utils.py) | 85 | 工具函数 |
-| [services/search.py](backend/src/services/search.py) | 152 | 搜索调度 + 缓存 |
-| [services/summarizer.py](backend/src/services/summarizer.py) | 149 | 摘要生成 (同步+流式) |
-| [services/planner.py](backend/src/services/planner.py) | 123 | 任务规划 |
-| [services/reporter.py](backend/src/services/reporter.py) | 78 | 报告生成 |
-| [services/note_agent.py](backend/src/services/note_agent.py) | 156 | 笔记子代理 |
-| [harness/runner.py](backend/src/harness/runner.py) | 267 | Harness 编排器 |
-| [harness/policy.py](backend/src/harness/policy.py) | 112 | 权限策略 |
-| [harness/evaluator.py](backend/src/harness/evaluator.py) | 150 | 质量评估 |
-| [harness/compressor.py](backend/src/harness/compressor.py) | 68 | 上下文压缩 |
-| [harness/recorder.py](backend/src/harness/recorder.py) | 74 | 持久化记录 |
-| [harness/event_bus.py](backend/src/harness/event_bus.py) | 32 | 事件总线 |
-| [harness/models.py](backend/src/harness/models.py) | 179 | Harness 数据模型 |
-| [frontend/src/App.vue](frontend/src/App.vue) | 2416 | 前端单文件组件 |
-| [frontend/src/services/api.ts](frontend/src/services/api.ts) | 97 | SSE 客户端 |
+```powershell
+cd frontend
+npm run test:api-contract
+npm run build
+```
 
-## 附录 B: 关键设计决策速览
+contract test验证 SSE reader 接受 schema/run/sequence，且必须看到 `done` 或 `error` terminal。production build 同时运行 `vue-tsc --noEmit`。
 
-| 决策 | 理由 |
-|------|------|
-| 为什么 Agent 不启用 tool calling？ | 职责分离——笔记 CRUD 由 NoteSubAgent 离线处理 |
-| 为什么 Summarizer 使用工厂模式？ | 多线程并行时每个线程需要独立的 Agent 实例 |
-| 为什么 Harness 不侵入 Agent？ | 保持研究逻辑独立可测试，Harness 是装饰层 |
-| 为什么用文件系统而非数据库？ | 零依赖、可调试性、单用户场景足够 |
-| 为什么前端是单文件组件？ | MVP 阶段快速迭代 |
-| 为什么缓存键不包含 max_results？ | 当前 max_results 硬编码，未来需补全 |
+## 18. Migration compatibility
+
+| 保留项 | 保留原因 | 权威替代 |
+|---|---|---|
+| `HarnessRunner` | 旧同步/流式调用方 | `ResearchApplicationService.execute()` |
+| `HarnessRunRequest` | import compatibility | `ResearchCommand` |
+| `RunContext` | import compatibility | `RunSession` |
+| `HarnessEvent` | import compatibility | `ResearchEvent` |
+| `HarnessRunResult` | `/harness/run` response adapter | `ResearchRunResult` |
+| `RuleBasedEvaluator` / `EvaluationResult` | offline caller compatibility | `OfflineEvaluationService` / `ResearchAssessment` |
+| `ContextCompressor` | old compressed envelope | `FollowupContextProjector` |
+| `JsonlRunRecorder` | old recorder API | `FileRunRepository` |
+| `NoteSubAgent` | old import | `NoteToolAdapter` |
+| `/harness/runs/{run_id}` | old URL | `/runs/{run_id}` |
+
+兼容名称不能反向引入第二份 state、第二次 coordinator 调用、在线评分或额外持久化格式。
+
+## 19. Remaining limitations
+
+1. in-flight hello-agents 0.2.9 LLM 调用无法硬取消。
+2. 默认 facade 同时只执行一个顶层运行；这是对共享 role-agent history 的保守保护。
+3. `FileRunRepository` 的锁只覆盖单进程；多 Uvicorn worker 需要数据库或跨进程锁方案。
+4. Application 当前只保存成功完成的 snapshot，非完成终态没有 canonical GET 记录。
+5. offline assessment 只有纯 service 与兼容 adapter，尚无自动调度、独立 repository 或 API。
+6. `ask` 没有人工审批界面，因此等同阻断。
+7. `/research` 同步 response 不包含 `run_id`。
+8. 传输层的 `HOST`、`PORT`、`CORS_ORIGINS` 由 composition root 单独读取，尚未形成独立的强类型 transport config model；`LOG_LEVEL` 仍固定在入口中。
+9. direct Agent `run()` / `run_stream()` 仍可绕过 Application；它们仅供迁移兼容，不提供 canonical persistence guarantee。
+10. 不从事件恢复运行状态，也不提供完整 Event Sourcing。

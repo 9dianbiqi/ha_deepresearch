@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Any, Tuple
 
-from hello_agents import ToolAwareSimpleAgent
+from hello_agents import SimpleAgent
 
-from models import SummaryState, TodoItem
 from config import Configuration
+from models import SummaryState, TodoItem
+from research.operations import OperationScope
 from utils import strip_thinking_tokens
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskSummaryInput:
+    """Detached read-only input consumed by one summarizer worker."""
+
+    topic: str
+    title: str
+    intent: str
+    query: str
+    context: str
+    note_id: str | None = None
+    note_content: str = ""
 
 
 class SummarizationService:
@@ -17,9 +32,10 @@ class SummarizationService:
 
     def __init__(
         self,
-        summarizer_factory: Callable[[], ToolAwareSimpleAgent],
+        summarizer_factory: Callable[[], SimpleAgent],
         config: Configuration,
     ) -> None:
+        """Store the per-task agent factory and research configuration."""
         self._agent_factory = summarizer_factory
         self._config = config
 
@@ -29,14 +45,33 @@ class SummarizationService:
         task: TodoItem,
         context: str,
         notes_context: dict[str, Any] | None = None,
+        *,
+        operation_scope: OperationScope | None = None,
     ) -> str:
-        """Generate a task-specific summary using the summarizer agent."""
+        """Generate a summary through the historical state adapter."""
+        return self.summarize(
+            self._legacy_input(state, task, context, notes_context or {}),
+            operation_scope=operation_scope,
+        )
 
-        prompt = self._build_prompt(state, task, context, notes_context or {})
+    def summarize(
+        self,
+        request: TaskSummaryInput,
+        *,
+        operation_scope: OperationScope | None = None,
+    ) -> str:
+        """Generate a task-specific summary from detached read-only input."""
+        prompt = self._build_prompt(request)
 
         agent = self._agent_factory()
         try:
-            response = agent.run(prompt)
+            if operation_scope is None:
+                response = agent.run(prompt)
+            else:
+                response = agent.run(
+                    prompt,
+                    _research_operation_scope=operation_scope,
+                )
         finally:
             agent.clear_history()
 
@@ -52,10 +87,23 @@ class SummarizationService:
         task: TodoItem,
         context: str,
         notes_context: dict[str, Any] | None = None,
+        *,
+        operation_scope: OperationScope | None = None,
     ) -> Tuple[Iterator[str], Callable[[], str]]:
-        """Stream the summary text for a task while collecting full output."""
+        """Stream through the historical state adapter."""
+        return self.stream_summary(
+            self._legacy_input(state, task, context, notes_context or {}),
+            operation_scope=operation_scope,
+        )
 
-        prompt = self._build_prompt(state, task, context, notes_context or {})
+    def stream_summary(
+        self,
+        request: TaskSummaryInput,
+        *,
+        operation_scope: OperationScope | None = None,
+    ) -> Tuple[Iterator[str], Callable[[], str]]:
+        """Stream summary text from detached read-only input."""
+        prompt = self._build_prompt(request)
         remove_thinking = self._config.strip_thinking_tokens
         raw_buffer = ""
         visible_output = ""
@@ -87,8 +135,15 @@ class SummarizationService:
 
         def generator() -> Iterator[str]:
             nonlocal raw_buffer, visible_output, emit_index
+            agent_stream: Iterator[str] | None = None
             try:
-                for chunk in agent.stream_run(prompt):
+                agent_kwargs = (
+                    {"_research_operation_scope": operation_scope}
+                    if operation_scope is not None
+                    else {}
+                )
+                agent_stream = iter(agent.stream_run(prompt, **agent_kwargs))
+                for chunk in agent_stream:
                     raw_buffer += chunk
                     if remove_thinking:
                         for segment in flush_visible():
@@ -99,12 +154,18 @@ class SummarizationService:
                         visible_output += chunk
                         if chunk:
                             yield chunk
-            finally:
                 if remove_thinking:
                     for segment in flush_visible():
                         visible_output += segment
                         if segment:
                             yield segment
+            finally:
+                close = getattr(agent_stream, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
                 agent.clear_history()
 
         def get_summary() -> str:
@@ -117,32 +178,48 @@ class SummarizationService:
 
         return generator(), get_summary
 
-    def _build_prompt(
-        self,
+    @staticmethod
+    def _legacy_input(
         state: SummaryState,
         task: TodoItem,
         context: str,
         notes_context: dict[str, Any],
-    ) -> str:
-        """Construct the summarization prompt with pre-loaded note content."""
-
-        note_section = ""
+    ) -> TaskSummaryInput:
+        """Project historical mutable arguments into a detached request."""
+        note_content = ""
         if notes_context and task.note_id and task.note_id in notes_context:
             note_data = notes_context[task.note_id]
-            note_content = note_data.get("content", "")
-            if note_content:
-                note_section = (
-                    f"\n任务笔记（ID: {task.note_id}，已由系统自动同步）：\n"
-                    f"{note_content}\n"
-                    "请参考以上笔记内容，避免重复已有信息。\n"
-                )
+            if isinstance(note_data, dict):
+                candidate = note_data.get("content", "")
+                if isinstance(candidate, str):
+                    note_content = candidate
+        return TaskSummaryInput(
+            topic=state.research_topic or "",
+            title=task.title,
+            intent=task.intent,
+            query=task.query,
+            context=context,
+            note_id=task.note_id,
+            note_content=note_content,
+        )
+
+    @staticmethod
+    def _build_prompt(request: TaskSummaryInput) -> str:
+        """Construct the prompt from one immutable worker request."""
+        note_section = ""
+        if request.note_id and request.note_content:
+            note_section = (
+                f"\n任务笔记（ID: {request.note_id}，已由系统自动同步）：\n"
+                f"{request.note_content}\n"
+                "请参考以上笔记内容，避免重复已有信息。\n"
+            )
 
         return (
-            f"任务主题：{state.research_topic}\n"
-            f"任务名称：{task.title}\n"
-            f"任务目标：{task.intent}\n"
-            f"检索查询：{task.query}\n"
-            f"任务上下文：\n{context}\n"
+            f"任务主题：{request.topic}\n"
+            f"任务名称：{request.title}\n"
+            f"任务目标：{request.intent}\n"
+            f"检索查询：{request.query}\n"
+            f"任务上下文：\n{request.context}\n"
             f"{note_section}"
             "请返回一份面向用户的 Markdown 总结（遵循任务总结模板）。"
         )

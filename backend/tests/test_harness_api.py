@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import sys
+import traceback
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any, Iterator
-from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -21,72 +24,145 @@ for path in (BACKEND_DIR, SRC_DIR):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
-if "loguru" not in sys.modules:
-    fake_loguru = ModuleType("loguru")
+main_module = importlib.import_module("main")
+create_app = main_module.create_app
+_models = importlib.import_module("models")
+SummaryStateOutput = _models.SummaryStateOutput
+TodoItem = _models.TodoItem
+_repository = importlib.import_module("research.repository")
+CorruptRunRecordError = _repository.CorruptRunRecordError
+InvalidRunIdError = _repository.InvalidRunIdError
 
-    class _FakeLogger:
-        def add(self, *args: Any, **kwargs: Any) -> None:
-            return None
 
-        def info(self, *args: Any, **kwargs: Any) -> None:
-            return None
+def test_configuration_log_presence_never_returns_secret_material() -> None:
+    """Keep startup diagnostics informational without revealing credentials."""
+    secret = "user:password@private.example/v1?token=raw-secret"
+    rendered = main_module._configuration_presence(secret)
+    assert rendered == "configured"
+    assert not any(part in rendered for part in ("user", "password", "token"))
 
-        def exception(self, *args: Any, **kwargs: Any) -> None:
-            return None
 
-    fake_loguru.logger = _FakeLogger()
-    sys.modules["loguru"] = fake_loguru
+def test_default_app_sweeps_once_at_startup_but_never_during_creation(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Module-style app construction must not touch cache before ASGI startup."""
+    assert hasattr(main_module, "sweep_search_cache"), (
+        "default app startup cache sweep has not been composed"
+    )
+    runner = FakeRunner(base_path=tmp_path / "runs")
+    config = main_module.Configuration(
+        notes_workspace=str(tmp_path / "notes"),
+        enable_notes=False,
+    )
+    swept: list[object] = []
+    monkeypatch.setattr(
+        main_module.HarnessRunner,
+        "build_default",
+        staticmethod(lambda *, base_path: runner),
+    )
+    monkeypatch.setattr(
+        main_module.Configuration,
+        "from_env",
+        classmethod(lambda cls: config),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "sweep_search_cache",
+        lambda received: swept.append(received),
+    )
 
-if "harness" not in sys.modules:
-    fake_harness = ModuleType("harness")
+    app = create_app()
+    assert swept == []
 
-    @dataclass(kw_only=True)
-    class _HarnessRunRequest:
-        topic: str
-        config: Any
-        metadata: dict[str, Any] = field(default_factory=dict)
-        permission_mode: str = "default"
-        caller_mode: str = "public"
-        run_id: str = "test-run"
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
 
-    class _HarnessRunner:
-        @classmethod
-        def build_default(cls, *, base_path: str = "./runs") -> "_HarnessRunner":
-            return cls()
+    assert swept == [config]
 
-        def run(self, request: Any) -> Any:
-            raise RuntimeError("Tests should inject a harness runner explicitly.")
 
-        def stream(self, request: Any) -> Iterator[dict[str, Any]]:
-            raise RuntimeError("Tests should inject a harness runner explicitly.")
+def test_custom_runner_startup_never_sweeps_search_cache(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Tests and embedded callers own cleanup when supplying a custom runner."""
+    assert hasattr(main_module, "sweep_search_cache"), (
+        "default app startup cache sweep has not been composed"
+    )
+    runner = FakeRunner(base_path=tmp_path / "runs")
+    config = main_module.Configuration(
+        notes_workspace=str(tmp_path / "notes"),
+        enable_notes=False,
+    )
+    swept: list[object] = []
+    monkeypatch.setattr(
+        main_module.Configuration,
+        "from_env",
+        classmethod(lambda cls: config),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "sweep_search_cache",
+        lambda received: swept.append(received),
+    )
 
-        def load_record(self, run_id: str) -> dict[str, Any]:
-            raise FileNotFoundError(run_id)
+    with TestClient(create_app(harness_runner=runner)) as client:
+        assert client.get("/healthz").status_code == 200
 
-    @dataclass
-    class _Scenario:
-        name: str
-        topic: str
-        description: str
-        search_api: Any = None
-        metadata: dict[str, Any] = field(default_factory=dict)
+    assert swept == []
 
-    def _build_default_scenarios() -> list[_Scenario]:
-        return [
-            _Scenario(
-                name="smoke_single_topic",
-                topic="local llm deep research workflow design",
-                description="Basic smoke test covering the happy path.",
-            )
-        ]
 
-    fake_harness.HarnessRunRequest = _HarnessRunRequest
-    fake_harness.HarnessRunner = _HarnessRunner
-    fake_harness.build_default_scenarios = _build_default_scenarios
-    sys.modules["harness"] = fake_harness
+def test_default_app_cache_sweep_failure_is_safe_and_does_not_block_startup(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """Startup isolates sweep failures without logging exception or path details."""
+    assert hasattr(main_module, "sweep_search_cache"), (
+        "default app startup cache sweep has not been composed"
+    )
+    runner = FakeRunner(base_path=tmp_path / "runs")
+    config = main_module.Configuration(
+        notes_workspace=str(tmp_path / "notes-secret-sentinel"),
+        enable_notes=False,
+    )
+    monkeypatch.setattr(
+        main_module.HarnessRunner,
+        "build_default",
+        staticmethod(lambda *, base_path: runner),
+    )
+    monkeypatch.setattr(
+        main_module.Configuration,
+        "from_env",
+        classmethod(lambda cls: config),
+    )
 
-from main import create_app
-from models import SummaryStateOutput, TodoItem
+    def fail_sweep(_config: object) -> None:
+        raise RuntimeError("SWEEP_EXCEPTION_SECRET_SENTINEL")
+
+    monkeypatch.setattr(main_module, "sweep_search_cache", fail_sweep)
+    rendered: list[str] = []
+    sink_id = main_module.logger.add(rendered.append, format="{message}")
+    try:
+        with TestClient(create_app()) as client:
+            assert client.get("/healthz").status_code == 200
+    finally:
+        main_module.logger.remove(sink_id)
+
+    log_text = "".join(rendered)
+    assert "Search cache startup sweep failed." in log_text
+    assert "SWEEP_EXCEPTION_SECRET_SENTINEL" not in log_text
+    assert "notes-secret-sentinel" not in log_text
+
+
+def test_direct_server_defaults_to_loopback_and_validates_port() -> None:
+    """Keep the unauthenticated development server local unless explicitly exposed."""
+    with patch.dict("os.environ", {}, clear=True):
+        assert main_module._server_bind_config() == ("127.0.0.1", 8000)
+    with patch.dict("os.environ", {"HOST": "0.0.0.0", "PORT": "9000"}, clear=True):
+        assert main_module._server_bind_config() == ("0.0.0.0", 9000)
+    with patch.dict("os.environ", {"PORT": "70000"}, clear=True):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "PORT"):
+            main_module._server_bind_config()
 
 
 @dataclass
@@ -190,6 +266,16 @@ class FakeRunner:
             "message": "starting",
             "run_id": "run-sync-001",
         }
+        if "github.com" in request.topic:
+            yield {
+                "type": "github_repository",
+                "run_id": "run-sync-001",
+                "repository": {
+                    "full_name": "bytedance/deer-flow",
+                    "url": "https://github.com/bytedance/deer-flow",
+                    "stars": 100,
+                },
+            }
         yield {
             "type": "todo_list",
             "run_id": "run-sync-001",
@@ -211,6 +297,12 @@ class FakeRunner:
         yield {"type": "done", "run_id": "run-sync-001"}
 
     def load_record(self, run_id: str) -> dict[str, Any]:
+        if run_id == "invalid-id":
+            raise InvalidRunIdError("must not leak invalid path")
+        if run_id == "corrupt-id":
+            raise CorruptRunRecordError("Authorization: Bearer record-secret")
+        if run_id == "unexpected-id":
+            raise RuntimeError("Authorization: Bearer repository-secret")
         if run_id not in self._records:
             raise FileNotFoundError(run_id)
         return self._records[run_id]
@@ -226,6 +318,45 @@ class HarnessApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
+
+    def test_cors_allows_only_configured_origins(self) -> None:
+        """Reject browser preflight from an origin outside the local allowlist."""
+        with patch.dict(
+            "os.environ",
+            {"CORS_ORIGINS": "http://localhost:5174"},
+            clear=False,
+        ):
+            client = TestClient(create_app(harness_runner=self.runner))
+
+        allowed = client.options(
+            "/research",
+            headers={
+                "Origin": "http://localhost:5174",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        rejected = client.options(
+            "/research",
+            headers={
+                "Origin": "https://attacker.example",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(
+            allowed.headers.get("access-control-allow-origin"),
+            "http://localhost:5174",
+        )
+        self.assertNotIn("access-control-allow-origin", rejected.headers)
+        self.assertGreaterEqual(rejected.status_code, 400)
+
+    def test_cors_wildcard_configuration_is_rejected(self) -> None:
+        """Never turn the unauthenticated localhost API into a wildcard endpoint."""
+        with patch.dict("os.environ", {"CORS_ORIGINS": "*"}, clear=False):
+            with self.assertRaisesRegex(ValueError, "explicit origins"):
+                create_app(harness_runner=self.runner)
 
     def test_research_endpoint_uses_harness_runner(self) -> None:
         response = self.client.post(
@@ -279,6 +410,30 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(self.runner.last_stream_request.topic, "stream topic")
         self.assertEqual(self.runner.last_stream_request.caller_mode, "public")
 
+    def test_research_stream_preserves_github_repository_events(self) -> None:
+        with self.client.stream(
+            "POST",
+            "/research/stream",
+            json={"topic": "https://github.com/bytedance/deer-flow"},
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            lines = [
+                line
+                for line in response.iter_lines()
+                if line and line.startswith("data:")
+            ]
+
+        events = [json.loads(line[5:].strip()) for line in lines]
+        github_events = [
+            item for item in events if item.get("type") == "github_repository"
+        ]
+        self.assertEqual(len(github_events), 1)
+        self.assertEqual(
+            github_events[0]["repository"]["full_name"],
+            "bytedance/deer-flow",
+        )
+        self.assertEqual(events[-1]["type"], "done")
+
     def test_run_record_lookup_returns_persisted_payload(self) -> None:
         self.client.post("/harness/run", json={"topic": "record topic"})
 
@@ -287,6 +442,245 @@ class HarnessApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["run_id"], "run-sync-001")
         self.assertEqual(payload["evaluation"]["score"], 1.0)
+
+    def test_canonical_run_lookup_and_deprecated_alias_share_implementation(self) -> None:
+        self.client.post("/harness/run", json={"topic": "record topic"})
+
+        canonical = self.client.get("/runs/run-sync-001")
+        legacy = self.client.get("/harness/runs/run-sync-001")
+
+        self.assertEqual(canonical.status_code, 200)
+        self.assertEqual(canonical.json(), legacy.json())
+        schema = self.client.get("/openapi.json").json()
+        self.assertTrue(
+            schema["paths"]["/harness/runs/{run_id}"]["get"]["deprecated"]
+        )
+
+    def test_run_lookup_maps_missing_invalid_and_corrupt_records_safely(self) -> None:
+        cases = [
+            ("missing-id", 404, "run_not_found"),
+            ("invalid-id", 400, "invalid_run_id"),
+            ("corrupt-id", 500, "corrupt_run_record"),
+            ("unexpected-id", 500, "repository_error"),
+        ]
+
+        for run_id, status_code, code in cases:
+            with self.subTest(run_id=run_id):
+                response = self.client.get(f"/runs/{run_id}")
+                self.assertEqual(response.status_code, status_code)
+                self.assertEqual(response.json()["detail"]["code"], code)
+                self.assertNotIn("record-secret", response.text)
+
+    def test_sync_routes_map_typed_result_errors_without_raw_detail(self) -> None:
+        cases = [
+            ("invalid_command", "failed", 400),
+            ("policy_rejected", "rejected", 403),
+            ("operation_rejected", "rejected", 403),
+            ("parent_not_found", "failed", 404),
+            ("parent_pending", "failed", 409),
+            ("deadline_exceeded", "cancelled", 408),
+            ("persistence_failed", "failed", 500),
+        ]
+
+        for error_code, status, expected_status in cases:
+            with self.subTest(error_code=error_code):
+                self.runner.run = lambda request, code=error_code, state=status: SimpleNamespace(
+                    run_id=request.run_id,
+                    status=state,
+                    output=None,
+                    error="Authorization: Bearer result-secret",
+                    error_code=code,
+                    metrics={},
+                    findings=[],
+                    compressed_context={},
+                    policy_decisions=[],
+                )
+                public = self.client.post("/research", json={"topic": "topic"})
+                internal = self.client.post("/harness/run", json={"topic": "topic"})
+                self.assertEqual(public.status_code, expected_status)
+                self.assertEqual(internal.status_code, expected_status)
+                self.assertNotIn("result-secret", public.text)
+                self.assertNotIn("result-secret", internal.text)
+
+    def test_stream_routes_share_one_safe_error_boundary_and_close_iterator(self) -> None:
+        sentinel = "Authorization: Bearer stream-secret RAW_BODY"
+        created: list[Any] = []
+        logged: list[str] = []
+
+        class RecordingLogger:
+            def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+                logged.append(f"{message}\n{traceback.format_exc()}")
+
+            def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+                logged.append(message)
+
+        class ExplodingIterator:
+            def __init__(self, run_id: str) -> None:
+                self.run_id = run_id
+                self.index = 0
+                self.closed = False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self) -> dict[str, Any]:
+                if self.index == 0:
+                    self.index += 1
+                    return {
+                        "type": "status",
+                        "run_id": self.run_id,
+                        "schema_version": 1,
+                        "sequence": 1,
+                    }
+                raise RuntimeError(sentinel)
+
+            def close(self) -> None:
+                self.closed = True
+
+        def stream(request: Any) -> Any:
+            self.runner.last_stream_request = request
+            iterator = ExplodingIterator(request.run_id)
+            created.append(iterator)
+            return iterator
+
+        self.runner.stream = stream
+        observed: list[dict[str, Any]] = []
+        with patch.object(main_module, "logger", RecordingLogger()):
+            for endpoint, payload in [
+                ("/research/stream", {"topic": "topic"}),
+                (
+                    "/research/continue/stream",
+                    {"topic": "topic", "parent_run_id": "0" * 32},
+                ),
+            ]:
+                with self.client.stream("POST", endpoint, json=payload) as response:
+                    events = [
+                        json.loads(line[5:].strip())
+                        for line in response.iter_lines()
+                        if line and line.startswith("data:")
+                    ]
+                observed.append(events[-1])
+                self.assertEqual(events[-1]["type"], "error")
+                self.assertEqual(events[-1]["code"], "stream_failed")
+                self.assertEqual(events[-1]["schema_version"], 1)
+                self.assertIn("run_id", events[-1])
+                self.assertFalse(any(item["type"] == "done" for item in events))
+                self.assertNotIn("stream-secret", json.dumps(events))
+
+        self.assertTrue(all(iterator.closed for iterator in created))
+        self.assertEqual(observed[0]["detail"], observed[1]["detail"])
+        self.assertNotIn("stream-secret", "\n".join(logged))
+
+    def test_stream_stops_at_runner_terminal_without_appending_fallback_done(self) -> None:
+        sentinel = "must not iterate after terminal"
+
+        class DoneThenExplode:
+            def __init__(self, run_id: str) -> None:
+                self.run_id = run_id
+                self.index = 0
+                self.closed = False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self) -> dict[str, Any]:
+                if self.index == 0:
+                    self.index += 1
+                    return {
+                        "type": "done",
+                        "run_id": self.run_id,
+                        "schema_version": 1,
+                        "sequence": 1,
+                    }
+                raise RuntimeError(sentinel)
+
+            def close(self) -> None:
+                self.closed = True
+
+        created: list[DoneThenExplode] = []
+
+        def stream(request: Any) -> DoneThenExplode:
+            iterator = DoneThenExplode(request.run_id)
+            created.append(iterator)
+            return iterator
+
+        self.runner.stream = stream
+        with self.client.stream(
+            "POST",
+            "/research/stream",
+            json={"topic": "topic"},
+        ) as response:
+            events = [
+                json.loads(line[5:].strip())
+                for line in response.iter_lines()
+                if line and line.startswith("data:")
+            ]
+
+        self.assertEqual([item["type"] for item in events], ["done"])
+        self.assertTrue(created[0].closed)
+
+    def test_stream_close_failure_does_not_replace_terminal_event(self) -> None:
+        sentinel = "Authorization: Bearer close-secret"
+        logged: list[str] = []
+
+        class RecordingLogger:
+            def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+                logged.append(f"{message}\n{traceback.format_exc()}")
+
+            def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+                logged.append(message)
+
+        class TerminalThenCloseFailure:
+            def __init__(self, run_id: str, terminal_type: str) -> None:
+                self.run_id = run_id
+                self.terminal_type = terminal_type
+                self.emitted = False
+                self.closed = False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self) -> dict[str, Any]:
+                if not self.emitted:
+                    self.emitted = True
+                    return {
+                        "type": self.terminal_type,
+                        "run_id": self.run_id,
+                        "schema_version": 1,
+                        "sequence": 1,
+                    }
+                raise StopIteration
+
+            def close(self) -> None:
+                self.closed = True
+                raise RuntimeError(sentinel)
+
+        for terminal_type in ("done", "error"):
+            with self.subTest(terminal_type=terminal_type):
+                created: list[TerminalThenCloseFailure] = []
+
+                def stream(request: Any) -> TerminalThenCloseFailure:
+                    iterator = TerminalThenCloseFailure(request.run_id, terminal_type)
+                    created.append(iterator)
+                    return iterator
+
+                self.runner.stream = stream
+                with patch.object(main_module, "logger", RecordingLogger()):
+                    with self.client.stream(
+                        "POST",
+                        "/research/stream",
+                        json={"topic": "topic"},
+                    ) as response:
+                        events = [
+                            json.loads(line[5:].strip())
+                            for line in response.iter_lines()
+                            if line and line.startswith("data:")
+                        ]
+
+                self.assertEqual([item["type"] for item in events], [terminal_type])
+                self.assertTrue(created[0].closed)
+
+        self.assertNotIn("close-secret", "\n".join(logged))
 
     def test_scenarios_endpoint_returns_seed_scenarios(self) -> None:
         response = self.client.get("/harness/scenarios")

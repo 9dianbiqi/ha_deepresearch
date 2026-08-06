@@ -1,11 +1,32 @@
+"""Environment-backed configuration for the research application."""
+
 import os
 from enum import Enum
-from typing import Any, Optional
+from math import isfinite
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+SAFE_CONFIGURATION_FIELDS = (
+    "llm_provider",
+    "llm_model_id",
+    "llm_reporter_model_id",
+    "search_api",
+    "max_web_research_loops",
+    "max_concurrent_tasks",
+    "fetch_full_page",
+    "strip_thinking_tokens",
+    "use_tool_calling",
+    "enable_notes",
+    "enable_quality_gate",
+    "enable_github_research",
+    "run_timeout_seconds",
+)
 
 
 class SearchAPI(Enum):
+    """Supported research search backends."""
+
     PERPLEXITY = "perplexity"
     TAVILY = "tavily"
     DUCKDUCKGO = "duckduckgo"
@@ -16,10 +37,19 @@ class SearchAPI(Enum):
 class Configuration(BaseModel):
     """Configuration options for the deep research assistant."""
 
+    model_config = ConfigDict(frozen=True)
+
     max_web_research_loops: int = Field(
         default=3,
         title="Research Depth",
         description="Number of research iterations to perform",
+    )
+    max_concurrent_tasks: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        title="Maximum Concurrent Tasks",
+        description="Maximum number of research tasks running concurrently",
     )
     local_llm: str = Field(
         default="llama3.2",
@@ -71,17 +101,17 @@ class Configuration(BaseModel):
         title="Use Tool Calling",
         description="Use tool calling instead of JSON mode for structured output",
     )
-    llm_api_key: Optional[str] = Field(
+    llm_api_key: str | None = Field(
         default=None,
         title="LLM API Key",
         description="Optional API key when using custom OpenAI-compatible services",
     )
-    llm_base_url: Optional[str] = Field(
+    llm_base_url: str | None = Field(
         default=None,
         title="LLM Base URL",
         description="Optional base URL when using custom OpenAI-compatible services",
     )
-    llm_model_id: Optional[str] = Field(
+    llm_model_id: str | None = Field(
         default=None,
         title="LLM Model ID",
         description="Optional model identifier for custom OpenAI-compatible services",
@@ -91,21 +121,65 @@ class Configuration(BaseModel):
         title="LLM Timeout",
         description="Request timeout in seconds for LLM API calls",
     )
+    run_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        le=86400,
+        title="Run Timeout",
+        description="Optional monotonic deadline for a complete research run",
+    )
     llm_max_tokens: int = Field(
         default=2000,
         title="LLM Max Tokens",
         description="Maximum output tokens per LLM call",
     )
-    llm_reporter_model_id: Optional[str] = Field(
+    llm_reporter_model_id: str | None = Field(
         default=None,
         title="LLM Reporter Model ID",
         description="Optional faster model for the Reporter agent",
     )
+    enable_quality_gate: bool = Field(
+        default=True,
+        title="Enable Quality Gate",
+        description="Whether to run summary quality checks and auto-retry on poor results",
+    )
+    enable_github_research: bool = Field(
+        default=True,
+        title="Enable GitHub Research",
+        description="Automatically use GitHub API context for repository topics",
+    )
+    github_token: str | None = Field(
+        default=None,
+        title="GitHub Token",
+        description="Optional GitHub token for higher API limits and private repo access",
+    )
+    github_api_base_url: str = Field(
+        default="https://api.github.com",
+        title="GitHub API Base URL",
+        description="Base URL for GitHub-compatible REST API",
+    )
+
+    @field_validator("run_timeout_seconds", mode="before")
+    @classmethod
+    def validate_run_timeout_seconds(cls, value: object) -> object:
+        """Accept numeric environment text while rejecting bool and non-finite data."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("Run timeout must be a finite number of seconds.")
+        try:
+            numeric = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Run timeout must be a finite number of seconds."
+            ) from exc
+        if not isfinite(numeric):
+            raise ValueError("Run timeout must be a finite number of seconds.")
+        return numeric
 
     @classmethod
-    def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
+    def from_env(cls, overrides: dict[str, Any] | None = None) -> "Configuration":
         """Create a configuration object using environment variables and overrides."""
-
         raw_values: dict[str, Any] = {}
 
         # Load values from environment variables based on field names
@@ -123,14 +197,19 @@ class Configuration(BaseModel):
 
     def sanitized_ollama_url(self) -> str:
         """Ensure Ollama base URL includes the /v1 suffix required by OpenAI clients."""
-
         base = self.ollama_base_url.rstrip("/")
         if not base.endswith("/v1"):
             base = f"{base}/v1"
         return base
 
-    def resolved_model(self) -> Optional[str]:
+    def resolved_model(self) -> str | None:
         """Best-effort resolution of the model identifier to use."""
-
         return self.llm_model_id or self.local_llm
 
+    def safe_snapshot(self) -> dict[str, Any]:
+        """Return the exact non-secret configuration persistence projection."""
+        values = self.model_dump(mode="json")
+        return {
+            field_name: values[field_name]
+            for field_name in SAFE_CONFIGURATION_FIELDS
+        }

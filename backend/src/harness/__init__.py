@@ -1,8 +1,6 @@
-"""Harness layer for orchestrating, recording, and evaluating research runs."""
+"""Deprecated compatibility facades for canonical research execution."""
 
 from .compressor import ContextCompressor
-from .context_manager import ContextManager
-from .event_bus import InMemoryEventBus
 from .evaluator import EvaluationResult, RuleBasedEvaluator
 from .models import (
     EvaluationFinding,
@@ -14,12 +12,25 @@ from .models import (
 )
 from .policy import HarnessPolicy, PolicyDecision
 from .recorder import JsonlRunRecorder
-from .runner import HarnessRunner
-from .scenarios import HarnessScenario, build_default_scenarios
+
+
+def __getattr__(name: str):
+    """Load heavyweight harness exports only when explicitly requested."""
+    if name == "HarnessRunner":
+        from .runner import HarnessRunner
+
+        return HarnessRunner
+    if name in {"HarnessScenario", "build_default_scenarios"}:
+        from .scenarios import HarnessScenario, build_default_scenarios
+
+        return {
+            "HarnessScenario": HarnessScenario,
+            "build_default_scenarios": build_default_scenarios,
+        }[name]
+    raise AttributeError(name)
 
 __all__ = [
     "ContextCompressor",
-    "ContextManager",
     "EvaluationFinding",
     "EvaluationResult",
     "HarnessEvent",
@@ -29,7 +40,6 @@ __all__ = [
     "HarnessRunResult",
     "HarnessRunner",
     "HarnessScenario",
-    "InMemoryEventBus",
     "JsonlRunRecorder",
     "PolicyDecision",
     "RuleBasedEvaluator",

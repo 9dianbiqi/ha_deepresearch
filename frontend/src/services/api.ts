@@ -15,6 +15,12 @@ export interface ContinueRequest {
 
 export interface ResearchStreamEvent {
   type: string;
+  run_id: string;
+  schema_version?: number;
+  sequence?: number;
+  status?: string;
+  detail?: string;
+  code?: string;
   [key: string]: unknown;
 }
 
@@ -26,7 +32,7 @@ export interface StreamOptions {
  * Shared SSE stream consumer — reads a fetch Response body line by line
  * parsing ``data: {json}\n\n`` frames and calling ``onEvent`` for each.
  */
-async function consumeSSE(
+export async function consumeSSE(
   response: Response,
   onEvent: (event: ResearchStreamEvent) => void,
 ): Promise<void> {
@@ -38,6 +44,36 @@ async function consumeSSE(
   const reader = body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  let terminalSeen = false;
+
+  const processFrame = (rawEvent: string): void => {
+    if (!rawEvent.startsWith("data:")) {
+      return;
+    }
+    const dataPayload = rawEvent.slice(5).trim();
+    if (!dataPayload) {
+      return;
+    }
+
+    let event: ResearchStreamEvent;
+    try {
+      event = JSON.parse(dataPayload) as ResearchStreamEvent;
+    } catch {
+      console.error("Failed to parse a research stream event.");
+      return;
+    }
+    if (
+      !event ||
+      typeof event.type !== "string" ||
+      typeof event.run_id !== "string"
+    ) {
+      console.error("Failed to parse a research stream event.");
+      return;
+    }
+
+    onEvent(event);
+    terminalSeen = event.type === "error" || event.type === "done";
+  };
 
   while (true) {
     const { value, done } = await reader.read();
@@ -48,20 +84,9 @@ async function consumeSSE(
       const rawEvent = buffer.slice(0, boundary).trim();
       buffer = buffer.slice(boundary + 2);
 
-      if (rawEvent.startsWith("data:")) {
-        const dataPayload = rawEvent.slice(5).trim();
-        if (dataPayload) {
-          try {
-            const event = JSON.parse(dataPayload) as ResearchStreamEvent;
-            onEvent(event);
-
-            if (event.type === "error" || event.type === "done") {
-              return;
-            }
-          } catch (error) {
-            console.error("解析流式事件失败：", error, dataPayload);
-          }
-        }
+      processFrame(rawEvent);
+      if (terminalSeen) {
+        return;
       }
 
       boundary = buffer.indexOf("\n\n");
@@ -70,22 +95,16 @@ async function consumeSSE(
     if (done) {
       // 处理可能的尾巴事件
       if (buffer.trim()) {
-        const rawEvent = buffer.trim();
-        if (rawEvent.startsWith("data:")) {
-          const dataPayload = rawEvent.slice(5).trim();
-          if (dataPayload) {
-            try {
-              const event = JSON.parse(dataPayload) as ResearchStreamEvent;
-              onEvent(event);
-            } catch (error) {
-              console.error("解析流式事件失败：", error, dataPayload);
-            }
-          }
-        }
+        processFrame(buffer.trim());
+      }
+      if (terminalSeen) {
+        return;
       }
       break;
     }
   }
+
+  throw new Error("Research stream ended before a terminal event.");
 }
 
 export async function runResearchStream(

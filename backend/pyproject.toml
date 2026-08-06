@@ -5,12 +5,13 @@ description = "Fully local web research and summarization assistant powered by H
 authors = [
     { name = "Lance Martin" }
 ]
-readme = "README.md"
+readme = { text = "HelloAgents deep research backend. See the repository README for setup and architecture documentation.", content-type = "text/markdown" }
 license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",
     "hello-agents==0.2.9",
+    "huggingface-hub>=0.20.0,<1.0.0",
     "tavily-python>=0.5.0",
     "python-dotenv==1.0.1",
     "requests>=2.31.0",
@@ -21,14 +22,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
+dev = [
+    "mypy>=1.11.1",
+    "pytest>=8.3.0",
+    "ruff>=0.6.1",
+    "tomli>=2.0.1; python_version < '3.11'",
+    "types-requests>=2.31.0",
+]
 
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["src"]
+py-modules = ["agent", "config", "main", "models", "prompts", "utils"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["research*", "harness*", "services*"]
 
 [tool.setuptools.package-dir]
 "" = "src"
@@ -60,7 +71,15 @@ lint.ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.mypy]
+mypy_path = ["src", "typings"]
+explicit_package_bases = true
+
 [dependency-groups]
 dev = [
+    "mypy>=1.11.1",
+    "pytest>=8.3.0",
     "ruff>=0.12.7",
+    "tomli>=2.0.1; python_version < '3.11'",
+    "types-requests>=2.31.0",
 ]

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+from threading import Lock
 from typing import Any
 
-from hello_agents import ToolAwareSimpleAgent
+from hello_agents import SimpleAgent
 
-from models import SummaryState
 from config import Configuration
+from models import SummaryState
+from research.operations import OperationRejectedError, OperationScope
+from research.session import CancellationRequestedError, DeadlineExceededError
 from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
@@ -17,17 +20,20 @@ logger = logging.getLogger(__name__)
 class ReportingService:
     """Generates the final structured report."""
 
-    def __init__(self, report_agent: ToolAwareSimpleAgent, config: Configuration) -> None:
+    def __init__(self, report_agent: SimpleAgent, config: Configuration) -> None:
+        """Initialize the service with its reporting agent and configuration."""
         self._agent = report_agent
         self._config = config
+        self._agent_lock = Lock()
 
     def generate_report(
         self,
         state: SummaryState,
         notes_context: dict[str, Any] | None = None,
+        *,
+        operation_scope: OperationScope | None = None,
     ) -> str:
         """Generate a structured report based on completed tasks and notes."""
-
         max_summary_chars = 800  # truncate verbose summaries for the reporter
 
         tasks_block = []
@@ -53,7 +59,12 @@ class ReportingService:
                 f"### 任务 {task.id}: {task.title}\n"
                 f"- 目标：{task.intent}\n"
                 f"- 状态：{task.status}\n"
-                f"- 总结：\n{summary}\n"
+                + (f"- 仓库：{task.repository}\n" if task.repository else "")
+                + (
+                    f"- 来源策略：{task.source_strategy}\n"
+                    if task.source_strategy else ""
+                )
+                + f"- 总结：\n{summary}\n"
                 + (f"- 来源：\n{sources_compact}\n" if sources_compact else "")
             )
 
@@ -69,23 +80,50 @@ class ReportingService:
         else:
             note_section = "- 暂无可用任务笔记"
 
+        github_section = ""
+        if state.github_context:
+            github_markdown = str(state.github_context.get("markdown") or "").strip()
+            if len(github_markdown) > 4000:
+                github_markdown = github_markdown[:4000] + "\n\n... [GitHub context truncated]"
+            github_section = (
+                "## GitHub 仓库结构化上下文\n"
+                f"{github_markdown}\n\n"
+                "请将本次报告视为 GitHub 项目专项研究，优先使用 GitHub API 数据；"
+                "最终报告需包含：仓库信息、核心洞察、时间线、架构概览、"
+                "活动指标、风险与限制、参考来源、置信度评估。\n\n"
+            )
+
         prompt = (
             f"研究主题：{state.research_topic}\n\n"
+            f"{github_section}"
             f"{''.join(tasks_block)}\n"
             f"{note_section}\n\n"
             "请基于以上所有信息撰写最终研究报告。"
         )
 
-        try:
-            response = self._agent.run(prompt)
-        except Exception as exc:
-            logger.exception("Reporter LLM call failed")
-            return (
-                f"报告生成失败: {str(exc)[:200]}\n\n"
-                f"各任务总结已保存在左侧任务清单中，可下载笔记查看。"
-            )
-        finally:
-            self._agent.clear_history()
+        with self._agent_lock:
+            try:
+                if operation_scope is None:
+                    response = self._agent.run(prompt)
+                else:
+                    response = self._agent.run(
+                        prompt,
+                        _research_operation_scope=operation_scope,
+                    )
+            except (
+                OperationRejectedError,
+                CancellationRequestedError,
+                DeadlineExceededError,
+            ):
+                raise
+            except Exception:
+                logger.error("Reporter LLM call failed")
+                return (
+                    "报告生成失败，请稍后重试。\n\n"
+                    "各任务总结已保存在左侧任务清单中，可下载笔记查看。"
+                )
+            finally:
+                self._agent.clear_history()
 
         report_text = response.strip()
         if self._config.strip_thinking_tokens:

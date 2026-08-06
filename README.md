@@ -1,281 +1,242 @@
-<div align="center">
+# HelloAgents Deep Research
 
-**🌐 Language** &nbsp;|&nbsp; [**中文**](#中文) &nbsp;|&nbsp; [**English**](#english)
+基于 `hello-agents==0.2.9`、FastAPI 与 Vue 3 的本地深度研究应用。输入一个主题后，系统会规划任务、检索 Web 或 GitHub、生成逐项摘要，并汇总为 Markdown 报告。
 
-</div>
+> English: This project uses one canonical `ResearchApplicationService` / `RunSession` lifecycle. `HarnessRunner` and SSE are compatibility adapters, not a second runtime layer. See [Architecture](docs/ARCHITECTURE_OPTIMIZED.md) and [Technical Deep Dive](docs/TECHNICAL_DEEP_DIVE.md).
 
----
+## 当前架构
 
-<a id="中文"></a>
-
-# HelloAgents 深度研究助手
-
-一个基于 [HelloAgents](https://github.com/hello-agents/hello-agents) 的深度研究应用，配备轻量级治理运行时（Harness Runtime），用于运行管控、回放、评估和压缩研究记忆。
-
-## 🎯 功能
-
-- 接受开放式研究主题
-- 将主题拆解为可执行的子任务
-- 跨多个搜索引擎并行检索
-- 为每个任务生成带来源的总结
-- 输出结构化 Markdown 研究报告
-- 记录受管控的运行：`run_id`、策略决策、事件日志、评估结果、压缩上下文，支持多轮追问
-
-## 🧱 架构
-
-后端有两个稳定层：
-
-| 层级 | 职责 | 组件 |
-|------|------|------|
-| **研究执行层** | AI 工作流 | `DeepResearchAgent → Planner / Search / Summarizer / Reporter` |
-| **治理层** | 运行管控 | `HarnessRunner → Policy → Context Compression → Evaluation → Persistence` |
-
-> 治理层不是第二个业务工作流，而是围绕研究执行层的运行时控制层。
-
-详细架构文档：[docs/ARCHITECTURE_OPTIMIZED.md](docs/ARCHITECTURE_OPTIMIZED.md)
-
-## 📡 后端 API
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/healthz` | 健康检查 |
-| `POST` | `/research` | 发起研究（同步） |
-| `POST` | `/research/stream` | 发起研究（SSE 流式） |
-| `POST` | `/research/continue/stream` | 继续之前的研究（流式） |
-| `POST` | `/harness/run` | 内部受控运行（含策略决策） |
-| `GET` | `/harness/runs/{run_id}` | 查询历史运行记录 |
-| `GET` | `/harness/scenarios` | 列出评估场景 |
-
-`/research` 是公开业务入口，`/harness/run` 是内部工程入口。
-
-## 📂 项目结构
-
-```
-helloagents-deepresearch/
-├── backend/
-│   ├── src/
-│   │   ├── main.py                 # FastAPI 入口
-│   │   ├── agent.py                # 核心研究工作流
-│   │   ├── config.py               # 配置模型
-│   │   ├── models.py               # 数据模型
-│   │   ├── prompts.py              # LLM 提示词
-│   │   ├── services/               # 业务服务
-│   │   │   ├── planner.py          # 任务规划
-│   │   │   ├── search.py           # 搜索分发（含重试+降级）
-│   │   │   ├── summarizer.py       # 任务总结
-│   │   │   ├── reporter.py         # 报告生成
-│   │   │   └── note_agent.py       # 笔记管理
-│   │   └── harness/                # 治理运行时
-│   │       ├── runner.py           # 受控运行器
-│   │       ├── policy.py           # 权限策略
-│   │       ├── evaluator.py        # 运行评分
-│   │       ├── compressor.py       # 上下文压缩
-│   │       ├── context_manager.py  # 上下文生命周期
-│   │       ├── recorder.py         # 运行持久化
-│   │       ├── replay.py           # 重放
-│   │       ├── scenarios.py        # 评估场景
-│   │       └── event_bus.py        # 事件总线
-│   └── tests/                      # 测试套件
-├── frontend/
-│   ├── src/
-│   │   ├── App.vue                 # Vue 单文件组件
-│   │   ├── main.ts                 # 应用入口
-│   │   └── services/api.ts         # SSE 流式消费
-│   └── package.json
-├── docs/
-│   ├── ARCHITECTURE_OPTIMIZED.md
-│   └── TECHNICAL_DEEP_DIVE.md
-├── CHANGELOG.md
-└── README.md
+```mermaid
+flowchart LR
+    HTTP["FastAPI routes"] --> APP["ResearchApplicationService.execute()"]
+    HARNESS["HarnessRunner\ncompatibility facade"] --> APP
+    APP --> SESSION["RunSession\n1 canonical ResearchState"]
+    APP --> COORD["DeepResearchAgent.execute()\nResearchCoordinator"]
+    COORD --> OPS["GovernedOperations\nexplicit OperationScope"]
+    OPS --> LLM["LLM"]
+    OPS --> SEARCH["Search"]
+    OPS --> GITHUB["GitHub"]
+    OPS --> NOTE["Note"]
+    APP --> REPO["FileRunRepository"]
+    SESSION --> SSE["Legacy SSE projection"]
+    REPO --> EVAL["OfflineEvaluationService\nread-only assessment"]
 ```
 
-## 🚀 本地开发
+核心约束：
+
+- 每次运行只有一个 `RunSession`，其中只有一个可变的 `ResearchState`。
+- `ResearchApplicationService.execute()` 是唯一应用级生命周期；它是同步方法。
+- LLM、Search、GitHub、Note 调用都携带显式 `OperationScope`，并在副作用发生前完成策略检查。
+- 成功运行先生成终态快照并原子持久化，再确认 `run_completed`；客户端看到 `done` 时，`GET /runs/{run_id}` 已可读取记录。
+- SSE 只是内部类型事件的兼容投影，不参与重建运行状态。
+- `HarnessRunner` 只保留旧 `run()`、`stream()`、`load_record()` 接口的兼容外观，不拥有另一套工作流。
+- follow-up 上下文从已持久化的父运行快照投影，不解析 SSE，也不复制一份在线状态。
+- 整次运行的质量 assessment 是离线、只读操作；它不能修改报告、任务、`RunSession` 或运行终态。
+
+详细设计见：
+
+- [集成架构说明](docs/ARCHITECTURE_OPTIMIZED.md)
+- [技术实现详解](docs/TECHNICAL_DEEP_DIVE.md)
+
+## 功能
+
+- 开放主题规划与并发任务执行
+- DuckDuckGo、Tavily、Perplexity、SearXNG、Advanced 搜索后端
+- 搜索重试、DuckDuckGo 降级和显式 opt-in 的安全投影缓存（默认关闭）
+- GitHub 仓库识别与仓库上下文研究
+- 逐任务流式摘要与最终 Markdown 报告
+- 可选 NoteTool 任务笔记与结论笔记
+- 类型化运行事件、operation 审计和安全元数据
+- 版本化、脱敏、原子写入的运行快照
+- 基于父快照的多轮 follow-up
+- 兼容既有 SSE 事件与 `/harness/*` 接口
+- 基于持久化 `RunSnapshot` 的离线质量 assessment
+
+## 快速开始
 
 ### 环境要求
 
-- Python ≥ 3.10
-- Node.js ≥ 18
-- [uv](https://github.com/astral-sh/uv)（推荐）或 pip
+- Python 3.10+
+- Node.js 18+
+- [uv](https://docs.astral.sh/uv/)
 
-### 配置
+### 安装后端
 
-```bash
-cp backend/.env.example backend/.env
-# 编辑 backend/.env，填入 API Key 和模型配置
-```
-
-### 启动
-
-**后端：**
-```bash
+```powershell
 cd backend
-uv run python src/main.py
-# 或：pip install -e . && python src/main.py
+uv sync --frozen --group dev
 ```
 
-**前端：**
-```bash
+依赖锁定在 `backend/uv.lock`，其中 `hello-agents` 精确固定为 `0.2.9`。
+
+### 配置后端
+
+```powershell
+Copy-Item .env.example .env
+```
+
+常用环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `LLM_PROVIDER` | `ollama` | `ollama`、`lmstudio` 或 OpenAI-compatible 自定义 provider |
+| `LOCAL_LLM` | `llama3.2` | 本地模型名 |
+| `LLM_MODEL_ID` | 空 | 自定义模型 ID；设置后优先于 `LOCAL_LLM` |
+| `LLM_REPORTER_MODEL_ID` | 空 | 可选的报告模型 ID |
+| `LLM_API_KEY` | 空 | 自定义服务 API key；不会写入运行快照 |
+| `LLM_BASE_URL` | 空 | 自定义 OpenAI-compatible 地址 |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 地址，运行时补全 `/v1` |
+| `LMSTUDIO_BASE_URL` | `http://localhost:1234/v1` | LM Studio 地址 |
+| `LLM_TIMEOUT` | `60` | 单次 LLM 请求超时秒数 |
+| `LLM_MAX_TOKENS` | `2000` | 单次 LLM 最大输出 token |
+| `SEARCH_API` | `duckduckgo` | `duckduckgo`、`tavily`、`perplexity`、`searxng` 或 `advanced` |
+| `TAVILY_API_KEY` | 空 | Tavily 凭据，由搜索工具读取 |
+| `PERPLEXITY_API_KEY` | 空 | Perplexity 凭据，由搜索工具读取 |
+| `SEARXNG_URL` | 工具默认值 | SearXNG 地址，由搜索工具读取 |
+| `MAX_WEB_RESEARCH_LOOPS` | `3` | 研究循环配置 |
+| `MAX_CONCURRENT_TASKS` | `4` | 每次运行的任务并发上限，范围 1–16 |
+| `FETCH_FULL_PAGE` | `true` | 是否获取完整页面内容 |
+| `ENABLE_NOTES` | `true` | 是否启用 NoteTool |
+| `NOTES_WORKSPACE` | `./notes` | NoteTool 工作目录 |
+| `ENABLE_QUALITY_GATE` | `true` | 在线摘要质量检查与重试；不是离线整次运行 assessment |
+| `ENABLE_GITHUB_RESEARCH` | `true` | 是否自动识别并研究 GitHub 仓库 |
+| `GITHUB_TOKEN` | 空 | GitHub token；不会写入运行快照 |
+| `GITHUB_API_BASE_URL` | `https://api.github.com` | GitHub-compatible API 地址 |
+| `RUN_TIMEOUT_SECONDS` | 空 | 可选运行总时限，必须满足 `0 < value <= 86400` |
+
+`HOST`、`PORT` 和 `CORS_ORIGINS` 是 composition root 读取的传输层环境变量，不会进入研究配置或持久化快照。直接运行 `src/main.py` 时默认只监听 `127.0.0.1:8000`；CORS 仅允许 `CORS_ORIGINS` 中显式列出的 HTTP(S) origin，默认覆盖本地前端的 5173、5174 和 3000 端口，并拒绝通配符。`LOG_LEVEL` 目前仍不是运行时配置项。
+
+### 启动后端
+
+```powershell
+cd backend
+uv run uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+也可以让入口读取 `.env` 中的 `HOST` / `PORT`；未设置时仍使用 `127.0.0.1:8000`：
+
+```powershell
+uv run python src/main.py
+```
+
+如需对外提供服务，应在带认证和 TLS 的反向代理之后显式配置监听地址，并把 `CORS_ORIGINS` 限定为实际前端 origin。
+
+### 启动前端
+
+```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-后端默认地址：`http://localhost:8000`
+Vite 开发服务器使用 `http://localhost:5174`。前端默认访问 `http://localhost:8000`，可通过 `VITE_API_BASE_URL` 覆盖。
 
-## 📦 治理运行时输出
+## HTTP API
 
-受管控的运行持久化在：
+| 方法 | 路径 | 当前用途 |
+|---|---|---|
+| `GET` | `/healthz` | 健康检查 |
+| `POST` | `/research` | 同步研究；返回报告和任务列表 |
+| `POST` | `/research/stream` | 新研究的 SSE 兼容流 |
+| `POST` | `/research/continue/stream` | 基于已持久化父运行的 follow-up SSE 流 |
+| `POST` | `/harness/run` | 兼容的内部同步入口；仍委托同一 Application 生命周期 |
+| `GET` | `/runs/{run_id}` | 读取 canonical schema-v1 运行快照 |
+| `GET` | `/harness/runs/{run_id}` | 已弃用的查询别名 |
+| `GET` | `/harness/scenarios` | 兼容的离线 benchmark fixture 列表 |
 
-```
-./output/harness_runs/
-```
+基础请求：
 
-每次运行产生：
-- 一个最终 JSON 记录
-- 一条 JSONL 索引条目
-- 一个事件日志
-
-## 🎯 当前阶段
-
-- 保持研究 Agent 简单
-- 将运行管控集中到治理层
-- 复用压缩上下文支持多轮追问
-- 持续扩展评估和回放能力
-
----
-
-<a id="english"></a>
-
-# HelloAgents Deep Research
-
-A Deep Research application built on [HelloAgents](https://github.com/hello-agents/hello-agents) with a lightweight harness runtime for run governance, replay, evaluation, and compressed research memory.
-
-## 🎯 What It Does
-
-- Accepts an open-ended research topic
-- Plans the topic into actionable sub-tasks
-- Searches across multiple search backends with retry + fallback
-- Summarizes each task with sources
-- Produces a structured Markdown research report
-- Records managed runs with `run_id`, policy decisions, event logs, evaluation results, and compressed follow-up context
-
-## 🧱 Architecture
-
-Two stable layers in the backend:
-
-| Layer | Responsibility | Components |
-|-------|---------------|------------|
-| **Research Execution** | AI workflow | `DeepResearchAgent → Planner / Search / Summarizer / Reporter` |
-| **Governance** | Run control | `HarnessRunner → Policy → Context Compression → Evaluation → Persistence` |
-
-> The harness is not a second business workflow — it is the runtime control layer around the existing Deep Research workflow.
-
-Detailed architecture notes: [docs/ARCHITECTURE_OPTIMIZED.md](docs/ARCHITECTURE_OPTIMIZED.md)
-
-## 📡 Backend Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/healthz` | Health check |
-| `POST` | `/research` | Run research (sync) |
-| `POST` | `/research/stream` | Run research (SSE streaming) |
-| `POST` | `/research/continue/stream` | Continue previous research (streaming) |
-| `POST` | `/harness/run` | Internal controlled run (with policy metadata) |
-| `GET` | `/harness/runs/{run_id}` | Retrieve historical run record |
-| `GET` | `/harness/scenarios` | List evaluation scenarios |
-
-`/research` is the public business entrypoint. `/harness/run` is the internal engineering entrypoint.
-
-## 📂 Project Layout
-
-```
-helloagents-deepresearch/
-├── backend/
-│   ├── src/
-│   │   ├── main.py                 # FastAPI entrypoint
-│   │   ├── agent.py                # Core research workflow
-│   │   ├── config.py               # Configuration model
-│   │   ├── models.py               # Data models
-│   │   ├── prompts.py              # LLM prompts
-│   │   ├── services/               # Business services
-│   │   │   ├── planner.py          # Task planning
-│   │   │   ├── search.py           # Search dispatch (retry + fallback)
-│   │   │   ├── summarizer.py       # Task summarization
-│   │   │   ├── reporter.py         # Report generation
-│   │   │   └── note_agent.py       # Note management
-│   │   └── harness/                # Governance runtime
-│   │       ├── runner.py           # Controlled run executor
-│   │       ├── policy.py           # Permission policy
-│   │       ├── evaluator.py        # Run scoring
-│   │       ├── compressor.py       # Context compression
-│   │       ├── context_manager.py  # Context lifecycle
-│   │       ├── recorder.py         # Run persistence
-│   │       ├── replay.py           # Replay
-│   │       ├── scenarios.py        # Evaluation scenarios
-│   │       └── event_bus.py        # In-memory event bus
-│   └── tests/                      # Test suite
-├── frontend/
-│   ├── src/
-│   │   ├── App.vue                 # Vue SFC
-│   │   ├── main.ts                 # App entry
-│   │   └── services/api.ts         # SSE consumer
-│   └── package.json
-├── docs/
-│   ├── ARCHITECTURE_OPTIMIZED.md
-│   └── TECHNICAL_DEEP_DIVE.md
-├── CHANGELOG.md
-└── README.md
+```json
+{
+  "topic": "研究 Python Agent 框架的状态管理设计",
+  "search_api": "duckduckgo",
+  "parent_run_id": null
+}
 ```
 
-## 🚀 Local Development
+`/research/continue/stream` 要求非空、合法 UUID 格式的 `parent_run_id`。`/harness/run` 额外接受 `permission_mode`（`default` 或 `strict`）和 `metadata`。
 
-### Prerequisites
+SSE 是 `data: <json>\n\n` 帧。兼容事件包括 `status`、`github_repository`、`todo_list`、`task_status`、`sources`、`task_summary_chunk`、`task_retry`、`report_note`、`final_report`，最终以 `done` 或 `error` 结束。每个投影事件都携带 `run_id`、`schema_version` 和单调递增的 `sequence`。
 
-- Python ≥ 3.10
-- Node.js ≥ 18
-- [uv](https://github.com/astral-sh/uv) (recommended) or pip
+## 持久化与 follow-up
 
-### Configuration
+按上述命令从 `backend/` 启动时，默认运行仓库位于：
 
-```bash
-cp backend/.env.example backend/.env
-# Edit backend/.env with your API keys and model settings
+```text
+backend/output/harness_runs/runs/<run_id>.json
 ```
 
-### Start
+每个成功运行只写一个 schema-v1 JSON envelope，其中包含 canonical snapshot 和紧凑 follow-up context。写入使用同目录临时文件、`fsync` 和 `os.replace`；配置只保存 `Configuration.safe_snapshot()` 的非敏感字段。
 
-**Backend:**
-```bash
+成功终态顺序是：
+
+```text
+validate terminal state
+-> project follow-up context
+-> prepare completed snapshot
+-> atomically save snapshot
+-> confirm run_completed
+-> project SSE done
+```
+
+因此，`done` 不是“生成报告文本”的同义词，而是“完成快照已经可读取”的确认。父运行 follow-up 只读取该持久化快照，再构造有界的 `FollowupContext`。
+
+## 策略与 operation scope
+
+生产路径中的外部操作不会依赖全局“当前运行”变量。`OperationScope` 显式携带 run-bound `GovernedOperations` 和 task/attempt 坐标：
+
+- LLM：`llm:invoke`
+- Search：`search:web`，Perplexity 还要求 `search:premium`
+- GitHub：`github:read`
+- Note：`notes:read` / `notes:write`
+
+策略先于真实副作用执行。operation 事件只记录 allowlist 元数据，例如 prompt/query hash、backend、role、仓库标识或 note action；不会记录完整 prompt、搜索正文、工具返回值或凭据。
+
+## 取消与 deadline
+
+- 关闭 `HarnessRunner.stream()` 迭代器会请求协作式取消。
+- `RUN_TIMEOUT_SECONDS` 使用 monotonic deadline。
+- coordinator 会在调度新任务、重试等待以及 governed operation 前后检查取消/deadline。
+- 拒绝一项 operation 后，不再允许新的 operation start；此前已经开始的 operation 仍会记录 completed/failed 配对终态。
+- `hello-agents==0.2.9` 的 LLM 公共 API 不提供在途调用的硬取消。若取消发生在 `invoke()` 或一次底层流读取期间，必须等待该调用返回，随后检查点才会把运行终止为 cancelled/deadline；系统不会宣称它已被立即中断。
+
+## Windows SearchTool 控制台兼容
+
+`hello-agents==0.2.9` 的 `SearchTool` 在构造时会向 stdout 打印包含 emoji 的提示。Windows 的 CP936 等控制台编码可能无法直接编码该提示。
+
+`HelloAgentsSearchAdapter` 采用每线程懒加载，并在构造工具前检查真实 `sys.stdout`。必要时只把该流的编码错误策略调整为 `backslashreplace`；它不会临时替换、捕获或吞掉进程级 stdout，因此不会误截获并发 LLM 或日志输出。
+
+## 离线质量 assessment
+
+`research.evaluation.OfflineEvaluationService.evaluate(snapshot)` 只读取持久化 `RunSnapshot.output` 和 `RunSnapshot.followup_context`，返回冻结的 `ResearchAssessment`。assessment 包含 `run_id`、带时区的 `evaluated_at`、0–1 分数、tuple findings 和 `schema_version=1`。
+
+该服务不在 `ResearchApplicationService.execute()` 的完成关键路径中，也不能修改运行状态或报告。`ResearchRunResult.evaluation_status` 当前为 `pending`；自动调度、assessment 持久化和查询 API 尚未实现。`RuleBasedEvaluator` / `EvaluationResult` 仅作为旧调用方的兼容适配器。
+
+## 验证命令
+
+```powershell
 cd backend
-uv run python src/main.py
-# Or: pip install -e . && python src/main.py
+uv run --with pytest python -m pytest -q
+uv run ruff check src tests
+uv run mypy src
+uv run python -m compileall -q src
+
+cd ../frontend
+npm run test:api-contract
+npm run build
 ```
 
-**Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
+## 当前限制与迁移兼容
 
-Default backend address: `http://localhost:8000`
+- `HarnessRunner`、`HarnessRunRequest`、`RunContext`、`SummaryStateOutput` 和旧 Agent `run()` / `run_stream()` 仍保留一个兼容周期；新代码应使用 `ResearchCommand`、`RunSession`、`ResearchApplicationService.execute()` 和 `/runs/{run_id}`。
+- 旧 `JsonlRunRecorder` 名称仍存在，但它已经委托 `FileRunRepository`，只写 canonical schema-v1 snapshot，不创建第二套索引或日志文件。
+- 当前仅成功完成的 application run 进入 canonical repository；failed、cancelled、rejected 终态会返回/投影，但不会由 Application 自动持久化。
+- 文件仓库适合单进程本地运行；锁是进程内的，不是多进程数据库事务。
+- 默认 facade 同时只执行一个顶层运行；单次运行内的研究任务按 `MAX_CONCURRENT_TASKS` 有界并发。
+- `permission_mode="strict"` 中的 `ask` 目前直接阻断，因为尚无审批 UI。
+- `/research` 的兼容同步响应只包含报告和任务，不返回 `run_id`；流式事件和 `/harness/run` 响应会返回 `run_id`。
+- 当前事件只用于 observer、审计和兼容投影，不用于恢复在线状态；系统中不存在第二套 Harness 执行组件。
 
-## 📦 Harness Outputs
+## License
 
-Managed runs are persisted under:
-
-```
-./output/harness_runs/
-```
-
-Each run produces:
-- One final JSON record
-- One append-only JSONL index entry
-- One per-run event log
-
-## 🎯 Current Focus
-
-- Keep the research agent simple
-- Centralize run governance in the harness layer
-- Reuse compressed context for follow-up research
-- Expand evaluation and replay over time
+MIT

@@ -73,3 +73,10 @@ Docs in `docs/ARCHITECTURE_OPTIMIZED.md`.
 - **Tool calls are magic strings**: agents embed `[TOOL_CALL:note:{...}]` in LLM output, parsed via regex
 - **Prompts and UI are in Chinese (simplified)**
 - **`output/` directory** contains example resume build scripts and generated files — not part of the core app
+
+## Local user paths
+
+- **Obsidian notes vault**: `D:\obisidian\笔记库`
+- **GitHub static blog (Hexo)**: `D:\Hexo-Blog\blog-demo`
+- **Hexo post directory**: `D:\Hexo-Blog\blog-demo\source\_posts`
+- **Blog deploy target**: `git@github.com:9dianbiqi/9dianbiqi.github.io.git` branch `main`
