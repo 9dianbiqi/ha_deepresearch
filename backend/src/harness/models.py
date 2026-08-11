@@ -42,6 +42,9 @@ class HarnessRunResult:
     findings: list[EvaluationFinding] = field(default_factory=list)
     compressed_context: dict[str, Any] = field(default_factory=dict)
     policy_decisions: list[dict[str, Any]] = field(default_factory=list)
+    resumable: bool = False
+    recovery_resumable: bool = False
+    last_resumable_parent: str | None = None
 
 
 @dataclass(kw_only=True)

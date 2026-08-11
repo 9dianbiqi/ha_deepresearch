@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import tempfile
@@ -22,6 +23,7 @@ from .contracts import (
     RunStatus,
     normalize_run_id,
 )
+from .validation import CheckpointValidationError, validate_checkpoint_snapshot
 
 SCHEMA_VERSION = 1
 SAFE_CONFIG_FIELDS = SAFE_CONFIGURATION_FIELDS
@@ -296,6 +298,10 @@ class FileRunRepository:
                     f"Could not save run {normalized_run_id}: {exc}"
                 ) from exc
 
+    def save_checkpoint(self, snapshot: RunSnapshot) -> None:
+        """Persist one validated checkpoint through the same atomic writer."""
+        self.save(snapshot)
+
     def load(self, run_id: str) -> RunSnapshot:
         """Load and reconstruct one typed schema-v1 snapshot."""
         normalized_run_id = _normalized_id(run_id, caller_supplied=True)
@@ -323,6 +329,119 @@ class FileRunRepository:
                     f"Run {normalized_run_id} is not valid UTF-8 JSON."
                 ) from exc
             return self._deserialize_envelope(envelope, normalized_run_id)
+
+    def iter_snapshots(
+        self,
+        *,
+        status: RunStatus | None = None,
+    ) -> tuple[RunSnapshot, ...]:
+        """Return validated snapshots, skipping missing or corrupt files."""
+        with self._lock:
+            if not self._runs_dir.is_dir():
+                return ()
+            paths = tuple(self._runs_dir.glob("*.json"))
+        snapshots: list[RunSnapshot] = []
+        for path in paths:
+            try:
+                snapshot = self.load(path.stem)
+            except (RunRepositoryError, OSError, ValueError):
+                continue
+            if status is not None and snapshot.status is not status:
+                continue
+            snapshots.append(snapshot)
+        snapshots.sort(
+            key=lambda item: (
+                item.completed_at or item.started_at,
+                item.run_id,
+            ),
+            reverse=True,
+        )
+        return tuple(snapshots)
+
+    def list_summaries(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> Any:
+        """Return bounded completed-run summaries for history browsing."""
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("History limit must be between 1 and 100.")
+        decoded = self._decode_history_cursor(cursor)
+        snapshots = list(self.iter_snapshots(status=RunStatus.COMPLETED))
+        if decoded is not None:
+            cursor_completed_at, cursor_run_id = decoded
+            snapshots = [
+                item
+                for item in snapshots
+                if (item.completed_at or item.started_at).isoformat() < cursor_completed_at
+                or (
+                    (item.completed_at or item.started_at).isoformat() == cursor_completed_at
+                    and item.run_id < cursor_run_id
+                )
+            ]
+        visible = snapshots[:limit]
+        items: list[dict[str, Any]] = []
+        for snapshot in visible:
+            output = snapshot.output
+            raw_tasks = output.get("todo_items")
+            task_count = len(raw_tasks) if isinstance(raw_tasks, (list, tuple)) else 0
+            report = output.get("report_markdown") or output.get("running_summary") or ""
+            report_excerpt = report.strip()[:280] if isinstance(report, str) else ""
+            items.append(
+                {
+                    "run_id": snapshot.run_id,
+                    "topic": snapshot.topic[:240],
+                    "status": snapshot.status.value,
+                    "started_at": snapshot.started_at.isoformat(),
+                    "completed_at": snapshot.completed_at.isoformat() if snapshot.completed_at else None,
+                    "parent_run_id": snapshot.parent_run_id,
+                    "task_count": task_count,
+                    "report_excerpt": report_excerpt,
+                    "resumable": snapshot.resumable,
+                    "recovery_resumable": snapshot.recovery_resumable,
+                    "last_resumable_parent": snapshot.last_resumable_parent,
+                }
+            )
+        next_cursor = None
+        if len(snapshots) > limit and visible:
+            last = visible[-1]
+            timestamp = (last.completed_at or last.started_at).isoformat()
+            next_cursor = self._encode_history_cursor(timestamp, last.run_id)
+        try:
+            from .history import HistoryPage
+
+            return HistoryPage(items=tuple(items), next_cursor=next_cursor)
+        except ImportError:  # pragma: no cover - package import guard
+            return {"items": items, "next_cursor": next_cursor}
+
+    @staticmethod
+    def _encode_history_cursor(completed_at: str, run_id: str) -> str:
+        payload = json.dumps(
+            {"v": 1, "completed_at": completed_at, "run_id": run_id},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_history_cursor(value: str | None) -> tuple[str, str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("History cursor is invalid.")
+        try:
+            padded = value + "=" * (-len(value) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("History cursor is invalid.") from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("v") != 1
+            or not isinstance(payload.get("completed_at"), str)
+            or not isinstance(payload.get("run_id"), str)
+        ):
+            raise ValueError("History cursor is invalid.")
+        return payload["completed_at"], payload["run_id"]
 
     def _serialize_envelope(
         self,
@@ -401,6 +520,16 @@ class FileRunRepository:
                 if snapshot.error is not None
                 else None
             ),
+            "failure_reason": snapshot.failure_reason,
+            "checkpoint": snapshot.checkpoint,
+            "checkpoint_state": (
+                _redact(snapshot.checkpoint_state)
+                if snapshot.checkpoint_state is not None
+                else None
+            ),
+            "resumable": snapshot.resumable,
+            "recovery_resumable": snapshot.recovery_resumable,
+            "last_resumable_parent": snapshot.last_resumable_parent,
         }
         return {
             "schema_version": SCHEMA_VERSION,
@@ -436,7 +565,17 @@ class FileRunRepository:
             "events",
             "error",
         }
-        if set(snapshot) != required_snapshot_fields:
+        optional_snapshot_fields = {
+            "failure_reason",
+            "checkpoint",
+            "checkpoint_state",
+            "resumable",
+            "recovery_resumable",
+            "last_resumable_parent",
+        }
+        if not required_snapshot_fields.issubset(snapshot) or not set(snapshot).issubset(
+            required_snapshot_fields | optional_snapshot_fields
+        ):
             raise CorruptRunRecordError("Snapshot has an invalid shape.")
 
         stored_run_id = _normalized_id(
@@ -531,7 +670,38 @@ class FileRunRepository:
                 message=error_mapping["message"],
             )
 
-        return RunSnapshot(
+        failure_reason = snapshot.get("failure_reason")
+        if failure_reason is not None and not isinstance(failure_reason, str):
+            raise CorruptRunRecordError("Failure reason must be text or null.")
+        checkpoint = snapshot.get("checkpoint")
+        if checkpoint is not None and not isinstance(checkpoint, str):
+            raise CorruptRunRecordError("Checkpoint must be text or null.")
+        checkpoint_state_raw = snapshot.get("checkpoint_state")
+        checkpoint_state = None
+        if checkpoint_state_raw is not None:
+            checkpoint_state = _mapping(
+                checkpoint_state_raw,
+                label="Checkpoint state",
+            )
+        resumable_raw = snapshot.get("resumable")
+        if resumable_raw is not None and not isinstance(resumable_raw, bool):
+            raise CorruptRunRecordError("Resumable must be boolean or null.")
+        recovery_resumable_raw = snapshot.get("recovery_resumable")
+        if recovery_resumable_raw is not None and not isinstance(
+            recovery_resumable_raw,
+            bool,
+        ):
+            raise CorruptRunRecordError(
+                "Recovery resumable must be boolean or null."
+            )
+        last_resumable_parent = snapshot.get("last_resumable_parent")
+        if last_resumable_parent is not None:
+            last_resumable_parent = _normalized_id(
+                last_resumable_parent,
+                caller_supplied=False,
+            )
+
+        loaded_snapshot = RunSnapshot(
             run_id=stored_run_id,
             topic=topic,
             status=status,
@@ -548,8 +718,27 @@ class FileRunRepository:
             config_snapshot=config_snapshot,
             events=events,
             error=error,
+            failure_reason=failure_reason or (error.code if error else None),
+            checkpoint=checkpoint,
+            checkpoint_state=checkpoint_state,
+            resumable=(
+                resumable_raw
+                if resumable_raw is not None
+                else status is RunStatus.COMPLETED
+            ),
+            recovery_resumable=(
+                recovery_resumable_raw
+                if recovery_resumable_raw is not None
+                else None
+            ),
+            last_resumable_parent=last_resumable_parent,
             schema_version=SCHEMA_VERSION,
         )
+        try:
+            validate_checkpoint_snapshot(loaded_snapshot)
+        except CheckpointValidationError as exc:
+            raise CorruptRunRecordError(str(exc)) from exc
+        return loaded_snapshot
 
     def _deserialize_event(
         self,

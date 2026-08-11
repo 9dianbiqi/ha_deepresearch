@@ -12,6 +12,7 @@ from typing import Any
 from hello_agents.tools import SearchTool
 
 from .operations import OperationScope
+from .telemetry import current_llm_telemetry_retry_count, llm_telemetry_scope
 
 OPERATION_SCOPE_KWARG = "_research_operation_scope"
 _SEARCH_TOOL_INIT_LOCK = Lock()
@@ -101,7 +102,12 @@ class GovernedHelloAgentsLLM:
             resource=self._resource(messages),
         )
         invoke = getattr(self._delegate, "invoke")
-        return scope.operations.call(spec, lambda: invoke(messages, **kwargs))
+        with llm_telemetry_scope(
+            scope.operations.session,
+            role=self.role,
+            retry_count=current_llm_telemetry_retry_count(),
+        ):
+            return scope.operations.call(spec, lambda: invoke(messages, **kwargs))
 
     def stream_invoke(
         self,
@@ -116,10 +122,18 @@ class GovernedHelloAgentsLLM:
             resource=self._resource(messages),
         )
         stream_invoke = getattr(self._delegate, "stream_invoke")
-        return scope.operations.stream(
-            spec,
-            lambda: stream_invoke(messages, **kwargs),
-        )
+        def governed_stream() -> Iterator[str]:
+            with llm_telemetry_scope(
+                scope.operations.session,
+                role=self.role,
+                retry_count=current_llm_telemetry_retry_count(),
+            ):
+                yield from scope.operations.stream(
+                    spec,
+                    lambda: stream_invoke(messages, **kwargs),
+                )
+
+        return governed_stream()
 
     def _resource(self, messages: list[dict[str, str]]) -> dict[str, object]:
         resource: dict[str, object] = {

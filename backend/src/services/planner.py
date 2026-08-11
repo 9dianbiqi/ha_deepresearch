@@ -31,6 +31,8 @@ class PlanningService:
         self,
         state: SummaryState,
         prior_context: dict[str, Any] | None = None,
+        related_history: dict[str, Any] | None = None,
+        user_memories: dict[str, Any] | None = None,
         *,
         operation_scope: OperationScope | None = None,
     ) -> List[TodoItem]:
@@ -44,6 +46,18 @@ class PlanningService:
             prior_block = self._format_prior_context(prior_context)
             prompt = prior_block + "\n\n" + prompt
             logger.info("Planner prompt augmented with prior research context")
+
+        if related_history:
+            history_block = self._format_related_history(related_history)
+            if history_block:
+                prompt = history_block + "\n\n" + prompt
+                logger.info("Planner prompt augmented with related history context")
+
+        if user_memories:
+            memory_block = self._format_user_memories(user_memories)
+            if memory_block:
+                prompt = memory_block + "\n\n" + prompt
+                logger.info("Planner prompt augmented with confirmed user memory")
 
         with self._agent_lock:
             try:
@@ -121,6 +135,74 @@ class PlanningService:
             parts.append("")
 
         parts.append("请基于以上历史上下文规划新任务，避免重复已完成的调研。")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _format_related_history(history: dict[str, Any]) -> str:
+        """Format bounded historical clues as untrusted leads for the planner."""
+        matches = history.get("matches")
+        if not isinstance(matches, (list, tuple)):
+            return ""
+        parts: list[str] = [
+            "## 相关历史研究线索（仅作线索，必须重新验证，不可直接当作事实）",
+            "",
+        ]
+        added = 0
+        for match in matches[:3]:
+            if not isinstance(match, dict):
+                continue
+            topic = match.get("topic")
+            score = match.get("score")
+            if not isinstance(topic, str) or not topic.strip():
+                continue
+            parts.append(f"### 历史主题：{topic[:180]}")
+            completed_at = match.get("completed_at")
+            if isinstance(completed_at, str) and completed_at.strip():
+                parts.append(f"完成时间：{completed_at[:32]}")
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                parts.append(f"相关度：{float(score):.2f}")
+            findings = match.get("key_findings")
+            if isinstance(findings, (list, tuple)) and findings:
+                parts.append("- 可复核结论：" + "；".join(str(item)[:180] for item in findings[:2]))
+            sources = match.get("key_sources")
+            if isinstance(sources, (list, tuple)) and sources:
+                parts.append("- 可复核来源：" + "；".join(str(item)[:180] for item in sources[:1]))
+            questions = match.get("open_questions")
+            if isinstance(questions, (list, tuple)) and questions:
+                parts.append("- 未决问题：" + "；".join(str(item)[:180] for item in questions[:2]))
+            parts.append("")
+            added += 1
+        if not added:
+            return ""
+        parts.append("请把这些历史内容当作检索提示，优先验证时间、来源和结论，不要复述未经验证的断言。")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _format_user_memories(memories: dict[str, Any]) -> str:
+        """Format confirmed preferences as constraints, never as research evidence."""
+        values = memories.get("memories")
+        if not isinstance(values, (list, tuple)):
+            return ""
+        parts: list[str] = [
+            "## Confirmed user preferences and facts (planning constraints only; not external evidence)",
+            "",
+        ]
+        added = 0
+        for item in values[:20]:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("kind")
+            text = item.get("text")
+            if not isinstance(kind, str) or not isinstance(text, str) or not text.strip():
+                continue
+            label = "preference" if kind == "preference" else "fact"
+            parts.append(f"- [{label}] {text[:220]}")
+            added += 1
+        if not added:
+            return ""
+        parts.append(
+            "Treat these as user-provided working constraints. If they conflict with current verifiable material, explain the conflict and re-validate; do not cite them as sources."
+        )
         return "\n".join(parts)
 
     # ------------------------------------------------------------------

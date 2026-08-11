@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -13,6 +14,8 @@ from uuid import UUID, uuid4
 
 from config import Configuration
 from models import SummaryStateOutput
+
+_MEMORY_SCOPE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
 
 def _thaw_json(value: Any) -> Any:
@@ -54,6 +57,7 @@ class RunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    REPORT_INCOMPLETE = "report_incomplete"
     FAILED = "failed"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
@@ -80,9 +84,11 @@ class EventKind(str, Enum):
     OPERATION_FAILED = "operation_failed"
     OPERATION_REJECTED = "operation_rejected"
     RUN_COMPLETED = "run_completed"
+    RUN_RECOVERY_STARTED = "run_recovery_started"
     RUN_FAILED = "run_failed"
     RUN_CANCELLED = "run_cancelled"
     RUN_REJECTED = "run_rejected"
+    HISTORY_RECALLED = "history_recalled"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -96,6 +102,8 @@ class ResearchCommand:
     permission_mode: str = "default"
     caller_mode: str = "public"
     parent_run_id: str | None = None
+    use_history_memory: bool = True
+    memory_scope: str = "default"
 
     def __post_init__(self) -> None:
         """Validate topic and normalize identifiers at the trust boundary."""
@@ -105,6 +113,14 @@ class ResearchCommand:
             raise ValueError("Permission mode is not supported.")
         if self.caller_mode not in {"public", "internal"}:
             raise ValueError("Caller mode is not supported.")
+        if not isinstance(self.use_history_memory, bool):
+            raise TypeError("History memory switch must be boolean.")
+        if (
+            not isinstance(self.memory_scope, str)
+            or _MEMORY_SCOPE_RE.fullmatch(self.memory_scope.strip().casefold()) is None
+        ):
+            raise ValueError("Memory scope is invalid.")
+        object.__setattr__(self, "memory_scope", self.memory_scope.strip().casefold())
         if not isinstance(self.config, Configuration):
             raise TypeError("Research command config must be Configuration.")
         object.__setattr__(self, "config", self.config.model_copy(deep=True))
@@ -191,6 +207,12 @@ class RunSnapshot:
     config_snapshot: Mapping[str, Any]
     events: tuple[ResearchEvent, ...]
     error: RunError | None = None
+    failure_reason: str | None = None
+    checkpoint: str | None = None
+    checkpoint_state: Mapping[str, Any] | None = None
+    resumable: bool | None = None
+    recovery_resumable: bool | None = None
+    last_resumable_parent: str | None = None
     schema_version: int = 1
 
     def __post_init__(self) -> None:
@@ -207,6 +229,16 @@ class RunSnapshot:
             detached = _thaw_json(value)
             json.dumps(detached)
             object.__setattr__(self, field_name, _freeze_json(detached))
+        if self.checkpoint_state is not None:
+            if not isinstance(self.checkpoint_state, Mapping):
+                raise TypeError("Snapshot checkpoint_state must be a mapping or null.")
+            detached_checkpoint = _thaw_json(self.checkpoint_state)
+            json.dumps(detached_checkpoint)
+            object.__setattr__(
+                self,
+                "checkpoint_state",
+                _freeze_json(detached_checkpoint),
+            )
 
         frozen_decisions: list[Mapping[str, Any]] = []
         for decision in self.policy_decisions:
@@ -217,6 +249,19 @@ class RunSnapshot:
             frozen_decisions.append(_freeze_json(detached_decision))
         object.__setattr__(self, "policy_decisions", tuple(frozen_decisions))
         object.__setattr__(self, "events", tuple(self.events))
+        if self.resumable is None:
+            object.__setattr__(self, "resumable", self.status is RunStatus.COMPLETED)
+        if self.recovery_resumable is None:
+            checkpoint_state = self.checkpoint_state
+            object.__setattr__(
+                self,
+                "recovery_resumable",
+                bool(
+                    isinstance(checkpoint_state, Mapping)
+                    and checkpoint_state.get("resumable") is True
+                    and checkpoint_state.get("validated") is True
+                ),
+            )
 
     def as_dict(self) -> dict[str, Any]:
         """Return a fully detached JSON-ready snapshot representation."""
@@ -237,6 +282,16 @@ class RunSnapshot:
             "config_snapshot": _thaw_json(self.config_snapshot),
             "events": [event.as_dict() for event in self.events],
             "error": asdict(self.error) if self.error else None,
+            "failure_reason": self.failure_reason,
+            "checkpoint": self.checkpoint,
+            "checkpoint_state": (
+                _thaw_json(self.checkpoint_state)
+                if self.checkpoint_state is not None
+                else None
+            ),
+            "resumable": self.resumable,
+            "recovery_resumable": self.recovery_resumable,
+            "last_resumable_parent": self.last_resumable_parent,
         }
 
 
@@ -252,3 +307,6 @@ class ResearchRunResult:
     followup_context: dict[str, Any]
     policy_decisions: tuple[dict[str, Any], ...]
     evaluation_status: str = "pending"
+    resumable: bool = False
+    recovery_resumable: bool = False
+    last_resumable_parent: str | None = None

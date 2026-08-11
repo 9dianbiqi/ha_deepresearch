@@ -12,9 +12,14 @@ from typing import Any, Iterator
 
 from agent import DeepResearchAgent
 from config import Configuration
-from research.application import ResearchApplicationService
+from research.application import RecoveryFailure, ResearchApplicationService
 from research.contracts import ResearchCommand, ResearchEvent, ResearchRunResult
+from research.history import ResearchHistoryStore
 from research.legacy_sse import LegacySseProjector
+from research.memory import (
+    UserMemory,
+    UserMemoryStore,
+)
 from research.ports import RunRepository
 from research.repository import FileRunRepository
 from research.session import CancellationToken
@@ -30,19 +35,30 @@ _SAFE_ERROR_CODES = frozenset(
         "cancelled",
         "deadline_exceeded",
         "context_projection_failed",
+        "checkpoint_corrupt",
+        "checkpoint_not_found",
+        "checkpoint_persistence_failed",
+        "checkpoint_not_resumable",
+        "checkpoint_version_unsupported",
         "coordinator_failed",
         "invalid_command",
+        "invalid_run_id",
         "missing_terminal",
         "parent_corrupt",
         "parent_not_found",
+        "parent_not_resumable",
         "parent_pending",
         "operation_rejected",
         "persistence_failed",
         "policy_error",
         "policy_rejected",
+        "report_incomplete",
+        "recovery_state_conflict",
+        "recovery_unsupported",
         "repository_error",
         "run_already_active",
         "run_failed",
+        "run_not_resumable",
         "run_rejected",
         "runner_busy",
         "terminal_validation_failed",
@@ -157,12 +173,18 @@ class _HarnessStreamIterator:
         future = submission.future
         try:
             result = future.result()
+        except RecoveryFailure as exc:
+            code = exc.code
+            detail = exc.safe_message
+            last_resumable_parent = None
         except Exception:
             code = "application_error"
             detail = "Research execution failed."
+            last_resumable_parent = None
         else:
             code = result.error.code if result.error is not None else "missing_terminal"
             detail = "Research execution ended without a terminal event."
+            last_resumable_parent = result.last_resumable_parent
         self._wait_for_terminal_release(submission)
         with self._lock:
             if self._closed.is_set():
@@ -172,6 +194,7 @@ class _HarnessStreamIterator:
                 code=code,
                 detail=detail,
                 sequence=self._last_sequence + 1,
+                last_resumable_parent=last_resumable_parent,
             )
             self._record_event_locked(event)
             return event
@@ -203,6 +226,8 @@ class HarnessRunner:
     max_workers: int = 1
     queue_capacity: int = 64
     admission_capacity: int | None = None
+    history_store: ResearchHistoryStore | None = None
+    memory_store: UserMemoryStore | None = None
     _executor: ThreadPoolExecutor = field(init=False, repr=False)
     _admission: BoundedSemaphore = field(init=False, repr=False)
     _projector: LegacySseProjector = field(init=False, repr=False)
@@ -245,6 +270,8 @@ class HarnessRunner:
     def build_default(cls, *, base_path: str | Path = "./runs") -> HarnessRunner:
         """Compose the production coordinator, application, policy, and repository."""
         repository = FileRunRepository(base_path)
+        history_store = ResearchHistoryStore(repository)
+        memory_store = UserMemoryStore(repository.root)
         policy = HarnessPolicy()
         coordinator = DeepResearchAgent(
             config=Configuration.from_env(),
@@ -254,11 +281,19 @@ class HarnessRunner:
             coordinator=coordinator,
             repository=repository,
             policy=policy,
+            history_store=history_store,
+            memory_store=memory_store,
         )
         # Keep one top-level run active per shared coordinator. Task workers still
         # use the configured bounded parallelism within that run, while this
         # conservative boundary avoids interleaving stateful role-agent histories.
-        return cls(application=application, repository=repository, max_workers=1)
+        return cls(
+            application=application,
+            repository=repository,
+            max_workers=1,
+            history_store=history_store,
+            memory_store=memory_store,
+        )
 
     def run(self, request: HarnessRunRequest) -> HarnessRunResult:
         """Execute the canonical application exactly once and adapt its result."""
@@ -295,12 +330,71 @@ class HarnessRunner:
             )
         try:
             result = submission.future.result()
+        except RecoveryFailure as exc:
+            submission.released.wait()
+            return self._error_result(
+                request.run_id,
+                code=exc.code,
+                message=exc.safe_message,
+            )
         except Exception:
             submission.released.wait()
             return self._error_result(
                 request.run_id,
                 code="application_error",
                 message="Research execution failed.",
+            )
+        submission.released.wait()
+        return self._adapt_result(result)
+
+    def resume(self, run_id: str) -> HarnessRunResult:
+        """Recover one persisted failed run from its trusted checkpoint."""
+        cancellation = CancellationToken()
+        try:
+            submission = self._submit_recovery(
+                run_id,
+                observer=lambda event: None,
+                cancellation=cancellation,
+            )
+        except RecoveryFailure as exc:
+            return self._error_result(
+                run_id,
+                code=exc.code,
+                message=exc.safe_message,
+            )
+        except _RunAlreadyReservedError:
+            return self._error_result(
+                run_id,
+                code="run_already_active",
+                message="A run with this ID is already active.",
+            )
+        except Exception:
+            return self._error_result(
+                run_id,
+                code="application_error",
+                message="Research recovery failed.",
+            )
+        if submission is None:
+            return self._error_result(
+                run_id,
+                code="runner_busy",
+                message="Research execution capacity is busy.",
+            )
+        try:
+            result = submission.future.result()
+        except RecoveryFailure as exc:
+            submission.released.wait()
+            return self._error_result(
+                run_id,
+                code=exc.code,
+                message=exc.safe_message,
+            )
+        except Exception:
+            submission.released.wait()
+            return self._error_result(
+                run_id,
+                code="application_error",
+                message="Research recovery failed.",
             )
         submission.released.wait()
         return self._adapt_result(result)
@@ -392,9 +486,162 @@ class HarnessRunner:
             submission=submission,
         )
 
+    def resume_stream(self, run_id: str) -> Iterator[dict[str, Any]]:
+        """Stream recovery events for one persisted run."""
+        cancellation = CancellationToken()
+        event_queue: Queue[ResearchEvent] = Queue(maxsize=self.queue_capacity)
+        closed = Event()
+
+        def observe(event: ResearchEvent) -> None:
+            while not closed.is_set():
+                try:
+                    event_queue.put(event, timeout=_QUEUE_POLL_SECONDS)
+                    return
+                except Full:
+                    continue
+
+        try:
+            submission = self._submit_recovery(
+                run_id,
+                observer=observe,
+                cancellation=cancellation,
+            )
+        except RecoveryFailure as exc:
+            return _HarnessStreamIterator(
+                run_id=run_id,
+                cancellation=cancellation,
+                closed=closed,
+                event_queue=event_queue,
+                projector=self._projector,
+                submission=None,
+                initial_error=self._error_event(
+                    run_id,
+                    code=exc.code,
+                    detail=exc.safe_message,
+                ),
+            )
+        except _RunAlreadyReservedError:
+            return _HarnessStreamIterator(
+                run_id=run_id,
+                cancellation=cancellation,
+                closed=closed,
+                event_queue=event_queue,
+                projector=self._projector,
+                submission=None,
+                initial_error=self._error_event(
+                    run_id,
+                    code="run_already_active",
+                    detail="A run with this ID is already active.",
+                ),
+            )
+        except Exception:
+            return _HarnessStreamIterator(
+                run_id=run_id,
+                cancellation=cancellation,
+                closed=closed,
+                event_queue=event_queue,
+                projector=self._projector,
+                submission=None,
+                initial_error=self._error_event(
+                    run_id,
+                    code="application_error",
+                    detail="Research recovery failed.",
+                ),
+            )
+
+        if submission is None:
+            return _HarnessStreamIterator(
+                run_id=run_id,
+                cancellation=cancellation,
+                closed=closed,
+                event_queue=event_queue,
+                projector=self._projector,
+                submission=None,
+                initial_error=self._error_event(
+                    run_id,
+                    code="runner_busy",
+                    detail="Research execution capacity is busy.",
+                ),
+            )
+
+        return _HarnessStreamIterator(
+            run_id=run_id,
+            cancellation=cancellation,
+            closed=closed,
+            event_queue=event_queue,
+            projector=self._projector,
+            submission=submission,
+        )
+
     def load_record(self, run_id: str) -> dict[str, Any]:
         """Return a detached JSON-ready view of one canonical snapshot."""
         return deepcopy(self.repository.load(run_id).as_dict())
+
+    def list_history(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a detached page of completed run summaries."""
+        if self.history_store is not None:
+            page = self.history_store.list_runs(limit=limit, cursor=cursor)
+        else:
+            list_summaries = getattr(self.repository, "list_summaries", None)
+            if not callable(list_summaries):
+                return {"items": [], "next_cursor": None}
+            page = list_summaries(limit=limit, cursor=cursor)
+        as_dict = getattr(page, "as_dict", None)
+        if callable(as_dict):
+            return deepcopy(as_dict())
+        if isinstance(page, dict):
+            return deepcopy(page)
+        return {"items": [], "next_cursor": None}
+
+    def list_memories(
+        self,
+        *,
+        scope: str = "default",
+        include_pending: bool = True,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Return user memory items without exposing the store object."""
+        if self.memory_store is None:
+            return {"items": [], "scope": scope, "limit": limit}
+        items = self.memory_store.list(
+            scope=scope,
+            include_pending=include_pending,
+            limit=limit,
+        )
+        return {
+            "items": [item.as_dict() for item in items],
+            "scope": scope,
+            "limit": limit,
+        }
+
+    def create_memory_candidate(
+        self,
+        *,
+        text: str,
+        kind: str,
+        scope: str,
+    ) -> UserMemory:
+        """Create a pending memory candidate through the explicit write gate."""
+        if self.memory_store is None:
+            raise RuntimeError("User memory is unavailable.")
+        return self.memory_store.create_candidate(text=text, kind=kind, scope=scope)
+
+    def confirm_memory(self, memory_id: str, *, scope: str) -> UserMemory:
+        """Confirm one pending memory candidate."""
+        if self.memory_store is None:
+            raise RuntimeError("User memory is unavailable.")
+        return self.memory_store.confirm(memory_id, scope=scope)
+
+    def delete_memory(self, memory_id: str, *, scope: str) -> bool:
+        """Delete one memory candidate or confirmed memory."""
+        if self.memory_store is None:
+            return False
+        return self.memory_store.delete(memory_id, scope=scope)
 
     def _submit(
         self,
@@ -440,6 +687,45 @@ class HarnessRunner:
         future.add_done_callback(release_submission)
         return submission
 
+    def _submit_recovery(
+        self,
+        run_id: str,
+        *,
+        observer: Any,
+        cancellation: CancellationToken,
+    ) -> _Submission | None:
+        """Submit recovery without constructing a second application runtime."""
+        with self._reservation_lock:
+            if run_id in self._reserved_run_ids:
+                raise _RunAlreadyReservedError(run_id)
+            if not self._admission.acquire(blocking=False):
+                return None
+            self._reserved_run_ids.add(run_id)
+        try:
+            future = self._executor.submit(
+                self.application.resume,
+                run_id,
+                observer=observer,
+                cancellation=cancellation,
+            )
+        except Exception:
+            with self._reservation_lock:
+                self._reserved_run_ids.discard(run_id)
+            self._admission.release()
+            raise
+
+        submission = _Submission(future=future)
+
+        def release_submission(completed: Future[ResearchRunResult]) -> None:
+            try:
+                self._release_submission(completed, run_id)
+            finally:
+                submission.released.set()
+                submission.terminal_wakeup.set()
+
+        future.add_done_callback(release_submission)
+        return submission
+
     def _release_submission(
         self,
         future: Future[ResearchRunResult],
@@ -463,6 +749,9 @@ class HarnessRunner:
             findings=[],
             compressed_context=deepcopy(result.followup_context),
             policy_decisions=[deepcopy(item) for item in result.policy_decisions],
+            resumable=result.resumable,
+            recovery_resumable=result.recovery_resumable,
+            last_resumable_parent=result.last_resumable_parent,
         )
 
     @staticmethod
@@ -472,6 +761,7 @@ class HarnessRunner:
             status="failed",
             error=message,
             error_code=code,
+            resumable=False,
         )
 
     @staticmethod
@@ -481,8 +771,9 @@ class HarnessRunner:
         code: str,
         detail: str,
         sequence: int = 1,
+        last_resumable_parent: str | None = None,
     ) -> dict[str, Any]:
-        return {
+        event = {
             "type": "error",
             "run_id": run_id,
             "schema_version": 1,
@@ -490,6 +781,10 @@ class HarnessRunner:
             "code": code if code in _SAFE_ERROR_CODES else "application_error",
             "detail": detail,
         }
+        if last_resumable_parent is not None:
+            event["resumable"] = False
+            event["last_resumable_parent"] = last_resumable_parent
+        return event
 
 
 __all__ = ["HarnessRunner"]

@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from threading import Event, RLock
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
+from config import Configuration
 from models import ResearchState, SummaryStateOutput, TodoItem
 
 from .contracts import (
@@ -36,6 +39,10 @@ def utc_now() -> datetime:
 
 class InvalidTransitionError(RuntimeError):
     """Raised when a lifecycle or task transition is not allowed."""
+
+
+class CheckpointPersistenceError(RuntimeError):
+    """Raised when a validated recovery checkpoint cannot be durably saved."""
 
 
 class CancellationRequestedError(RuntimeError):
@@ -107,6 +114,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _TERMINAL_EVENTS = {
     RunStatus.COMPLETED: EventKind.RUN_COMPLETED,
+    RunStatus.REPORT_INCOMPLETE: EventKind.RUN_FAILED,
     RunStatus.FAILED: EventKind.RUN_FAILED,
     RunStatus.CANCELLED: EventKind.RUN_CANCELLED,
     RunStatus.REJECTED: EventKind.RUN_REJECTED,
@@ -121,9 +129,22 @@ class RunSession:
     state: ResearchState
     started_at: datetime = field(default_factory=utc_now)
     completed_at: datetime | None = None
+    checkpoint: str | None = None
+    checkpoint_state: dict[str, Any] = field(default_factory=dict)
+    checkpoint_writer: Callable[[RunSnapshot], None] | None = field(
+        default=None,
+        repr=False,
+    )
+    # Each in-process execution gets a fresh identity.  Recovery keeps the
+    # run ID but creates a new execution identity so repeated restarts are
+    # distinguishable in the persisted event/audit trail.
+    execution_attempt_id: str = field(default_factory=lambda: uuid4().hex)
+    last_resumable_parent: str | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
     error: RunError | None = None
     followup_context: dict[str, Any] = field(default_factory=dict)
+    related_history_context: dict[str, Any] = field(default_factory=dict)
+    user_memory_context: dict[str, Any] = field(default_factory=dict)
     policy_decisions: list[dict[str, Any]] = field(default_factory=list)
     cancellation_token: CancellationToken = field(default_factory=CancellationToken)
     monotonic_clock: Callable[[], float] = field(
@@ -157,6 +178,11 @@ class RunSession:
         repr=False,
     )
     _first_rejection_operation_id: str | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _recovery_attempt_id: str | None = field(
         default=None,
         init=False,
         repr=False,
@@ -215,6 +241,593 @@ class RunSession:
             return None
         return (self.completed_at - self.started_at).total_seconds()
 
+    @property
+    def checkpoint_phase(self) -> str | None:
+        """Return the phase represented by the last durable checkpoint."""
+        with self._lock:
+            phase = self.checkpoint_state.get("phase")
+            return phase if isinstance(phase, str) else None
+
+    @property
+    def recovery_resumable(self) -> bool:
+        """Return whether the last checkpoint is safe for failed-run recovery."""
+        with self._lock:
+            return bool(
+                self.checkpoint_state.get("validated") is True
+                and self.checkpoint_state.get("resumable") is True
+            )
+
+    def persist_checkpoint(
+        self,
+        phase: str,
+        *,
+        resumable: bool = True,
+    ) -> RunSnapshot:
+        """Build and atomically persist one validated recovery checkpoint."""
+        if not isinstance(phase, str) or not phase.strip():
+            raise ValueError("Checkpoint phase must be non-empty text.")
+        with self._lock:
+            self._require_running_locked()
+            checkpoint_state = self._build_checkpoint_state_locked(
+                phase=phase.strip(),
+                resumable=resumable,
+            )
+            # A checkpoint that observes an uncertain side effect must never
+            # replace the last trusted recovery target.  Keep the prior safe
+            # checkpoint durable until a later boundary proves replay-safe.
+            if (
+                checkpoint_state.get("resumable") is False
+                and checkpoint_state.get("recovery_blocked_reason")
+                == "report_stream_incomplete"
+                and self.checkpoint_state.get("validated") is True
+                and self.checkpoint_state.get("resumable") is True
+            ):
+                prior_phase = self.checkpoint_state.get("phase")
+                return self.to_snapshot(
+                    status=RunStatus.RUNNING,
+                    checkpoint=(
+                        prior_phase
+                        if isinstance(prior_phase, str)
+                        else self.checkpoint
+                    ),
+                    checkpoint_state=self.checkpoint_state,
+                    recovery_resumable=True,
+                )
+            snapshot = self.to_snapshot(
+                status=RunStatus.RUNNING,
+                checkpoint=phase.strip(),
+                checkpoint_state=checkpoint_state,
+                recovery_resumable=bool(checkpoint_state.get("resumable")),
+            )
+            writer = self.checkpoint_writer
+            if writer is not None:
+                try:
+                    writer(snapshot)
+                except Exception as exc:
+                    raise CheckpointPersistenceError(
+                        "Validated research checkpoint could not be persisted."
+                    ) from exc
+            self.checkpoint = phase.strip()
+            self.checkpoint_state = checkpoint_state
+            return snapshot
+
+    def start_recovery(self) -> ResearchEvent:
+        """Emit a recovery boundary after a durable checkpoint is restored."""
+        with self._lock:
+            self._require_running_locked()
+            recovery_attempt_id = uuid4().hex
+            self._recovery_attempt_id = recovery_attempt_id
+            raw_attempts = self.metrics.get("execution_attempts")
+            attempts = [
+                dict(item)
+                for item in raw_attempts
+                if isinstance(item, Mapping)
+            ] if isinstance(raw_attempts, list) else []
+            attempts.append(
+                {
+                    "attempt_id": recovery_attempt_id,
+                    "execution_attempt_id": self.execution_attempt_id,
+                    "kind": "recovery",
+                    "checkpoint_id": self.checkpoint_state.get("checkpoint_id"),
+                    "phase": self.checkpoint_state.get("phase"),
+                    "started_at": utc_now().isoformat(),
+                }
+            )
+            self.metrics["execution_attempts"] = attempts[-32:]
+            payload = {
+                "checkpoint_id": self.checkpoint_state.get("checkpoint_id"),
+                "phase": self.checkpoint_state.get("phase"),
+                "attempt_id": recovery_attempt_id,
+                "execution_attempt_id": self.execution_attempt_id,
+            }
+            event = self._validated_event_locked(
+                EventKind.RUN_RECOVERY_STARTED,
+                payload,
+            )
+            should_drain = self._commit_event_locked(event)
+        if should_drain:
+            self._drain_notifications()
+        return event
+
+    def _build_checkpoint_state_locked(
+        self,
+        *,
+        phase: str,
+        resumable: bool,
+    ) -> dict[str, Any]:
+        """Capture only the detached state needed to replay the next phase."""
+        from .operations import operation_replay_safety
+
+        previous = self.checkpoint_state.get("checkpoint_id")
+        sequence = max(0, self._next_sequence - 1)
+        checkpoint_id = f"{self.run_id}:{sequence}:{phase}"
+        operation_state: list[dict[str, object]] = []
+        for key, state in self._operation_states.items():
+            task_id, envelope = self._operation_envelopes.get(key, (None, {}))
+            operation_name = envelope.get("operation_name")
+            operation_state.append(
+                {
+                    "pairing_key": list(key),
+                    "task_id": task_id,
+                    "operation_name": operation_name,
+                    "status": state,
+                    "replay_safety": operation_replay_safety(operation_name),
+                }
+            )
+        report_state: dict[str, object] = {
+            "status": (
+                "generated"
+                if isinstance(self.state.structured_report, str)
+                and self.state.structured_report.strip()
+                else "not_started"
+            ),
+            "output_chars": len(self.state.structured_report or ""),
+            "stream_completed": None,
+        }
+        report_validation = self.metrics.get("report_validation")
+        if isinstance(report_validation, dict):
+            final = report_validation.get("final")
+            if isinstance(final, dict):
+                report_state["validation"] = dict(final)
+        llm = self.metrics.get("llm")
+        if isinstance(llm, dict):
+            calls = llm.get("calls")
+            if isinstance(calls, list):
+                for call in reversed(calls):
+                    if not isinstance(call, dict) or call.get("role") != "reporter":
+                        continue
+                    if call.get("mode") == "stream":
+                        report_state["stream_completed"] = call.get(
+                            "stream_completed"
+                        )
+                    break
+        active_operations = [
+            (key, state)
+            for key, state in self._operation_states.items()
+            if state == "active"
+        ]
+        active_operations_safe = True
+        for key, _state in active_operations:
+            _task_id, envelope = self._operation_envelopes.get(key, (None, {}))
+            if operation_replay_safety(envelope.get("operation_name")) != "safe_replay":
+                active_operations_safe = False
+                break
+        if active_operations_safe:
+            for key, state in self._operation_states.items():
+                if state != "uncertain":
+                    continue
+                _task_id, envelope = self._operation_envelopes.get(key, (None, {}))
+                if operation_replay_safety(envelope.get("operation_name")) != "safe_replay":
+                    active_operations_safe = False
+                    break
+        report_stream_safe = report_state.get("stream_completed") is not False
+        recovery_blocked_reason: str | None = None
+        if not active_operations_safe:
+            recovery_blocked_reason = "operation_outcome_uncertain"
+        elif not report_stream_safe:
+            recovery_blocked_reason = "report_stream_incomplete"
+        effective_resumable = bool(
+            resumable and active_operations_safe and report_stream_safe
+        )
+        checkpoint_state = {
+            "schema_version": 1,
+            "checkpoint_id": checkpoint_id,
+            "run_id": self.run_id,
+            "parent_checkpoint_id": previous if isinstance(previous, str) else None,
+            "phase": phase,
+            "created_at": utc_now().isoformat(),
+            "task_state": [task.to_dict() for task in self.state.todo_items],
+            "operation_state": operation_state,
+            "report_state": report_state,
+            "state": {
+                "research_topic": self.state.research_topic,
+                "research_loop_count": self.state.research_loop_count,
+                "github_context": dict(self.state.github_context),
+                "report_note_id": self.state.report_note_id,
+                "report_note_path": self.state.report_note_path,
+                "permission_mode": self.command.permission_mode,
+                "caller_mode": self.command.caller_mode,
+                "use_history_memory": self.command.use_history_memory,
+                "memory_scope": self.command.memory_scope,
+                "related_history_context": dict(self.related_history_context),
+                "user_memory_context": dict(self.user_memory_context),
+            },
+            "validated": True,
+            "resumable": effective_resumable,
+        }
+        if recovery_blocked_reason is not None:
+            checkpoint_state["recovery_blocked_reason"] = recovery_blocked_reason
+        return checkpoint_state
+
+    @classmethod
+    def restore_from_snapshot(
+        cls,
+        snapshot: RunSnapshot,
+        *,
+        checkpoint_writer: Callable[[RunSnapshot], None] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunSession:
+        """Rebuild a running session exclusively from one validated snapshot."""
+        detached_snapshot = snapshot.as_dict()
+        config_values = {
+            key: value
+            for key, value in detached_snapshot["config_snapshot"].items()
+            if isinstance(key, str)
+        }
+        raw_checkpoint_state = detached_snapshot.get("checkpoint_state")
+        checkpoint_state = (
+            dict(raw_checkpoint_state)
+            if isinstance(raw_checkpoint_state, Mapping)
+            else {}
+        )
+        continuation = checkpoint_state.get("state")
+        continuation_state: Mapping[str, object] = (
+            {
+                str(key): value
+                for key, value in continuation.items()
+                if isinstance(key, str)
+            }
+            if isinstance(continuation, Mapping)
+            else {}
+        )
+        raw_permission_mode = continuation_state.get("permission_mode")
+        permission_mode = (
+            raw_permission_mode
+            if isinstance(raw_permission_mode, str)
+            and raw_permission_mode in {"default", "strict"}
+            else "default"
+        )
+        raw_caller_mode = continuation_state.get("caller_mode")
+        caller_mode = (
+            raw_caller_mode
+            if isinstance(raw_caller_mode, str)
+            and raw_caller_mode in {"public", "internal"}
+            else "public"
+        )
+        use_history_memory = continuation_state.get("use_history_memory")
+        if not isinstance(use_history_memory, bool):
+            use_history_memory = True
+        memory_scope = continuation_state.get("memory_scope")
+        if not isinstance(memory_scope, str):
+            memory_scope = "default"
+        command = ResearchCommand(
+            topic=snapshot.topic,
+            config=Configuration.from_env(overrides=config_values),
+            run_id=snapshot.run_id,
+            parent_run_id=snapshot.parent_run_id,
+            permission_mode=permission_mode,
+            caller_mode=caller_mode,
+            use_history_memory=use_history_memory,
+            memory_scope=memory_scope,
+        )
+        raw_output = detached_snapshot["output"]
+        output: Mapping[str, object] = (
+            raw_output if isinstance(raw_output, Mapping) else {}
+        )
+        raw_loop_count = continuation_state.get("research_loop_count")
+        loop_count = (
+            raw_loop_count
+            if isinstance(raw_loop_count, int) and not isinstance(raw_loop_count, bool)
+            else 0
+        )
+        raw_github_context = continuation_state.get("github_context")
+        typed_github_context = (
+            cast(Mapping[str, object], raw_github_context)
+            if isinstance(raw_github_context, Mapping)
+            else None
+        )
+        github_context = (
+            {
+                str(key): value
+                for key, value in typed_github_context.items()
+                if isinstance(key, str)
+            }
+            if typed_github_context is not None
+            else {}
+        )
+        raw_research_topic = continuation_state.get("research_topic")
+        research_topic = (
+            raw_research_topic
+            if isinstance(raw_research_topic, str)
+            else snapshot.topic
+        )
+        raw_running_summary = output.get("running_summary")
+        running_summary = (
+            raw_running_summary if isinstance(raw_running_summary, str) else None
+        )
+        raw_report = output.get("report_markdown")
+        structured_report = raw_report if isinstance(raw_report, str) else None
+        raw_report_note_id = continuation_state.get("report_note_id")
+        report_note_id = (
+            raw_report_note_id if isinstance(raw_report_note_id, str) else None
+        )
+        raw_report_note_path = continuation_state.get("report_note_path")
+        report_note_path = (
+            raw_report_note_path if isinstance(raw_report_note_path, str) else None
+        )
+        raw_history_context = continuation_state.get("related_history_context")
+        related_history_context = (
+            {
+                str(key): value
+                for key, value in cast(Mapping[str, object], raw_history_context).items()
+                if isinstance(key, str)
+            }
+            if isinstance(raw_history_context, Mapping)
+            else {}
+        )
+        raw_memory_context = continuation_state.get("user_memory_context")
+        user_memory_context = (
+            {
+                str(key): value
+                for key, value in cast(Mapping[str, object], raw_memory_context).items()
+                if isinstance(key, str)
+            }
+            if isinstance(raw_memory_context, Mapping)
+            else {}
+        )
+        raw_tasks_value = output.get("todo_items", [])
+        raw_tasks = (
+            raw_tasks_value
+            if isinstance(raw_tasks_value, (list, tuple))
+            else []
+        )
+        tasks: list[TodoItem] = []
+        for item in raw_tasks:
+            if not isinstance(item, Mapping):
+                continue
+            task = TodoItem(**dict(item))
+            if task.status == "in_progress":
+                # The previous stream was not durably terminal. Its partial
+                # summary is deliberately discarded before safe replay.
+                task.status = "pending"
+                task.summary = None
+                task.sources_summary = None
+            tasks.append(task)
+        state = ResearchState(
+            research_topic=research_topic,
+            research_loop_count=loop_count,
+            running_summary=running_summary,
+            structured_report=structured_report,
+            todo_items=tasks,
+            github_context=github_context,
+            report_note_id=report_note_id,
+            report_note_path=report_note_path,
+        )
+        session = cls(
+            command=command,
+            state=state,
+            started_at=snapshot.started_at,
+            checkpoint=snapshot.checkpoint,
+            checkpoint_state=checkpoint_state,
+            last_resumable_parent=snapshot.last_resumable_parent,
+            metrics=json.loads(json.dumps(detached_snapshot["metrics"])),
+            followup_context=dict(detached_snapshot["followup_context"]),
+            related_history_context=related_history_context,
+            user_memory_context=user_memory_context,
+            policy_decisions=[
+                dict(item) for item in detached_snapshot["policy_decisions"]
+            ],
+            checkpoint_writer=checkpoint_writer,
+            cancellation_token=cancellation_token or CancellationToken(),
+        )
+        session.events = list(snapshot.events)
+        session._next_sequence = max(
+            (event.sequence for event in session.events),
+            default=0,
+        ) + 1
+        session._status = RunStatus.RUNNING
+        session._rebuild_operation_audit_from_events()
+        return session
+
+    def _rebuild_operation_audit_from_events(self) -> None:
+        """Reconstruct operation pairing state from the persisted event ledger."""
+        with self._lock:
+            self._operation_states.clear()
+            self._operation_envelopes.clear()
+            for event in self.events:
+                if event.operation_id is None:
+                    continue
+                payload = dict(event.payload)
+                task_attempt = payload.get("task_attempt")
+                operation_attempt = payload.get("operation_attempt")
+                fallback_index = payload.get("fallback_index")
+                if (
+                    not isinstance(task_attempt, int)
+                    or isinstance(task_attempt, bool)
+                    or not isinstance(operation_attempt, int)
+                    or isinstance(operation_attempt, bool)
+                    or not isinstance(fallback_index, int)
+                    or isinstance(fallback_index, bool)
+                ):
+                    continue
+                key = (
+                    event.operation_id,
+                task_attempt,
+                fallback_index,
+                operation_attempt,
+                )
+                envelope = {
+                    key: value
+                    for key, value in payload.items()
+                    if key not in {"duration_seconds", "code"}
+                }
+                if event.kind is EventKind.OPERATION_STARTED:
+                    self._operation_states[key] = "active"
+                    self._operation_envelopes[key] = (event.task_id, envelope)
+                elif event.kind is EventKind.OPERATION_COMPLETED:
+                    self._operation_states[key] = "completed"
+                elif event.kind is EventKind.OPERATION_FAILED:
+                    self._operation_states[key] = "failed"
+                elif event.kind is EventKind.OPERATION_REJECTED:
+                    self._operation_states[key] = "rejected"
+            checkpoint_operations = self.checkpoint_state.get("operation_state")
+            if isinstance(checkpoint_operations, (list, tuple)):
+                for operation in checkpoint_operations:
+                    if not isinstance(operation, Mapping):
+                        continue
+                    pairing_key = operation.get("pairing_key")
+                    if not isinstance(pairing_key, (list, tuple)) or len(pairing_key) != 4:
+                        continue
+                    key = tuple(pairing_key)
+                    if operation.get("status") == "active":
+                        self._operation_states[key] = "uncertain"
+                    if key not in self._operation_envelopes:
+                        self._operation_envelopes[key] = (
+                            operation.get("task_id")
+                            if isinstance(operation.get("task_id"), int)
+                            else None,
+                            {
+                                "operation_name": operation.get("operation_name"),
+                                "task_attempt": key[1],
+                                "fallback_index": key[2],
+                                "operation_attempt": key[3],
+                            },
+                        )
+            raw_metrics = self.metrics.get("operations")
+            operation_metrics = (
+                dict(raw_metrics) if isinstance(raw_metrics, Mapping) else {}
+            )
+            operation_metrics["active"] = sum(
+                state == "active" for state in self._operation_states.values()
+            )
+            operation_metrics["uncertain"] = sum(
+                state == "uncertain" for state in self._operation_states.values()
+            )
+            self.metrics["operations"] = operation_metrics
+
+    def record_llm_telemetry(self, record: Mapping[str, object]) -> None:
+        """Persist bounded, provider-safe metadata for one LLM call."""
+        allowed = {
+            "role",
+            "provider",
+            "model",
+            "mode",
+            "started_at",
+            "duration_ms",
+            "request_id",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "usage_available",
+            "output_chars",
+            "finish_reason",
+            "exception_type",
+            "stream_completed",
+            "retry_count",
+            "chunk_count",
+            "first_chunk_latency_ms",
+        }
+        safe: dict[str, object] = {}
+        for key in allowed:
+            value = record.get(key)
+            if isinstance(value, str):
+                safe[key] = value[:128]
+            elif value is None or isinstance(value, (bool, int, float)):
+                safe[key] = value
+        with self._lock:
+            raw = self.metrics.get("llm")
+            telemetry = dict(raw) if isinstance(raw, dict) else {}
+            calls = list(telemetry.get("calls", []))
+            calls = [item for item in calls if isinstance(item, dict)]
+            if len(calls) >= 64:
+                calls = calls[-63:]
+                telemetry["dropped_calls"] = int(telemetry.get("dropped_calls", 0)) + 1
+            calls.append(safe)
+            telemetry["calls"] = calls
+            telemetry["summary"] = self._summarize_llm_calls(calls)
+            self.metrics["llm"] = telemetry
+
+    def latest_llm_finish_reason(self, *, role: str | None = None) -> str | None:
+        """Return the most recent provider finish reason for an optional role."""
+        with self._lock:
+            raw = self.metrics.get("llm")
+            calls = raw.get("calls") if isinstance(raw, dict) else None
+            if not isinstance(calls, list):
+                return None
+            for call in reversed(calls):
+                if not isinstance(call, dict):
+                    continue
+                if role is not None and call.get("role") != role:
+                    continue
+                reason = call.get("finish_reason")
+                if isinstance(reason, str) and reason:
+                    return reason
+        return None
+
+    @staticmethod
+    def _summarize_llm_calls(calls: Sequence[Mapping[str, object]]) -> dict[str, object]:
+        """Aggregate bounded LLM call records without retaining prompt content."""
+        finish_reasons: dict[str, int] = {}
+        input_tokens = 0
+        output_tokens = 0
+        total_tokens = 0
+        known_input = known_output = known_total = False
+        output_chars = 0
+        stream_calls = stream_completed = 0
+        duration_ms = 0.0
+        for call in calls:
+            reason = call.get("finish_reason")
+            if isinstance(reason, str) and reason:
+                finish_reasons[reason] = finish_reasons.get(reason, 0) + 1
+            for key, holder in (
+                ("input_tokens", "input"),
+                ("output_tokens", "output"),
+                ("total_tokens", "total"),
+            ):
+                value = call.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    if holder == "input":
+                        input_tokens += value
+                        known_input = True
+                    elif holder == "output":
+                        output_tokens += value
+                        known_output = True
+                    else:
+                        total_tokens += value
+                        known_total = True
+            value = call.get("output_chars")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                output_chars += value
+            value = call.get("duration_ms")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                duration_ms += max(0.0, float(value))
+            if call.get("mode") == "stream":
+                stream_calls += 1
+                if call.get("stream_completed") is True:
+                    stream_completed += 1
+        return {
+            "call_count": len(calls),
+            "stream_call_count": stream_calls,
+            "stream_completed_count": stream_completed,
+            "stream_incomplete_count": max(0, stream_calls - stream_completed),
+            "input_tokens": input_tokens if known_input else None,
+            "output_tokens": output_tokens if known_output else None,
+            "total_tokens": total_tokens if known_total else None,
+            "output_chars": output_chars,
+            "duration_ms": round(duration_ms, 3),
+            "finish_reasons": finish_reasons,
+        }
+
     def add_observer(self, observer: Observer) -> None:
         """Register an observer for subsequently committed events."""
         with self._lock:
@@ -227,9 +840,53 @@ class RunSession:
                 raise InvalidTransitionError("Only a pending run can start.")
             event = self._validated_event_locked(
                 EventKind.RUN_STARTED,
-                {"topic": self.command.topic},
+                {
+                    "topic": self.command.topic,
+                    "execution_attempt_id": self.execution_attempt_id,
+                },
             )
             self._status = RunStatus.RUNNING
+            should_drain = self._commit_event_locked(event)
+        if should_drain:
+            self._drain_notifications()
+        return event
+
+    def record_history_recall(
+        self,
+        *,
+        matches: Sequence[Mapping[str, object]],
+    ) -> ResearchEvent:
+        """Record safe metadata for automatically recalled related research."""
+        safe_matches: list[dict[str, object]] = []
+        for match in matches:
+            run_id = match.get("run_id")
+            topic = match.get("topic")
+            score = match.get("score")
+            if not isinstance(run_id, str) or not isinstance(topic, str):
+                continue
+            if (
+                isinstance(score, bool)
+                or not isinstance(score, (int, float))
+                or not math.isfinite(float(score))
+            ):
+                continue
+            safe_matches.append(
+                {
+                    "run_id": run_id,
+                    "topic": topic[:180],
+                    "score": round(float(score), 4),
+                }
+            )
+        payload = {
+            "match_count": len(safe_matches),
+            "matches": safe_matches,
+        }
+        with self._lock:
+            self._require_running_locked()
+            event = self._validated_event_locked(
+                EventKind.HISTORY_RECALLED,
+                payload,
+            )
             should_drain = self._commit_event_locked(event)
         if should_drain:
             self._drain_notifications()
@@ -680,16 +1337,37 @@ class RunSession:
                 raise InvalidTransitionError(
                     f"{status.value!r} cannot be confirmed by {kind.value!r}."
                 )
-            event = self._build_event_locked(kind, dict(payload))
+            terminal_payload = dict(payload)
+            terminal_payload.setdefault("checkpoint", kind.value)
+            terminal_payload.setdefault(
+                "resumable",
+                status is RunStatus.COMPLETED,
+            )
+            terminal_payload.setdefault(
+                "recovery_resumable",
+                self.recovery_resumable,
+            )
+            if self.last_resumable_parent is not None:
+                terminal_payload.setdefault(
+                    "last_resumable_parent",
+                    self.last_resumable_parent,
+                )
+            event = self._build_event_locked(kind, terminal_payload)
             event.as_dict()
             snapshot = self.to_snapshot(status=status, terminal_event=event)
-            if status in {RunStatus.FAILED, RunStatus.REJECTED}:
+            if status in {
+                RunStatus.REPORT_INCOMPLETE,
+                RunStatus.FAILED,
+                RunStatus.REJECTED,
+            }:
                 message = payload.get("message")
                 code = payload.get("code")
                 if isinstance(message, str) and isinstance(code, str):
                     snapshot = replace(
                         snapshot,
                         error=RunError(code=code, message=message),
+                        failure_reason=code,
+                        resumable=False,
                     )
             prepared = PreparedTerminal(
                 status=status,
@@ -780,6 +1458,10 @@ class RunSession:
         *,
         status: RunStatus | None = None,
         terminal_event: ResearchEvent | None = None,
+        checkpoint: str | None = None,
+        checkpoint_state: Mapping[str, Any] | None = None,
+        resumable: bool | None = None,
+        recovery_resumable: bool | None = None,
     ) -> RunSnapshot:
         """Capture an immutable persistence view without mutating the session."""
         with self._lock:
@@ -809,6 +1491,35 @@ class RunSession:
                 config_snapshot=self.command.config.safe_snapshot(),
                 events=tuple(events),
                 error=self.error,
+                failure_reason=self.error.code if self.error else None,
+                checkpoint=(
+                    terminal_event.kind.value
+                    if terminal_event is not None
+                    else checkpoint if checkpoint is not None else self.checkpoint
+                ),
+                checkpoint_state=(
+                    dict(checkpoint_state)
+                    if checkpoint_state is not None
+                    else (dict(self.checkpoint_state) if self.checkpoint_state else None)
+                ),
+                resumable=(
+                    resumable
+                    if resumable is not None
+                    else snapshot_status is RunStatus.COMPLETED
+                ),
+                recovery_resumable=(
+                    recovery_resumable
+                    if recovery_resumable is not None
+                    else self.recovery_resumable
+                ),
+                last_resumable_parent=(
+                    self.last_resumable_parent
+                    or (
+                        self.command.parent_run_id
+                        if snapshot_status is not RunStatus.COMPLETED
+                        else None
+                    )
+                ),
             )
 
     def _terminal_operation(
@@ -1006,6 +1717,7 @@ class RunSession:
     ) -> bool:
         self.events.append(event)
         self._next_sequence += 1
+        self.checkpoint = event.kind.value
         self._pending_notifications.append((tuple(self._observers), event))
         if self._notification_draining:
             return False

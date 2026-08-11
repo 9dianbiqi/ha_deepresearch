@@ -43,6 +43,7 @@ from research.session import (
     InvalidTransitionError,
     RunSession,
 )
+from research.telemetry import TelemetryHelloAgentsLLM, llm_telemetry_scope
 from services.github_research import (
     GitHubRepositoryContext,
     GitHubRepositoryTarget,
@@ -380,7 +381,7 @@ class DeepResearchAgent:
             if self.config.llm_api_key:
                 llm_kwargs["api_key"] = self.config.llm_api_key
 
-        return HelloAgentsLLM(**llm_kwargs)
+        return TelemetryHelloAgentsLLM(**llm_kwargs)
 
     def _create_role_agent(
         self,
@@ -546,75 +547,105 @@ class DeepResearchAgent:
             session.request_cancellation()
             raise
 
-    def _execute_governed(
+    def resume(
         self,
         session: RunSession,
         prior_context: FollowupContext | None,
-        *,
-        operations: GovernedOperations,
-        root_scope: OperationScope,
-        run_search_adapter: HelloAgentsSearchAdapter | None,
     ) -> None:
-        """Execute the workflow without storing run scope on the coordinator."""
+        """Resume from a validated checkpoint without replaying safe work."""
+        if session.status is not RunStatus.RUNNING:
+            raise InvalidTransitionError("Coordinator requires a running recovery session.")
         session.raise_if_run_controlled()
+        operations = GovernedOperations(session, self._operation_authorizer)
+        root_scope = OperationScope(operations=operations)
+        phase = session.checkpoint_phase
+        if phase in {
+            "evidence_completed",
+            "report_before_generation",
+            "report_retry",
+            "report_retry_completed",
+        }:
+            self._generate_report(
+                session,
+                operations=operations,
+                root_scope=root_scope,
+            )
+            return
+        if phase == "report_generated":
+            return
+        run_search_adapter = (
+            HelloAgentsSearchAdapter()
+            if self._uses_default_search_adapter
+            else None
+        )
+        self._execute_governed(
+            session,
+            prior_context,
+            operations=operations,
+            root_scope=root_scope,
+            run_search_adapter=run_search_adapter,
+            resume_from_checkpoint=True,
+        )
 
-        planning_state = session.state
+    def retry_report(
+        self,
+        session: RunSession,
+        prior_context: FollowupContext | None = None,
+    ) -> None:
+        """Regenerate only the final report after a structural validation failure.
+
+        Research tasks have already completed at this point.  Retrying the
+        reporter in-place keeps the run identity and task checkpoints stable
+        and avoids repeating network research merely because the first LLM
+        response was truncated.
+        """
+        del prior_context  # The completed task notes are the retry context.
+        if session.status is not RunStatus.RUNNING:
+            raise InvalidTransitionError("Report retry requires a running session.")
         session.raise_if_run_controlled()
-        github_context = self._prepare_github_context(
-            planning_state,
-            config=session.command.config,
+        operations = GovernedOperations(session, self._operation_authorizer)
+        root_scope = OperationScope(operations=operations)
+        session.persist_checkpoint("report_retry")
+        notes_context = self._read_all_task_notes(
+            session.state,
             operation_scope=root_scope,
         )
         session.raise_if_run_controlled()
-        if github_context is not None:
-            serialized = self._serialize_github_context(github_context)
-            repository_event = self._github_repository_event(github_context)
-            session.record_repository(
-                github_context=serialized,
-                repository=dict(repository_event["repository"]),
-                notices=list(repository_event["notices"]),
-                notice_codes=list(repository_event["notice_codes"]),
-            )
-            tasks = self._create_github_research_tasks(github_context.target)
-        else:
-            assembled_prior = ResearchContextAssembler().assemble(prior_context)
-            session.raise_if_run_controlled()
-            tasks = _call_with_operation_scope(
-                self.planner.plan_todo_list,
-                planning_state,
-                prior_context=assembled_prior,
+        with llm_telemetry_scope(session, role="reporter", retry_count=1):
+            report = _call_with_operation_scope(
+                self.reporting.generate_report,
+                session.state,
+                notes_context,
                 operation_scope=root_scope,
             )
-            session.raise_if_run_controlled()
-
-        if not tasks:
-            logger.info("No TODO items generated; falling back to single task")
-            tasks = [self.planner.create_fallback_task(planning_state)]
-
-        planned = [TodoItem(**task.to_dict()) for task in tasks]
-        for task in planned:
-            task.status = "pending"
-            task.summary = None
-            task.sources_summary = None
-            task.stream_token = f"task_{task.id}"
-
         session.raise_if_run_controlled()
-        self._create_task_notes_for_tasks(
-            planned,
+        note_metadata = self._save_conclusion_note(
+            session.command.topic,
+            report,
             cancellation=session.cancellation,
-            operations=operations,
+            operation_scope=root_scope,
         )
-        session.raise_if_run_controlled()
-        session.install_plan(planned)
-        work_items = self._prepare_work_items(
-            session,
-            operations=operations,
-            search_adapter=run_search_adapter,
-        )
-        self._execute_work_items(session, work_items)
-        session.raise_if_run_controlled()
+        note_id: str | None = None
+        note_path: str | None = None
+        if note_metadata is not None:
+            note_id, note_path, note_title = note_metadata
+            session.record_report_note(
+                note_id=note_id,
+                note_path=note_path,
+                title=note_title,
+            )
+        session.set_report(report, note_id=note_id, note_path=note_path)
+        session.persist_checkpoint("report_retry_completed")
 
-        session.raise_if_run_controlled()
+    def _generate_report(
+        self,
+        session: RunSession,
+        *,
+        operations: GovernedOperations,
+        root_scope: OperationScope,
+    ) -> None:
+        """Generate only the report after research evidence is durable."""
+        session.persist_checkpoint("report_before_generation")
         notes_context = self._read_all_task_notes(
             session.state,
             operation_scope=root_scope,
@@ -644,6 +675,112 @@ class DeepResearchAgent:
                 title=note_title,
             )
         session.set_report(report, note_id=note_id, note_path=note_path)
+        session.persist_checkpoint("report_generated")
+
+    def _execute_governed(
+        self,
+        session: RunSession,
+        prior_context: FollowupContext | None,
+        *,
+        operations: GovernedOperations,
+        root_scope: OperationScope,
+        run_search_adapter: HelloAgentsSearchAdapter | None,
+        resume_from_checkpoint: bool = False,
+    ) -> None:
+        """Execute the workflow without storing run scope on the coordinator."""
+        session.raise_if_run_controlled()
+
+        planning_state = session.state
+        checkpoint_phase = session.checkpoint_phase
+        resuming_tasks = (
+            resume_from_checkpoint
+            and checkpoint_phase
+            in {"planning_completed", "research_tasks_progress"}
+            and bool(session.state.todo_items)
+        )
+        if resuming_tasks:
+            planned = [TodoItem(**task.to_dict()) for task in session.state.todo_items]
+            pending_tasks = [
+                task
+                for task in planned
+                if task.status in {"pending", "in_progress"}
+            ]
+            self._create_task_notes_for_tasks(
+                [task for task in pending_tasks if not task.note_id],
+                cancellation=session.cancellation,
+                operations=operations,
+            )
+        else:
+            session.raise_if_run_controlled()
+            github_context = self._prepare_github_context(
+                planning_state,
+                config=session.command.config,
+                operation_scope=root_scope,
+            )
+            session.raise_if_run_controlled()
+            if github_context is not None:
+                serialized = self._serialize_github_context(github_context)
+                repository_event = self._github_repository_event(github_context)
+                session.record_repository(
+                    github_context=serialized,
+                    repository=dict(repository_event["repository"]),
+                    notices=list(repository_event["notices"]),
+                    notice_codes=list(repository_event["notice_codes"]),
+                )
+                tasks = self._create_github_research_tasks(github_context.target)
+            else:
+                assembled_prior = ResearchContextAssembler().assemble(prior_context)
+                related_history = session.related_history_context or None
+                user_memories = session.user_memory_context or None
+                session.raise_if_run_controlled()
+                planner_kwargs: dict[str, object] = {
+                    "prior_context": assembled_prior,
+                }
+                if related_history:
+                    planner_kwargs["related_history"] = related_history
+                if user_memories:
+                    planner_kwargs["user_memories"] = user_memories
+                tasks = _call_with_operation_scope(
+                    self.planner.plan_todo_list,
+                    planning_state,
+                    **planner_kwargs,
+                    operation_scope=root_scope,
+                )
+                session.raise_if_run_controlled()
+
+            if not tasks:
+                logger.info("No TODO items generated; falling back to single task")
+                tasks = [self.planner.create_fallback_task(planning_state)]
+
+            planned = [TodoItem(**task.to_dict()) for task in tasks]
+            for task in planned:
+                task.status = "pending"
+                task.summary = None
+                task.sources_summary = None
+                task.stream_token = f"task_{task.id}"
+
+            session.raise_if_run_controlled()
+            self._create_task_notes_for_tasks(
+                planned,
+                cancellation=session.cancellation,
+                operations=operations,
+            )
+            session.raise_if_run_controlled()
+            session.install_plan(planned)
+            session.persist_checkpoint("planning_completed")
+        work_items = self._prepare_work_items(
+            session,
+            operations=operations,
+            search_adapter=run_search_adapter,
+        )
+        self._execute_work_items(session, work_items)
+        session.raise_if_run_controlled()
+        session.persist_checkpoint("evidence_completed")
+        self._generate_report(
+            session,
+            operations=operations,
+            root_scope=root_scope,
+        )
 
     def _prepare_work_items(
         self,
@@ -659,6 +796,8 @@ class DeepResearchAgent:
         items: list[_TaskWorkItem] = []
         for index, task in enumerate(session.state.todo_items):
             session.raise_if_run_controlled()
+            if task.status in {"completed", "failed", "skipped", "cancelled"}:
+                continue
             note_content = ""
             note_context = self._read_task_note(
                 task,
@@ -751,6 +890,12 @@ class DeepResearchAgent:
                         message,
                         operations=operations,
                     )
+                    if message.kind in {
+                        _WorkerMessageKind.COMPLETED,
+                        _WorkerMessageKind.SKIPPED,
+                        _WorkerMessageKind.FAILED,
+                    }:
+                        session.persist_checkpoint("research_tasks_progress")
 
                 completed = [future for future in active if future.done()]
                 for future in completed:
@@ -778,6 +923,7 @@ class DeepResearchAgent:
                                 task_id=item.task_id,
                             ),
                         )
+                        session.persist_checkpoint("research_tasks_progress")
                 fill_active_slots()
 
             while True:

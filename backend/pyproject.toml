@@ -75,6 +75,11 @@ convention = "google"
 mypy_path = ["src", "typings"]
 explicit_package_bases = true
 
+[tool.pytest.ini_options]
+markers = [
+    "fault_injection: process-level crash and recovery acceptance tests",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.11.1",

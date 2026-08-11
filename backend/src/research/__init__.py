@@ -10,10 +10,20 @@ from .contracts import (
     RunSnapshot,
     RunStatus,
 )
+from .history import HistoryCursorError, HistoryPage, ResearchHistoryStore
+from .memory import (
+    MemoryNotFoundError,
+    MemoryStateError,
+    MemoryStoreUnavailableError,
+    MemoryValidationError,
+    UserMemory,
+    UserMemoryStore,
+)
 from .session import (
     NEVER_CANCELLED,
     CancellationRequestedError,
     CancellationToken,
+    CheckpointPersistenceError,
     InvalidTransitionError,
     RunSession,
 )
@@ -21,8 +31,11 @@ from .session import (
 __all__ = [
     "NEVER_CANCELLED",
     "CancellationRequestedError",
+    "CheckpointPersistenceError",
     "CancellationToken",
     "EventKind",
+    "HistoryCursorError",
+    "HistoryPage",
     "InvalidTransitionError",
     "PreparedTerminal",
     "ResearchCommand",
@@ -32,4 +45,11 @@ __all__ = [
     "RunSession",
     "RunSnapshot",
     "RunStatus",
+    "ResearchHistoryStore",
+    "MemoryNotFoundError",
+    "MemoryStateError",
+    "MemoryStoreUnavailableError",
+    "MemoryValidationError",
+    "UserMemory",
+    "UserMemoryStore",
 ]

@@ -88,6 +88,11 @@
               </button>
             </div>
 
+            <label class="memory-toggle">
+              <input v-model="form.useHistoryMemory" type="checkbox" />
+              <span>自动参考相关历史（本次可关闭）</span>
+            </label>
+
             <button
               v-if="loading"
               class="plain-button full-button"
@@ -100,6 +105,124 @@
 
           <p v-if="error" class="error-banner">
             {{ error }}
+          </p>
+        </section>
+
+        <section class="surface-card history-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">研究历史</p>
+              <h2>浏览并继续</h2>
+            </div>
+            <button
+              class="link-button"
+              type="button"
+              :disabled="historyLoading || loading"
+              @click="loadHistory()"
+            >
+              {{ historyLoading ? "加载中" : "刷新" }}
+            </button>
+          </div>
+          <div v-if="historyItems.length" class="history-list">
+            <button
+              v-for="item in historyItems"
+              :key="item.run_id"
+              class="history-item"
+              type="button"
+              :disabled="loading"
+              @click="openHistory(item)"
+            >
+              <span class="history-item-title">{{ item.topic }}</span>
+              <span class="history-item-meta">
+                {{ formatHistoryDate(item.completed_at || item.started_at) }} ·
+                {{ item.task_count }} 个任务
+              </span>
+              <span v-if="item.report_excerpt" class="history-item-excerpt">
+                {{ item.report_excerpt }}
+              </span>
+            </button>
+          </div>
+          <p v-else class="empty-copy">
+            {{ historyError || "完成一次研究后，历史记录会出现在这里。" }}
+          </p>
+          <button
+            v-if="historyCursor"
+            class="plain-button full-button history-more"
+            type="button"
+            :disabled="historyLoading || loading"
+            @click="loadHistory(historyCursor)"
+          >
+            加载更多
+          </button>
+        </section>
+
+        <section class="surface-card memory-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">用户记忆</p>
+              <h2>确认后才会使用</h2>
+            </div>
+            <button
+              class="link-button"
+              type="button"
+              :disabled="memoryLoading || loading"
+              @click="loadMemories()"
+            >
+              {{ memoryLoading ? "加载中" : "刷新" }}
+            </button>
+          </div>
+          <form class="memory-form" @submit.prevent="saveMemoryCandidate">
+            <label class="field">
+              <span>记住一条偏好或事实</span>
+              <textarea
+                v-model="memoryDraft"
+                rows="2"
+                maxlength="240"
+                placeholder="例如：我偏好用简洁的中文报告"
+              ></textarea>
+            </label>
+            <div class="field-row">
+              <select v-model="memoryKind" aria-label="记忆类型">
+                <option value="preference">偏好</option>
+                <option value="fact">事实</option>
+              </select>
+              <button class="plain-button" type="submit" :disabled="memoryLoading || !memoryDraft.trim()">
+                提交待确认
+              </button>
+            </div>
+          </form>
+          <p v-if="memoryError" class="error-banner">{{ memoryError }}</p>
+          <div v-if="userMemories.length" class="memory-list">
+            <article v-for="memory in userMemories" :key="memory.memory_id" class="memory-item">
+              <div class="memory-item-main">
+                <span class="status-tag" :class="memory.status === 'confirmed' ? 'completed' : 'pending'">
+                  {{ memory.status === "confirmed" ? "已确认" : "待确认" }}
+                </span>
+                <span class="memory-item-text">{{ memory.text }}</span>
+              </div>
+              <div class="memory-item-actions">
+                <button
+                  v-if="memory.status === 'pending'"
+                  class="link-button"
+                  type="button"
+                  :disabled="memoryLoading || loading"
+                  @click="confirmUserMemory(memory)"
+                >
+                  确认
+                </button>
+                <button
+                  class="link-button danger-link"
+                  type="button"
+                  :disabled="memoryLoading || loading"
+                  @click="removeUserMemory(memory)"
+                >
+                  删除
+                </button>
+              </div>
+            </article>
+          </div>
+          <p v-else-if="!memoryLoading" class="empty-copy">
+            还没有用户记忆；研究报告不会自动写入这里。
           </p>
         </section>
 
@@ -159,7 +282,14 @@
               <strong>{{ progressLogs.length }}</strong>
               <span>事件</span>
             </div>
+            <div class="metric">
+              <strong>{{ historyRecallCount }}</strong>
+              <span>相关历史</span>
+            </div>
           </div>
+          <p v-if="streamTelemetry" class="telemetry-copy">
+            {{ streamTelemetryLabel }}
+          </p>
         </section>
 
         <section class="surface-card task-list-card">
@@ -248,7 +378,7 @@
           <section v-if="currentTask" class="surface-card task-overview">
             <div class="task-query">
               <p class="eyebrow">查询</p>
-              <h2>{{ currentTaskQuery || form.topic }}</h2>
+              <h2>{{ currentTaskQuery || currentTopic || form.topic }}</h2>
               <p v-if="currentTaskNotePath" class="note-path">
                 <span>笔记路径</span>
                 <button
@@ -360,7 +490,7 @@
             </span>
           </div>
           <p class="muted-copy">
-            {{ form.topic || "等待研究主题" }}
+            {{ currentTopic || form.topic || "等待研究主题" }}
           </p>
         </section>
 
@@ -426,7 +556,7 @@
             </div>
           </div>
 
-          <template v-if="reportMarkdown && !loading">
+          <template v-if="(reportMarkdown || resumableRunId) && !loading">
             <div v-if="!continueMode" class="report-actions">
               <button class="plain-button" type="button" @click="downloadReport">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -439,7 +569,7 @@
               <button
                 class="primary-button"
                 type="button"
-                :disabled="!currentRunId"
+                :disabled="!resumableRunId"
                 @click="continueMode = true"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -454,11 +584,15 @@
               <label class="field">
                 <span>追问主题</span>
                 <textarea
-                  v-model="form.topic"
+                  v-model="form.followupTopic"
                   placeholder="基于刚才的研究结果，进一步追问..."
                   rows="4"
                   required
                 ></textarea>
+              </label>
+              <label class="memory-toggle">
+                <input v-model="form.useHistoryMemory" type="checkbox" />
+                <span>同时参考其他相关历史（精确续跑仍保留）</span>
               </label>
               <div class="report-actions">
                 <button class="primary-button" type="submit" :disabled="loading">
@@ -485,14 +619,23 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, onBeforeUnmount, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { marked } from "marked";
 
 import {
+  confirmMemory,
+  createMemoryCandidate,
+  deleteMemory,
+  listMemories,
   runContinueStream,
   runResearchStream,
+  getRunRecord,
+  listHistory,
   type ContinueRequest,
+  type HistoryItem,
   type ResearchStreamEvent,
+  type StreamTelemetry,
+  type UserMemory,
 } from "./services/api";
 
 marked.setOptions({
@@ -535,7 +678,9 @@ interface TodoTaskView {
 
 const form = reactive({
   topic: "",
+  followupTopic: "",
   searchApi: "",
+  useHistoryMemory: true,
 });
 
 const loading = ref(false);
@@ -546,6 +691,19 @@ const todoTasks = ref<TodoTaskView[]>([]);
 const activeTaskId = ref<number | null>(null);
 const reportMarkdown = ref("");
 const currentRunId = ref<string | null>(null);
+const resumableRunId = ref<string | null>(null);
+const streamTelemetry = ref<StreamTelemetry | null>(null);
+const currentTopic = ref("");
+const historyItems = ref<HistoryItem[]>([]);
+const historyCursor = ref<string | null>(null);
+const historyLoading = ref(false);
+const historyError = ref("");
+const historyRecallCount = ref(0);
+const userMemories = ref<UserMemory[]>([]);
+const memoryDraft = ref("");
+const memoryKind = ref<"preference" | "fact">("preference");
+const memoryLoading = ref(false);
+const memoryError = ref("");
 const continueMode = ref(false);
 const summaryHighlight = ref(false);
 const sourcesHighlight = ref(false);
@@ -633,6 +791,16 @@ const statusTone = computed(() => {
   if (reportMarkdown.value) return "completed";
   return "pending";
 });
+const streamTelemetryLabel = computed(() => {
+  const telemetry = streamTelemetry.value;
+  if (!telemetry) return "";
+  const duration = `${Math.round(telemetry.duration_ms)} ms`;
+  const firstEvent = telemetry.first_event_latency_ms === null
+    ? "--"
+    : `${Math.round(telemetry.first_event_latency_ms)} ms`;
+  const state = telemetry.stream_completed ? "正常结束" : "中途结束";
+  return `SSE ${state} · ${telemetry.event_count} 事件 · 首事件 ${firstEvent} · 总时长 ${duration}`;
+});
 
 const sanitizeHtml = (html: string): string =>
   html
@@ -675,6 +843,129 @@ function clearAnimations() {
   clearTimeout(pulseTimer);
   pulseRaf = 0;
   pulseTimer = 0;
+}
+
+function formatHistoryDate(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+async function loadHistory(cursor?: string | null): Promise<void> {
+  if (historyLoading.value) return;
+  historyLoading.value = true;
+  historyError.value = "";
+  try {
+    const page = await listHistory(20, cursor || undefined);
+    historyItems.value = cursor
+      ? [...historyItems.value, ...page.items]
+      : page.items;
+    historyCursor.value = page.next_cursor;
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : "无法加载研究历史";
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+async function loadMemories(): Promise<void> {
+  memoryLoading.value = true;
+  memoryError.value = "";
+  try {
+    const page = await listMemories("default", true, 50);
+    userMemories.value = page.items;
+  } catch (err) {
+    memoryError.value = err instanceof Error ? err.message : "无法加载用户记忆";
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function saveMemoryCandidate(): Promise<void> {
+  const text = memoryDraft.value.trim();
+  if (!text || memoryLoading.value) return;
+  memoryLoading.value = true;
+  memoryError.value = "";
+  try {
+    await createMemoryCandidate(text, memoryKind.value, "default");
+    memoryDraft.value = "";
+    await loadMemories();
+  } catch (err) {
+    memoryError.value = err instanceof Error ? err.message : "无法保存记忆候选";
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function confirmUserMemory(memory: UserMemory): Promise<void> {
+  if (memoryLoading.value) return;
+  memoryLoading.value = true;
+  memoryError.value = "";
+  try {
+    await confirmMemory(memory.memory_id, memory.scope);
+    await loadMemories();
+  } catch (err) {
+    memoryError.value = err instanceof Error ? err.message : "无法确认记忆";
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function removeUserMemory(memory: UserMemory): Promise<void> {
+  if (memoryLoading.value) return;
+  memoryLoading.value = true;
+  memoryError.value = "";
+  try {
+    await deleteMemory(memory.memory_id, memory.scope);
+    await loadMemories();
+  } catch (err) {
+    memoryError.value = err instanceof Error ? err.message : "无法删除记忆";
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function openHistory(item: HistoryItem): Promise<void> {
+  if (loading.value || historyLoading.value) return;
+  historyLoading.value = true;
+  historyError.value = "";
+  try {
+    const record = await getRunRecord(item.run_id);
+    const output = ensureRecord(record.output);
+    resetWorkflowState();
+    currentRunId.value = record.run_id;
+    resumableRunId.value =
+      record.resumable === false
+        ? record.last_resumable_parent ?? null
+        : record.run_id;
+    currentTopic.value = record.topic || item.topic;
+    form.topic = "";
+    form.followupTopic = "";
+    todoTasks.value = normalizeTasks(output.todo_items);
+    if (todoTasks.value.length) {
+      activeTaskId.value = todoTasks.value[0].id;
+    }
+    reportMarkdown.value =
+      extractOptionalString(output.report_markdown) ??
+      extractOptionalString(output.running_summary) ??
+      "";
+    progressLogs.value = [`已恢复历史研究：${currentTopic.value}`];
+    historyRecallCount.value = 0;
+    try {
+      window.localStorage.setItem("helloagents:last-run-id", record.run_id);
+    } catch {
+      // Local storage is optional; the history API remains authoritative.
+    }
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : "无法加载研究记录";
+  } finally {
+    historyLoading.value = false;
+  }
 }
 
 function parseSources(raw: string): SourceItem[] {
@@ -816,7 +1107,7 @@ function createTaskView(item: Record<string, unknown>, index: number): TodoTaskV
     id,
     title: extractOptionalString(item.title) ?? `任务 ${id}`,
     intent: extractOptionalString(item.intent) ?? "探索与主题相关的关键信息",
-    query: extractOptionalString(item.query) ?? form.topic.trim(),
+    query: extractOptionalString(item.query) ?? (currentTopic.value || form.topic).trim(),
     status: extractOptionalString(item.status) ?? "pending",
     summary: extractOptionalString(item.summary) ?? "",
     sourcesSummary,
@@ -907,29 +1198,74 @@ async function copyNotePath(path: string | null | undefined) {
   }
 }
 
-function resetWorkflowState(options: { preserveRunId?: boolean } = {}) {
+function resetWorkflowState(
+  options: {
+    preserveRunId?: boolean;
+    preserveResumableRunId?: boolean;
+  } = {},
+) {
   clearAnimations();
   todoTasks.value = [];
   activeTaskId.value = null;
   reportMarkdown.value = "";
+  streamTelemetry.value = null;
   progressLogs.value = [];
   summaryHighlight.value = false;
   sourcesHighlight.value = false;
   reportHighlight.value = false;
   toolHighlight.value = false;
+  historyRecallCount.value = 0;
   logsCollapsed.value = false;
   continueMode.value = false;
   error.value = "";
   if (!options.preserveRunId) {
     currentRunId.value = null;
+    currentTopic.value = "";
+  }
+  if (!options.preserveResumableRunId) {
+    resumableRunId.value = null;
   }
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
   const payload = event as Record<string, unknown>;
 
+  if (event.stream_telemetry) {
+    streamTelemetry.value = event.stream_telemetry;
+  }
+
   if (typeof payload.run_id === "string" && payload.run_id.trim()) {
     currentRunId.value = payload.run_id.trim();
+  }
+
+  if (event.type === "history_recalled") {
+    const count =
+      typeof payload.match_count === "number" &&
+      Number.isFinite(payload.match_count)
+        ? Math.max(0, Math.floor(payload.match_count))
+        : 0;
+    historyRecallCount.value = count;
+    progressLogs.value.push(
+      count ? `已参考 ${count} 条相关历史研究` : "未找到高相关历史研究",
+    );
+    return;
+  }
+
+  if (event.type === "done") {
+    if (event.resumable !== false && currentRunId.value) {
+      resumableRunId.value = currentRunId.value;
+    } else if (typeof event.last_resumable_parent === "string") {
+      resumableRunId.value = event.last_resumable_parent;
+    }
+    try {
+      if (currentRunId.value) {
+        window.localStorage.setItem("helloagents:last-run-id", currentRunId.value);
+      }
+    } catch {
+      // Local storage is optional.
+    }
+    void loadHistory();
+    return;
   }
 
   if (event.type === "status") {
@@ -1091,6 +1427,12 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "error") {
+    if (
+      typeof payload.last_resumable_parent === "string" &&
+      payload.last_resumable_parent.trim()
+    ) {
+      resumableRunId.value = payload.last_resumable_parent.trim();
+    }
     error.value = extractOptionalString(payload.detail) ?? "研究过程中发生错误";
     progressLogs.value.push("研究失败，已停止流程");
   }
@@ -1102,12 +1444,15 @@ const handleSubmit = async () => {
     return;
   }
 
+  const topic = form.topic.trim();
+
   if (currentController) {
     currentController.abort();
     currentController = null;
   }
 
   resetWorkflowState();
+  currentTopic.value = topic;
   loading.value = true;
 
   const controller = new AbortController();
@@ -1116,8 +1461,9 @@ const handleSubmit = async () => {
   try {
     await runResearchStream(
       {
-        topic: form.topic.trim(),
+        topic,
         search_api: form.searchApi || undefined,
+        use_history_memory: form.useHistoryMemory,
       },
       handleStreamEvent,
       { signal: controller.signal }
@@ -1141,26 +1487,33 @@ const handleSubmit = async () => {
 };
 
 const handleContinue = async () => {
-  if (!currentRunId.value) {
+  const parentRunId = resumableRunId.value || currentRunId.value;
+  if (!parentRunId) {
     error.value = "未找到上一轮研究记录，无法继续";
     return;
   }
-  if (!form.topic.trim()) {
+  if (!form.followupTopic.trim()) {
     error.value = "请输入追问的研究主题";
     return;
   }
 
-  const parentRunId = currentRunId.value;
-  resetWorkflowState({ preserveRunId: true });
+  const topic = form.followupTopic.trim();
+
+  resetWorkflowState({
+    preserveRunId: true,
+    preserveResumableRunId: true,
+  });
+  currentTopic.value = topic;
   loading.value = true;
 
   const controller = new AbortController();
   currentController = controller;
 
   const continuePayload: ContinueRequest = {
-    topic: form.topic.trim(),
+    topic,
     parent_run_id: parentRunId,
     search_api: form.searchApi || undefined,
+    use_history_memory: form.useHistoryMemory,
   };
 
   try {
@@ -1199,7 +1552,9 @@ const startNewResearch = () => {
   }
   resetWorkflowState();
   form.topic = "";
+  form.followupTopic = "";
   form.searchApi = "";
+  form.useHistoryMemory = true;
 };
 
 const downloadReport = () => {
@@ -1216,6 +1571,27 @@ const downloadReport = () => {
   link.click();
   URL.revokeObjectURL(url);
 };
+
+onMounted(() => {
+  void (async () => {
+    await loadHistory();
+    // Rehydrate the selected run after a browser refresh so the continuation
+    // anchor is available before the user starts the next follow-up.
+    let lastRunId = "";
+    try {
+      lastRunId = window.localStorage.getItem("helloagents:last-run-id") || "";
+    } catch {
+      // Local storage is optional; the history list remains authoritative.
+    }
+    if (lastRunId) {
+      const lastRun = historyItems.value.find((item) => item.run_id === lastRunId);
+      if (lastRun) {
+        await openHistory(lastRun);
+      }
+    }
+  })();
+  void loadMemories();
+});
 
 onBeforeUnmount(() => {
   clearAnimations();
@@ -1395,6 +1771,122 @@ p {
   border-radius: 8px;
   background: var(--color-surface);
   padding: 14px;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.history-item {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 8px;
+  background: #fbfffd;
+  padding: 10px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.history-item:hover:not(:disabled) {
+  background: #f1fffb;
+  border-color: var(--color-primary);
+}
+
+.history-item-title {
+  color: var(--color-foreground-strong);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.history-item-meta,
+.history-item-excerpt {
+  color: #5f7d78;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.history-item-excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.history-more {
+  margin-top: 10px;
+}
+
+.memory-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.memory-form .field-row {
+  align-items: center;
+}
+
+.memory-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.memory-item {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 8px;
+  background: #fbfffd;
+  padding: 10px;
+}
+
+.memory-item-main,
+.memory-item-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.memory-item-text {
+  color: var(--color-foreground-strong);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.memory-item-actions {
+  justify-content: flex-end;
+}
+
+.danger-link {
+  color: #b34f5f;
+}
+
+.memory-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #53716d;
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.memory-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-primary);
 }
 
 .surface-card + .surface-card,
@@ -1700,6 +2192,13 @@ button:disabled {
   margin-top: 4px;
   color: #5f7d78;
   font-size: 12px;
+}
+
+.telemetry-copy {
+  margin: 10px 0 0;
+  color: #5f7d78;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .task-list-card .empty-copy {

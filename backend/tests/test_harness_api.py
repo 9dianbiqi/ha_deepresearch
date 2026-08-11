@@ -407,6 +407,9 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(events[0]["type"], "status")
         self.assertEqual(events[0]["run_id"], "run-sync-001")
         self.assertEqual(events[-1]["type"], "done")
+        self.assertTrue(events[-1]["stream_telemetry"]["stream_completed"])
+        self.assertGreaterEqual(events[-1]["stream_telemetry"]["event_count"], 4)
+        self.assertGreater(events[-1]["stream_telemetry"]["bytes_sent"], 0)
         self.assertEqual(self.runner.last_stream_request.topic, "stream topic")
         self.assertEqual(self.runner.last_stream_request.caller_mode, "public")
 
@@ -477,9 +480,11 @@ class HarnessApiTests(unittest.TestCase):
             ("policy_rejected", "rejected", 403),
             ("operation_rejected", "rejected", 403),
             ("parent_not_found", "failed", 404),
+            ("parent_not_resumable", "failed", 409),
             ("parent_pending", "failed", 409),
             ("deadline_exceeded", "cancelled", 408),
             ("persistence_failed", "failed", 500),
+            ("report_incomplete", "report_incomplete", 500),
         ]
 
         for error_code, status, expected_status in cases:
@@ -565,6 +570,8 @@ class HarnessApiTests(unittest.TestCase):
                 self.assertEqual(events[-1]["schema_version"], 1)
                 self.assertIn("run_id", events[-1])
                 self.assertFalse(any(item["type"] == "done" for item in events))
+                self.assertFalse(events[-1]["stream_telemetry"]["stream_completed"])
+                self.assertEqual(events[-1]["stream_telemetry"]["terminal_type"], "error")
                 self.assertNotIn("stream-secret", json.dumps(events))
 
         self.assertTrue(all(iterator.closed for iterator in created))

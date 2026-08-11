@@ -40,18 +40,27 @@ _SEARCH_BACKENDS = frozenset(
 _TERMINAL_CODES = frozenset(
     {
         "cancelled",
+        "checkpoint_persistence_failed",
+        "checkpoint_corrupt",
+        "checkpoint_not_found",
+        "checkpoint_version_unsupported",
+        "run_not_resumable",
+        "recovery_unsupported",
         "deadline_exceeded",
         "context_projection_failed",
         "coordinator_failed",
         "invalid_command",
+        "invalid_run_id",
         "operation_rejected",
         "parent_corrupt",
         "parent_not_found",
+        "parent_not_resumable",
         "parent_pending",
         "persistence_failed",
         "policy_error",
         "policy_rejected",
         "repository_error",
+        "report_incomplete",
         "run_already_active",
         "run_failed",
         "run_rejected",
@@ -177,6 +186,8 @@ class LegacySseProjector:
 
         if event.kind is EventKind.RUN_STARTED:
             projected.update({"type": "status", "message": "初始化研究流程"})
+        elif event.kind is EventKind.RUN_RECOVERY_STARTED:
+            projected.update({"type": "status", "message": "从可信检查点恢复研究"})
         elif event.kind is EventKind.REPOSITORY_DETECTED:
             repository = _repository(payload.get("repository"))
             notices, notice_codes = _notice_fields(payload)
@@ -197,6 +208,13 @@ class LegacySseProjector:
                     "type": "todo_list",
                     "tasks": _tasks(payload.get("tasks")),
                     "step": 0,
+                }
+            )
+        elif event.kind is EventKind.HISTORY_RECALLED:
+            projected.update(
+                {
+                    "type": "history_recalled",
+                    "match_count": _optional_int(payload.get("match_count")) or 0,
                 }
             )
         elif event.kind in {
@@ -320,6 +338,16 @@ class LegacySseProjector:
             )
         elif event.kind is EventKind.RUN_COMPLETED:
             projected["type"] = "done"
+            if "resumable" in payload:
+                projected["resumable"] = bool(payload.get("resumable"))
+            if "recovery_resumable" in payload:
+                projected["recovery_resumable"] = bool(
+                    payload.get("recovery_resumable")
+                )
+            if "last_resumable_parent" in payload:
+                projected["last_resumable_parent"] = _optional_text(
+                    payload.get("last_resumable_parent")
+                )
         elif event.kind in {
             EventKind.RUN_FAILED,
             EventKind.RUN_REJECTED,
@@ -347,6 +375,18 @@ class LegacySseProjector:
                     "detail": detail,
                 }
             )
+            if "resumable" in payload:
+                projected["resumable"] = bool(payload.get("resumable"))
+            if "recovery_resumable" in payload:
+                projected["recovery_resumable"] = bool(
+                    payload.get("recovery_resumable")
+                )
+            if "last_resumable_parent" in payload:
+                projected["last_resumable_parent"] = _optional_text(
+                    payload.get("last_resumable_parent")
+                )
+            if "checkpoint" in payload:
+                projected["checkpoint"] = _optional_text(payload.get("checkpoint"))
         else:
             return None
 

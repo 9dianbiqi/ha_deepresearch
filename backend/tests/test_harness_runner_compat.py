@@ -93,7 +93,15 @@ class CompletingCoordinator:
             sources_summary="- Source https://example.test",
             original_query="query",
         )
-        session.set_report("# Report")
+        session.set_report(
+            "# Report\n\n"
+            "## Task 1: Task\n"
+            "The completed task produced a detailed summary with the available "
+            "evidence and its limitations recorded for follow-up.\n\n"
+            "## Findings and sources\n"
+            "The result is supported by the collected evidence. "
+            "Source: https://example.test/reference."
+        )
 
 
 class MinimalCompletingCoordinator:
@@ -101,7 +109,14 @@ class MinimalCompletingCoordinator:
 
     def execute(self, session: RunSession, prior_context: object) -> None:
         del prior_context
-        session.set_report("# Report")
+        session.set_report(
+            "# Report\n\n"
+            "## Findings\n"
+            "The run completed with no planned tasks; this bounded result is "
+            "available for follow-up and contains the relevant evidence.\n\n"
+            "## Sources\n"
+            "No external source was required for this synthetic compatibility run."
+        )
 
 
 @dataclass
@@ -1348,6 +1363,7 @@ def test_legacy_projector_allowlists_backend_and_terminal_codes() -> None:
         for kind, code in (
             (EventKind.RUN_REJECTED, "operation_rejected"),
             (EventKind.RUN_CANCELLED, "deadline_exceeded"),
+            (EventKind.RUN_FAILED, "report_incomplete"),
         )
     ]
 
@@ -1362,7 +1378,7 @@ def test_legacy_projector_allowlists_backend_and_terminal_codes() -> None:
     assert failed["code"] == "run_failed"
     assert [
         event["code"] for event in governed_terminals if event is not None
-    ] == ["operation_rejected", "deadline_exceeded"]
+    ] == ["operation_rejected", "deadline_exceeded", "report_incomplete"]
 
 
 def test_harness_result_exposes_stable_compatibility_error_code() -> None:

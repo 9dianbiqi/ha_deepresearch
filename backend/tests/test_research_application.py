@@ -20,6 +20,7 @@ from research.contracts import (
     EventKind,
     ResearchCommand,
     ResearchEvent,
+    RunError,
     RunSnapshot,
     RunStatus,
 )
@@ -82,6 +83,17 @@ class CompletingCoordinator:
         complete_session(session)
 
 
+VALID_REPORT = (
+    "# Report\n\n"
+    "## Task 1: T\n"
+    "The completed task produced a detailed summary for the research topic. "
+    "The evidence and limitations are recorded below.\n\n"
+    "## Findings and sources\n"
+    "The result is supported by the collected evidence and can be followed up "
+    "from the durable task notes. Source: https://example.test/reference."
+)
+
+
 def complete_session(session: Any) -> None:
     """Drive the supplied real session through valid domain transitions."""
     session.install_plan(
@@ -96,7 +108,25 @@ def complete_session(session: Any) -> None:
     session.metrics.update(
         {"source_count": 1, "secret_token": "metric-secret"}
     )
-    session.set_report("# report")
+    session.set_report(VALID_REPORT)
+
+
+class RetryReportCoordinator(CompletingCoordinator):
+    """Return one incomplete report, then a structurally complete retry."""
+
+    def __init__(self, *, retry_is_valid: bool) -> None:
+        super().__init__()
+        self.retry_is_valid = retry_is_valid
+        self.retry_count = 0
+
+    def execute(self, session: Any, prior_context: object) -> None:
+        super().execute(session, prior_context)
+        session.set_report("# Report")
+
+    def retry_report(self, session: Any, prior_context: object) -> None:
+        del prior_context
+        self.retry_count += 1
+        session.set_report(VALID_REPORT if self.retry_is_valid else "# Report")
 
 
 @dataclass(frozen=True)
@@ -198,7 +228,7 @@ class InvalidTerminalCoordinator(CompletingCoordinator):
         session.install_plan(
             [TodoItem(id=1, title="T", intent="I", query="q")]
         )
-        session.set_report("# report")
+        session.set_report(VALID_REPORT)
 
 
 class CancellingCoordinator(CompletingCoordinator):
@@ -363,6 +393,126 @@ def test_completion_is_observed_after_required_save(
     assert service._active_run_ids == set()
 
 
+def test_incomplete_first_report_is_retried_once_and_can_complete(
+    configuration: Configuration,
+) -> None:
+    repository = RecordingRepository()
+    coordinator = RetryReportCoordinator(retry_is_valid=True)
+
+    result = make_service(
+        repository=repository,
+        coordinator=coordinator,
+    ).execute(ResearchCommand(topic="topic", config=configuration))
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.error is None
+    assert coordinator.retry_count == 1
+    validation = result.metrics["report_validation"]
+    assert validation["retry_count"] == 1
+    assert len(validation["attempts"]) == 2
+    assert validation["final"]["valid"] is True
+    assert repository.snapshots[result.run_id].status is RunStatus.COMPLETED
+
+
+def test_two_incomplete_reports_persist_report_incomplete_terminal(
+    configuration: Configuration,
+) -> None:
+    repository = RecordingRepository()
+    coordinator = RetryReportCoordinator(retry_is_valid=False)
+
+    result = make_service(
+        repository=repository,
+        coordinator=coordinator,
+    ).execute(ResearchCommand(topic="topic", config=configuration))
+
+    assert result.status is RunStatus.REPORT_INCOMPLETE
+    assert result.error is not None
+    assert result.error.code == "report_incomplete"
+    assert coordinator.retry_count == 1
+    snapshot = repository.snapshots[result.run_id]
+    assert snapshot.status is RunStatus.REPORT_INCOMPLETE
+    assert snapshot.failure_reason == "report_incomplete"
+    assert snapshot.resumable is False
+    assert snapshot.error is not None
+    assert snapshot.error.code == "report_incomplete"
+    assert snapshot.events[-1].kind is EventKind.RUN_FAILED
+
+
+def test_nonresumable_parent_returns_last_resumable_anchor(
+    configuration: Configuration,
+) -> None:
+    anchor = uuid4().hex
+    failed_parent = uuid4().hex
+    now = datetime.now(timezone.utc)
+    repository = RecordingRepository()
+    repository.snapshots[failed_parent] = RunSnapshot(
+        run_id=failed_parent,
+        topic="failed parent",
+        status=RunStatus.FAILED,
+        started_at=now,
+        completed_at=now,
+        parent_run_id=anchor,
+        output={"running_summary": None, "report_markdown": None, "todo_items": []},
+        followup_context={},
+        metrics={},
+        policy_decisions=(),
+        config_snapshot={},
+        events=(),
+        error=RunError(code="coordinator_failed", message="failed"),
+        failure_reason="coordinator_failed",
+        checkpoint="run_failed",
+        resumable=False,
+        last_resumable_parent=anchor,
+    )
+
+    result = make_service(
+        repository=repository,
+        coordinator=CompletingCoordinator(),
+    ).execute(
+        ResearchCommand(
+            topic="follow-up",
+            config=configuration,
+            parent_run_id=failed_parent,
+        )
+    )
+
+    assert result.error is not None
+    assert result.error.code == "parent_not_resumable"
+    assert result.last_resumable_parent == anchor
+    failed_child = repository.snapshots[result.run_id]
+    assert failed_child.last_resumable_parent == anchor
+    assert failed_child.resumable is False
+
+
+def test_failed_followup_persists_the_valid_parent_as_continuation_anchor(
+    configuration: Configuration,
+) -> None:
+    parent_id = uuid4().hex
+    repository = RecordingRepository()
+    repository.snapshots[parent_id] = make_parent_snapshot(run_id=parent_id)
+    events: list[ResearchEvent] = []
+
+    result = make_service(
+        repository=repository,
+        coordinator=RaisingCoordinator(),
+    ).execute(
+        ResearchCommand(
+            topic="follow-up",
+            config=configuration,
+            parent_run_id=parent_id,
+        ),
+        observer=events.append,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.last_resumable_parent == parent_id
+    snapshot = repository.snapshots[result.run_id]
+    assert snapshot.last_resumable_parent == parent_id
+    assert snapshot.resumable is False
+    assert events[-1].kind is EventKind.RUN_FAILED
+    assert events[-1].payload["last_resumable_parent"] == parent_id
+
+
 def test_persistence_failure_emits_one_failure_and_never_completion(
     configuration: Configuration,
 ) -> None:
@@ -382,7 +532,9 @@ def test_persistence_failure_emits_one_failure_and_never_completion(
     assert result.error is not None
     assert result.error.code == "persistence_failed"
     assert "secret" not in result.error.message
-    assert repository.save_count == 1
+    # The completed save fails, then the required failed terminal attempts a
+    # second durable save before the result is released.
+    assert repository.save_count == 2
     assert EventKind.RUN_COMPLETED not in events
     assert events.count(EventKind.RUN_FAILED) == 1
     assert service._active_run_ids == set()
@@ -440,7 +592,8 @@ def test_policy_rejection_never_loads_saves_or_calls_coordinator(
         },
     )
     assert repository.load_count == 0
-    assert repository.save_count == 0
+    assert repository.save_count == 1
+    assert repository.snapshots[result.run_id].status is RunStatus.REJECTED
     assert coordinator.call_count == 0
     assert events == [EventKind.RUN_REJECTED]
     assert service._active_run_ids == set()
@@ -970,7 +1123,8 @@ def test_precancelled_command_never_calls_coordinator_or_repository(
     assert result.error is not None
     assert result.error.code == "cancelled"
     assert coordinator.call_count == 0
-    assert repository.save_count == 0
+    assert repository.save_count == 1
+    assert repository.snapshots[result.run_id].status is RunStatus.CANCELLED
     assert events[0].kind is EventKind.RUN_CANCELLED
     assert events[0].sequence == 1
     assert service._active_run_ids == set()
@@ -993,7 +1147,8 @@ def test_cancellation_before_save_uses_same_token_and_emits_no_completion(
 
     assert result.status is RunStatus.CANCELLED
     assert coordinator.sessions[0].cancellation_token is token
-    assert repository.save_count == 0
+    assert repository.save_count == 1
+    assert repository.snapshots[result.run_id].status is RunStatus.CANCELLED
     assert events.count(EventKind.RUN_CANCELLED) == 1
     assert EventKind.RUN_COMPLETED not in events
     assert service._active_run_ids == set()
@@ -1128,8 +1283,9 @@ def test_result_and_prepared_snapshot_include_only_safe_projections(
     snapshot = repository.snapshots[command.run_id]
     snapshot_wire = snapshot.as_dict()
 
-    assert result.metrics == {"source_count": 1}
-    assert snapshot.metrics == result.metrics
+    assert result.metrics["source_count"] == 1
+    assert result.metrics["report_validation"]["final"]["valid"] is True
+    assert snapshot_wire["metrics"] == result.metrics
     assert result.followup_context == snapshot_wire["followup_context"]
     assert result.followup_context["source_run_id"] == command.run_id
     assert result.policy_decisions == snapshot.policy_decisions
@@ -1185,7 +1341,7 @@ def test_prepared_terminal_freezes_late_nonterminal_transitions(
     assert result.status is RunStatus.COMPLETED
     assert isinstance(repository.mutation_error, InvalidTransitionError)
     assert result.output is not None
-    assert result.output.report_markdown == "# report"
+    assert result.output.report_markdown == VALID_REPORT
 
 
 @pytest.mark.parametrize("terminal_status", ["failed", "skipped"])
@@ -1205,7 +1361,14 @@ def test_current_long_open_question_title_does_not_fail_completion(
                 session.fail_task(1, message="failed", code="task_failed")
             else:
                 session.skip_task(1, reason="skipped")
-            session.set_report("# report")
+            session.set_report(
+                "# Report\n\n"
+                f"## Task 1: {long_title}\n"
+                "The task reached a terminal state and the available evidence "
+                "was retained for the follow-up context.\n\n"
+                "## Findings\n"
+                "No unresolved issue was found in this bounded run."
+            )
 
     result = make_service(
         repository=RecordingRepository(),

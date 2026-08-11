@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any, AsyncIterator, Dict, Iterator
+from time import monotonic
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, Literal
 from urllib.parse import urlsplit
 
 import anyio
@@ -18,6 +19,12 @@ from pydantic import BaseModel, Field
 
 from config import Configuration, SearchAPI
 from harness import HarnessRunner, HarnessRunRequest, build_default_scenarios
+from research.memory import (
+    MemoryNotFoundError,
+    MemoryStateError,
+    MemoryStoreUnavailableError,
+    MemoryValidationError,
+)
 from research.repository import (
     CorruptRunRecordError,
     InvalidRunIdError,
@@ -56,6 +63,16 @@ class ResearchRequest(BaseModel):
         default=None,
         description="Previous run_id for multi-turn follow-up research",
     )
+    use_history_memory: bool = Field(
+        default=True,
+        description="Automatically recall related completed research for planning",
+    )
+    memory_scope: str = Field(
+        default="default",
+        min_length=1,
+        max_length=64,
+        description="Local user-memory scope used by the planner",
+    )
 
 
 class ResearchResponse(BaseModel):
@@ -79,6 +96,30 @@ class ContinueRequest(BaseModel):
         default=None,
         description="Override the default search backend",
     )
+    use_history_memory: bool = Field(
+        default=True,
+        description="Automatically recall related completed research for planning",
+    )
+    memory_scope: str = Field(
+        default="default",
+        min_length=1,
+        max_length=64,
+        description="Local user-memory scope used by the planner",
+    )
+
+
+class RecoveryRequest(BaseModel):
+    """Payload for resuming one failed run from its durable checkpoint."""
+
+    run_id: str = Field(..., description="Persisted run ID to recover")
+
+
+class MemoryCandidateRequest(BaseModel):
+    """Payload for an explicit user memory candidate."""
+
+    text: str = Field(..., min_length=1, max_length=240)
+    kind: Literal["preference", "fact"] = "preference"
+    scope: str = Field(default="default", min_length=1, max_length=64)
 
 
 class HarnessRequest(ResearchRequest):
@@ -105,6 +146,9 @@ class HarnessResponse(BaseModel):
     findings: list[dict[str, Any]] = Field(default_factory=list)
     compressed_context: dict[str, Any] = Field(default_factory=dict)
     policy_decisions: list[dict[str, Any]] = Field(default_factory=list)
+    resumable: bool = False
+    recovery_resumable: bool = False
+    last_resumable_parent: str | None = None
     mode: str = "internal"
 
 
@@ -192,6 +236,8 @@ def _normalize_harness_request(
         permission_mode=permission_mode,
         caller_mode=caller_mode,
         parent_run_id=payload.parent_run_id,
+        use_history_memory=payload.use_history_memory,
+        memory_scope=payload.memory_scope,
     )
 
 
@@ -214,27 +260,41 @@ def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
         ],
         compressed_context=result.compressed_context,
         policy_decisions=result.policy_decisions,
+        resumable=bool(getattr(result, "resumable", False)),
+        recovery_resumable=bool(getattr(result, "recovery_resumable", False)),
+        last_resumable_parent=getattr(result, "last_resumable_parent", None),
         mode=mode,
     )
 
 
 _RUN_ERROR_RESPONSES: dict[str, tuple[int, str]] = {
     "invalid_command": (400, "The research command is invalid."),
+    "invalid_run_id": (400, "The recovery run ID is invalid."),
     "policy_rejected": (403, "The research command was rejected by policy."),
     "operation_rejected": (403, "A research operation was rejected by policy."),
     "parent_not_found": (404, "The parent run was not found."),
+    "parent_not_resumable": (409, "The parent run is not resumable."),
     "parent_pending": (409, "The parent run is not yet available."),
     "run_already_active": (409, "A run with this ID is already active."),
     "runner_busy": (409, "The research service is busy."),
     "cancelled": (409, "The research run was cancelled."),
     "deadline_exceeded": (408, "The research run deadline was exceeded."),
     "parent_corrupt": (500, "The parent run record is unavailable."),
+    "checkpoint_not_found": (404, "The recovery checkpoint was not found."),
+    "checkpoint_corrupt": (500, "The recovery checkpoint is corrupt."),
+    "checkpoint_version_unsupported": (501, "The recovery checkpoint version is unsupported."),
+    "checkpoint_not_resumable": (409, "The recovery checkpoint is not resumable."),
+    "run_not_resumable": (409, "The run has no valid recovery checkpoint."),
+    "recovery_unsupported": (501, "Run recovery is not supported by this coordinator."),
+    "recovery_state_conflict": (409, "The recovery state is no longer valid."),
+    "checkpoint_persistence_failed": (500, "The recovery checkpoint could not be persisted."),
     "repository_error": (500, "The run repository is unavailable."),
     "persistence_failed": (500, "The research run could not be persisted."),
     "policy_error": (500, "Research policy evaluation failed."),
     "coordinator_failed": (500, "Research coordination failed."),
     "terminal_validation_failed": (500, "Research result validation failed."),
     "context_projection_failed": (500, "Research context projection failed."),
+    "report_incomplete": (500, "The research report is incomplete."),
     "application_error": (500, "The research run failed."),
     "missing_terminal": (500, "The research run ended unexpectedly."),
 }
@@ -261,19 +321,27 @@ def _raise_for_failed_result(result: Any) -> None:
     raw_code = getattr(result, "error_code", None)
     code = raw_code if raw_code in _RUN_ERROR_RESPONSES else "application_error"
     status_code, message = _RUN_ERROR_RESPONSES[code]
-    raise _safe_http_error(status_code=status_code, code=code, message=message)
+    detail: dict[str, Any] = {"code": code, "message": message}
+    anchor = getattr(result, "last_resumable_parent", None)
+    if isinstance(anchor, str) and anchor:
+        detail["last_resumable_parent"] = anchor
+    raise HTTPException(status_code=status_code, detail=detail)
 
 
 def _stream_error_event(
-    request: HarnessRunRequest,
+    request: HarnessRunRequest | None,
     *,
     sequence: int,
     code: str = "stream_failed",
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Return the public, non-reflective stream failure envelope."""
+    resolved_run_id = request.run_id if request is not None else run_id
+    if not isinstance(resolved_run_id, str) or not resolved_run_id:
+        resolved_run_id = "unknown"
     return {
         "type": "error",
-        "run_id": request.run_id,
+        "run_id": resolved_run_id,
         "schema_version": 1,
         "sequence": sequence,
         "code": code,
@@ -294,13 +362,68 @@ def _next_or_end(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | object:
 
 async def _iter_sse_events(
     harness_runner: Any,
-    request: HarnessRunRequest,
+    request: HarnessRunRequest | None,
+    *,
+    stream_factory: Callable[[], Iterator[dict[str, Any]]] | None = None,
+    run_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Serialize one runner stream and own its terminal/error boundary."""
     iterator: Iterator[dict[str, Any]] | None = None
     next_sequence = 1
+    stream_started_at = monotonic()
+    event_count = 0
+    bytes_sent = 0
+    first_event_latency_ms: float | None = None
+    resolved_run_id = request.run_id if request is not None else run_id
+
+    def encode_event(event: dict[str, Any], *, terminal: bool = False) -> str:
+        """Serialize one SSE frame and attach bounded transport telemetry."""
+        nonlocal bytes_sent, event_count, first_event_latency_ms
+        event_count += 1
+        if first_event_latency_ms is None:
+            first_event_latency_ms = round(
+                max(0.0, monotonic() - stream_started_at) * 1000,
+                3,
+            )
+        rendered_event = dict(event)
+        previous_bytes = bytes_sent
+        if terminal:
+            telemetry = {
+                "duration_ms": round(
+                    max(0.0, monotonic() - stream_started_at) * 1000,
+                    3,
+                ),
+                "event_count": event_count,
+                "bytes_sent": 0,
+                "first_event_latency_ms": first_event_latency_ms,
+                "stream_completed": rendered_event.get("type") == "done",
+                "terminal_type": rendered_event.get("type"),
+            }
+            rendered_event["stream_telemetry"] = telemetry
+        rendered = (
+            f"data: {json.dumps(rendered_event, ensure_ascii=False)}\n\n"
+        )
+        if terminal:
+            terminal_telemetry = rendered_event.get("stream_telemetry")
+            if isinstance(terminal_telemetry, dict):
+                terminal_telemetry["bytes_sent"] = previous_bytes + len(
+                    rendered.encode("utf-8")
+                )
+                rendered = (
+                    f"data: {json.dumps(rendered_event, ensure_ascii=False)}\n\n"
+                )
+                bytes_sent = previous_bytes + len(rendered.encode("utf-8"))
+        else:
+            bytes_sent = previous_bytes + len(rendered.encode("utf-8"))
+        return rendered
+
     try:
-        iterator = iter(harness_runner.stream(request))
+        if stream_factory is not None:
+            iterator = iter(stream_factory())
+        else:
+            if request is None:
+                raise ValueError("A research request is required for a normal stream.")
+            iterator = iter(harness_runner.stream(request))
         while True:
             item = await anyio.to_thread.run_sync(
                 _next_or_end,
@@ -308,7 +431,14 @@ async def _iter_sse_events(
                 abandon_on_cancel=True,
             )
             if item is _STREAM_END:
-                yield f"data: {json.dumps(_stream_error_event(request, sequence=next_sequence), ensure_ascii=False)}\n\n"
+                yield encode_event(
+                    _stream_error_event(
+                        request,
+                        sequence=next_sequence,
+                        run_id=resolved_run_id,
+                    ),
+                    terminal=True,
+                )
                 return
             event = item
             if not isinstance(event, dict):
@@ -316,12 +446,20 @@ async def _iter_sse_events(
             sequence = event.get("sequence") if isinstance(event, dict) else None
             if isinstance(sequence, int) and not isinstance(sequence, bool):
                 next_sequence = max(next_sequence, sequence + 1)
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            if event.get("type") in {"done", "error"}:
+            terminal = event.get("type") in {"done", "error"}
+            yield encode_event(event, terminal=terminal)
+            if terminal:
                 return
     except Exception:
         logger.warning("Research stream failed at the SSE boundary.")
-        yield f"data: {json.dumps(_stream_error_event(request, sequence=next_sequence), ensure_ascii=False)}\n\n"
+        yield encode_event(
+            _stream_error_event(
+                request,
+                sequence=next_sequence,
+                run_id=resolved_run_id,
+            ),
+            terminal=True,
+        )
     finally:
         close = getattr(iterator, "close", None)
         if callable(close):
@@ -333,11 +471,19 @@ async def _iter_sse_events(
 
 def _streaming_response(
     harness_runner: Any,
-    request: HarnessRunRequest,
+    request: HarnessRunRequest | None,
+    *,
+    stream_factory: Callable[[], Iterator[dict[str, Any]]] | None = None,
+    run_id: str | None = None,
 ) -> StreamingResponse:
     """Build the shared SSE response for initial and follow-up research."""
     return StreamingResponse(
-        _iter_sse_events(harness_runner, request),
+        _iter_sse_events(
+            harness_runner,
+            request,
+            stream_factory=stream_factory,
+            run_id=run_id,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -451,6 +597,8 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 topic=payload.topic,
                 search_api=payload.search_api,
                 parent_run_id=payload.parent_run_id,
+                use_history_memory=payload.use_history_memory,
+                memory_scope=payload.memory_scope,
             )
             request = _normalize_harness_request(research_payload, caller_mode="public")
         except ValueError as exc:
@@ -461,6 +609,44 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
             ) from exc
 
         return _streaming_response(harness_runner, request)
+
+    @app.post("/research/recover", response_model=HarnessResponse)
+    def recover_research(payload: RecoveryRequest) -> HarnessResponse:
+        """Recover a failed run from its latest trusted checkpoint."""
+        try:
+            result = harness_runner.resume(payload.run_id)
+            _raise_for_failed_result(result)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_command",
+                message="The recovery request is invalid.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="application_error",
+                message="The research run could not be recovered.",
+            ) from exc
+        return _build_harness_response(result, mode="recovery")
+
+    @app.post("/research/recover/stream")
+    def recover_research_stream(payload: RecoveryRequest) -> StreamingResponse:
+        """Stream recovery events without creating a new run ID."""
+        if not isinstance(payload.run_id, str) or not payload.run_id.strip():
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_command",
+                message="The recovery request is invalid.",
+            )
+        return _streaming_response(
+            harness_runner,
+            None,
+            stream_factory=lambda: harness_runner.resume_stream(payload.run_id),
+            run_id=payload.run_id,
+        )
 
     @app.post("/harness/run", response_model=HarnessResponse)
     def run_harness(payload: HarnessRequest) -> HarnessResponse:
@@ -495,6 +681,207 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
             ) from exc
 
         return _build_harness_response(result, mode="internal")
+
+    @app.post("/harness/recover", response_model=HarnessResponse)
+    def recover_harness(payload: RecoveryRequest) -> HarnessResponse:
+        """Recover one harness run using the shared application service."""
+        try:
+            result = harness_runner.resume(payload.run_id)
+            _raise_for_failed_result(result)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_command",
+                message="The recovery request is invalid.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="application_error",
+                message="The research run could not be recovered.",
+            ) from exc
+        return _build_harness_response(result, mode="recovery")
+
+    @app.post("/harness/recover/stream")
+    def recover_harness_stream(payload: RecoveryRequest) -> StreamingResponse:
+        """Stream recovery events for a harness run."""
+        if not isinstance(payload.run_id, str) or not payload.run_id.strip():
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_command",
+                message="The recovery request is invalid.",
+            )
+        return _streaming_response(
+            harness_runner,
+            None,
+            stream_factory=lambda: harness_runner.resume_stream(payload.run_id),
+            run_id=payload.run_id,
+        )
+
+    @app.get("/memories")
+    def list_user_memories(
+        scope: str = "default",
+        include_pending: bool = True,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """List explicit candidates and confirmed local user memory."""
+        try:
+            list_memories = getattr(harness_runner, "list_memories")
+            result = list_memories(
+                scope=scope,
+                include_pending=include_pending,
+                limit=limit,
+            )
+            if not isinstance(result, dict):
+                raise TypeError("Memory listing returned an invalid shape.")
+            return result
+        except MemoryValidationError as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_memory",
+                message="The memory request is invalid.",
+            ) from exc
+        except (MemoryStoreUnavailableError, RuntimeError, AttributeError) as exc:
+            raise _safe_http_error(
+                status_code=503,
+                code="memory_unavailable",
+                message="User memory is unavailable.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="memory_error",
+                message="User memory could not be read.",
+            ) from exc
+
+    @app.post("/memories/candidates")
+    def create_memory_candidate(payload: MemoryCandidateRequest) -> dict[str, Any]:
+        """Create a pending candidate; confirmation is a separate user action."""
+        try:
+            create_candidate = getattr(harness_runner, "create_memory_candidate")
+            memory = create_candidate(
+                text=payload.text,
+                kind=payload.kind,
+                scope=payload.scope,
+            )
+            return memory.as_dict()
+        except MemoryValidationError as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_memory",
+                message="The memory candidate is invalid.",
+            ) from exc
+        except (MemoryStoreUnavailableError, RuntimeError, AttributeError) as exc:
+            raise _safe_http_error(
+                status_code=503,
+                code="memory_unavailable",
+                message="User memory is unavailable.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="memory_error",
+                message="The memory candidate could not be created.",
+            ) from exc
+
+    @app.post("/memories/{memory_id}/confirm")
+    def confirm_user_memory(memory_id: str, scope: str = "default") -> dict[str, Any]:
+        """Promote one pending candidate after explicit confirmation."""
+        try:
+            confirm_memory = getattr(harness_runner, "confirm_memory")
+            memory = confirm_memory(memory_id, scope=scope)
+            return memory.as_dict()
+        except MemoryNotFoundError as exc:
+            raise _safe_http_error(
+                status_code=404,
+                code="memory_not_found",
+                message="The memory was not found.",
+            ) from exc
+        except MemoryStateError as exc:
+            raise _safe_http_error(
+                status_code=409,
+                code="memory_state_invalid",
+                message="The memory cannot be confirmed in its current state.",
+            ) from exc
+        except MemoryValidationError as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_memory",
+                message="The memory request is invalid.",
+            ) from exc
+        except (MemoryStoreUnavailableError, RuntimeError, AttributeError) as exc:
+            raise _safe_http_error(
+                status_code=503,
+                code="memory_unavailable",
+                message="User memory is unavailable.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="memory_error",
+                message="The memory could not be confirmed.",
+            ) from exc
+
+    @app.delete("/memories/{memory_id}")
+    def delete_user_memory(memory_id: str, scope: str = "default") -> dict[str, Any]:
+        """Delete a pending or confirmed memory inside its scope."""
+        try:
+            delete_memory = getattr(harness_runner, "delete_memory")
+            deleted = delete_memory(memory_id, scope=scope)
+            if not deleted:
+                raise MemoryNotFoundError(memory_id)
+            return {"deleted": True, "memory_id": memory_id}
+        except MemoryNotFoundError as exc:
+            raise _safe_http_error(
+                status_code=404,
+                code="memory_not_found",
+                message="The memory was not found.",
+            ) from exc
+        except MemoryValidationError as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_memory",
+                message="The memory request is invalid.",
+            ) from exc
+        except (MemoryStoreUnavailableError, RuntimeError, AttributeError) as exc:
+            raise _safe_http_error(
+                status_code=503,
+                code="memory_unavailable",
+                message="User memory is unavailable.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="memory_error",
+                message="The memory could not be deleted.",
+            ) from exc
+
+    @app.get("/runs")
+    def list_harness_runs(
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """List completed run summaries for the local history browser."""
+        try:
+            list_history = getattr(harness_runner, "list_history")
+            result = list_history(limit=limit, cursor=cursor)
+            if not isinstance(result, dict):
+                raise TypeError("History listing returned an invalid shape.")
+            return result
+        except ValueError as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_history_cursor",
+                message="The history pagination request is invalid.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="repository_error",
+                message="The run repository is unavailable.",
+            ) from exc
 
     @app.get("/runs/{run_id}")
     @app.get("/harness/runs/{run_id}", deprecated=True)

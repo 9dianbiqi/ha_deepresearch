@@ -54,6 +54,31 @@ _POLICY_REASON_BY_OUTCOME = {
     "ask": "Capability requires explicit approval.",
 }
 
+_SAFE_REPLAY_OPERATION_PREFIXES = (
+    "planner.",
+    "summarizer.",
+    "reporter.",
+    "llm.",
+    "search.",
+    "github.",
+    "notes.read",
+)
+_SIDE_EFFECTING_OPERATION_PREFIXES = (
+    "notes.create",
+    "notes.update",
+)
+
+
+def operation_replay_safety(operation_name: object) -> str:
+    """Classify whether an operation may be safely replayed after recovery."""
+    if not isinstance(operation_name, str):
+        return "uncertain"
+    if operation_name.startswith(_SIDE_EFFECTING_OPERATION_PREFIXES):
+        return "side_effecting"
+    if operation_name.startswith(_SAFE_REPLAY_OPERATION_PREFIXES):
+        return "safe_replay"
+    return "uncertain"
+
 
 class OperationRejectedError(RuntimeError):
     """Signal that dynamic policy denied one governed operation."""
@@ -482,5 +507,6 @@ __all__ = [
     "OperationRejectedError",
     "OperationScope",
     "OperationSpec",
+    "operation_replay_safety",
     "validate_operation_error_code",
 ]

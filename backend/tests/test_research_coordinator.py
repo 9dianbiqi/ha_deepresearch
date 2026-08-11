@@ -225,7 +225,20 @@ class FakeReporter:
         self.states.append(state)
         self.operation_scopes.append(operation_scope)
         statuses = ",".join(task.status for task in state.todo_items)
-        return f"# Final report\n\nStatuses: {statuses}"
+        task_sections = "\n".join(
+            f"### Task {task.id}: {task.title}\n"
+            f"Status: {task.status}. Summary: {task.summary or 'none'}."
+            for task in state.todo_items
+        )
+        return (
+            "# Final report\n\n"
+            "## Task results\n"
+            f"{task_sections or 'No planned tasks were required.'}\n\n"
+            "## Findings\n"
+            f"The run reached terminal task states ({statuses or 'none'}). "
+            "The result is bounded, traceable, and ready for a follow-up. "
+            "Source: https://example.test/reference."
+        )
 
 
 class FakeNoteAdapter:
@@ -2124,7 +2137,9 @@ def test_reporting_service_exception_is_redacted_everywhere(caplog) -> None:
             observer=typed_events.append,
         )
 
-    assert result.status is RunStatus.COMPLETED
+    assert result.status is RunStatus.REPORT_INCOMPLETE
+    assert result.error is not None
+    assert result.error.code == "report_incomplete"
     assert result.output is not None
     assert sentinel not in (result.output.report_markdown or "")
     assert sentinel not in json.dumps(
@@ -2229,7 +2244,9 @@ def test_three_empty_search_attempts_skip_task_and_still_generate_report() -> No
     assert canonical.query == "original"
     assert canonical.retry_count == 2
     assert len(canonical.refined_queries) == 2
-    assert session.state.structured_report == "# Final report\n\nStatuses: skipped"
+    assert session.state.structured_report is not None
+    assert "# Final report" in session.state.structured_report
+    assert "states (skipped)" in session.state.structured_report
 
 
 def test_search_retry_backoff_waits_on_cancellation(monkeypatch) -> None:
@@ -2569,5 +2586,7 @@ def test_application_service_completes_with_real_coordinator_and_fakes() -> None
 
     assert result.status is RunStatus.COMPLETED
     assert result.output is not None
-    assert result.output.report_markdown == "# Final report\n\nStatuses: completed"
+    assert result.output.report_markdown is not None
+    assert "# Final report" in result.output.report_markdown
+    assert "states (completed)" in result.output.report_markdown
     assert result.run_id in repository.snapshots
