@@ -1,6 +1,6 @@
 [project]
 name = "helloagents-deep-researcher"
-version = "0.0.1"
+version = "1.0.0"
 description = "Fully local web research and summarization assistant powered by HelloAgents."
 authors = [
     { name = "Lance Martin" }

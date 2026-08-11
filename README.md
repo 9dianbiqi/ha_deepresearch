@@ -4,6 +4,17 @@
 
 > English: This project uses one canonical `ResearchApplicationService` / `RunSession` lifecycle. `HarnessRunner` and SSE are compatibility adapters, not a second runtime layer. See [Architecture](docs/ARCHITECTURE_OPTIMIZED.md) and [Technical Deep Dive](docs/TECHNICAL_DEEP_DIVE.md).
 
+## Release 1.0.0
+
+This release is a reliable, recoverable, and traceable local Deep Research
+assistant. It supports multi-step research, multi-turn follow-up, durable run
+snapshots, crash recovery, deterministic report validation, runtime telemetry,
+and user-controlled history and memory.
+
+Continual learning, autonomous self-training, Hermes-style experience learning,
+and claims of perfect citation accuracy are intentionally outside the v1.0
+contract.
+
 ## 当前架构
 
 ```mermaid
@@ -230,7 +241,7 @@ npm run build
 
 - `HarnessRunner`、`HarnessRunRequest`、`RunContext`、`SummaryStateOutput` 和旧 Agent `run()` / `run_stream()` 仍保留一个兼容周期；新代码应使用 `ResearchCommand`、`RunSession`、`ResearchApplicationService.execute()` 和 `/runs/{run_id}`。
 - 旧 `JsonlRunRecorder` 名称仍存在，但它已经委托 `FileRunRepository`，只写 canonical schema-v1 snapshot，不创建第二套索引或日志文件。
-- 当前仅成功完成的 application run 进入 canonical repository；failed、cancelled、rejected 终态会返回/投影，但不会由 Application 自动持久化。
+- application run 的创建、checkpoint、completed、failed、cancelled、rejected 和 report_incomplete 终态都会尽力持久化；只有同时满足 `validated=true` 与 `resumable=true` 的 checkpoint 才允许恢复。
 - 文件仓库适合单进程本地运行；锁是进程内的，不是多进程数据库事务。
 - 默认 facade 同时只执行一个顶层运行；单次运行内的研究任务按 `MAX_CONCURRENT_TASKS` 有界并发。
 - `permission_mode="strict"` 中的 `ask` 目前直接阻断，因为尚无审批 UI。

@@ -35,6 +35,7 @@ pnpm-debug.log*
 
 # Local editor and OS files
 .git-codex-tmp/
+.omo/
 .idea/
 .vscode/
 *.swp
