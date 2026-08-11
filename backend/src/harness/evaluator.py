@@ -1,23 +1,50 @@
-"""Baseline evaluators for harness-controlled runs."""
+"""Compatibility adapters for canonical offline research assessment."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import Protocol
 
 from loguru import logger
+
+from research.contracts import RunError, RunSnapshot, RunStatus
+from research.evaluation import OfflineEvaluationService, ResearchAssessment
 
 from .models import EvaluationFinding, HarnessRunRecord, RunContext
 
 
+class _EvaluationService(Protocol):
+    """Structural contract used to inject the canonical offline evaluator."""
+
+    def evaluate(self, snapshot: RunSnapshot) -> ResearchAssessment:
+        """Assess one immutable snapshot."""
+        ...
+
+
 @dataclass(kw_only=True)
 class EvaluationResult:
-    """Structured evaluation output for a completed run."""
+    """Historical projection of one canonical research assessment."""
 
     score: float
     findings: list[EvaluationFinding] = field(default_factory=list)
 
+    @classmethod
+    def from_assessment(cls, assessment: ResearchAssessment) -> EvaluationResult:
+        """Project an immutable assessment into the historical mutable shape."""
+        return cls(
+            score=assessment.score,
+            findings=[
+                EvaluationFinding(
+                    severity=finding.severity,
+                    message=finding.message,
+                    code=finding.code,
+                )
+                for finding in assessment.findings
+            ],
+        )
+
     def as_dict(self) -> dict[str, object]:
-        """Serialize the evaluation result for persistence."""
+        """Serialize the evaluation result for legacy persistence."""
         return {
             "score": self.score,
             "findings": [
@@ -32,118 +59,50 @@ class EvaluationResult:
 
 
 class RuleBasedEvaluator:
-    """Simple evaluator that checks for obvious workflow failures."""
+    """Historical facade over the read-only offline evaluation service."""
+
+    def __init__(self, service: _EvaluationService | None = None) -> None:
+        """Initialize the facade with the canonical offline evaluator."""
+        self._service = service or OfflineEvaluationService()
 
     def evaluate(self, context: RunContext) -> EvaluationResult:
-        """Return baseline quality signals for the run."""
-        output = context.result
-        compressed_context = context.compressed_context
-        result = self._evaluate_payload(
-            todo_items=output.todo_items if output else [],
-            report_markdown=(output.report_markdown or "") if output else "",
-            compressed_context=compressed_context,
-            has_output=output is not None,
-        )
+        """Assess a live compatibility context through an immutable snapshot."""
+        snapshot = context.to_snapshot()
+        if context.result is None:
+            snapshot = replace(snapshot, output={})
+        assessment = self._service.evaluate(snapshot)
+        result = EvaluationResult.from_assessment(assessment)
         logger.info(
             "Evaluation complete: run_id={} score={:.2f} findings={}",
-            context.run_id, result.score, len(result.findings),
+            context.run_id,
+            result.score,
+            len(result.findings),
         )
         return result
 
     def evaluate_record(self, record: HarnessRunRecord) -> EvaluationResult:
-        """Evaluate a persisted record without re-running the workflow."""
-        output = record.output
-        return self._evaluate_payload(
-            todo_items=output.get("todo_items", []),
-            report_markdown=output.get("report_markdown") or "",
-            compressed_context=record.compressed_context,
-            has_output=bool(output),
+        """Assess a persisted legacy record without re-running the workflow."""
+        try:
+            status = RunStatus(record.status)
+        except ValueError:
+            status = RunStatus.COMPLETED
+        snapshot = RunSnapshot(
+            run_id=record.run_id,
+            topic=record.topic,
+            status=status,
+            started_at=record.started_at,
+            completed_at=record.completed_at,
+            parent_run_id=None,
+            output=dict(record.output),
+            followup_context=dict(record.compressed_context),
+            metrics=dict(record.metrics),
+            policy_decisions=tuple(dict(item) for item in record.policy_decisions),
+            config_snapshot=dict(record.config_snapshot),
+            events=(),
+            error=(
+                RunError(code="legacy_run_error", message=record.error)
+                if record.error
+                else None
+            ),
         )
-
-    def _evaluate_payload(
-        self,
-        *,
-        todo_items: list[object],
-        report_markdown: str,
-        compressed_context: dict[str, object],
-        has_output: bool,
-    ) -> EvaluationResult:
-        findings: list[EvaluationFinding] = []
-        score = 1.0
-
-        if not has_output:
-            findings.append(
-                EvaluationFinding(
-                    severity="error",
-                    code="missing_output",
-                    message="Run completed without a result payload.",
-                )
-            )
-            return EvaluationResult(score=0.0, findings=findings)
-
-        if not todo_items:
-            findings.append(
-                EvaluationFinding(
-                    severity="warning",
-                    code="missing_tasks",
-                    message="Planner did not produce any explicit todo items.",
-                )
-            )
-            score -= 0.2
-
-        if not report_markdown.strip():
-            findings.append(
-                EvaluationFinding(
-                    severity="error",
-                    code="missing_report",
-                    message="Final report markdown is empty.",
-                )
-            )
-            score -= 0.5
-
-        incomplete_tasks = []
-        tasks_without_summary = []
-        for item in todo_items:
-            status = getattr(item, "status", None)
-            title = getattr(item, "title", None)
-            summary = getattr(item, "summary", None)
-            if isinstance(item, dict):
-                status = item.get("status")
-                title = item.get("title")
-                summary = item.get("summary")
-            if status != "completed" and title:
-                incomplete_tasks.append(str(title))
-            if not (summary or "").strip() and title:
-                tasks_without_summary.append(str(title))
-
-        if incomplete_tasks:
-            findings.append(
-                EvaluationFinding(
-                    severity="warning",
-                    code="incomplete_tasks",
-                    message=f"Some tasks did not complete: {', '.join(incomplete_tasks)}",
-                )
-            )
-            score -= 0.2
-
-        if tasks_without_summary:
-            findings.append(
-                EvaluationFinding(
-                    severity="warning",
-                    code="missing_summaries",
-                    message=f"Some tasks are missing summaries: {', '.join(tasks_without_summary)}",
-                )
-            )
-            score -= 0.1
-
-        if not compressed_context:
-            findings.append(
-                EvaluationFinding(
-                    severity="warning",
-                    code="missing_compressed_context",
-                    message="Compressed context payload is empty.",
-                )
-            )
-            score -= 0.1
-
-        return EvaluationResult(score=max(score, 0.0), findings=findings)
+        return EvaluationResult.from_assessment(self._service.evaluate(snapshot))

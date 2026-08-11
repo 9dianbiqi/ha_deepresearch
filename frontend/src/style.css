@@ -1,8 +1,11 @@
 :root {
-  color: #1a1a1a;
-  background-color: #f6f6f6;
-  font-family: "Helvetica Neue", Arial, sans-serif;
+  color: #134e4a;
+  background-color: #f0fdfa;
+  font-family: "Plus Jakarta Sans", "Noto Sans SC", "PingFang SC",
+    "Microsoft YaHei", system-ui, sans-serif;
   line-height: 1.5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 * {
@@ -11,6 +14,7 @@
 
 body {
   margin: 0;
+  min-width: 320px;
 }
 
 #app {

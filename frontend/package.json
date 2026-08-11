@@ -1,12 +1,13 @@
 {
   "name": "helloagents-deepresearch-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:api-contract": "node --test tests/api-contract.test.mjs"
   },
   "dependencies": {
     "marked": "^15.0.7",

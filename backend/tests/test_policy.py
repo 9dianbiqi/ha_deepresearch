@@ -14,8 +14,9 @@ from harness.policy import HarnessPolicy, PolicyDecision
 def _make_request(**overrides) -> HarnessRunRequest:
     """Build a minimal request for policy testing."""
     config = Configuration.from_env(overrides=overrides.pop("config_overrides", None))
+    topic = overrides.pop("topic", "test topic")
     return HarnessRunRequest(
-        topic="test topic",
+        topic=topic,
         config=config,
         **overrides,
     )
@@ -30,6 +31,7 @@ class TestRequiredCapabilities(unittest.TestCase):
         caps = policy.required_capabilities(request)
 
         self.assertIn("research:run", caps)
+        self.assertIn("llm:invoke", caps)
         self.assertIn("search:web", caps)
         self.assertIn("report:export", caps)
         self.assertIn("notes:read", caps)
@@ -49,6 +51,13 @@ class TestRequiredCapabilities(unittest.TestCase):
 
         self.assertNotIn("notes:read", caps)
         self.assertNotIn("notes:write", caps)
+
+    def test_github_repository_topic_adds_github_read(self) -> None:
+        policy = HarnessPolicy()
+        request = _make_request(topic="https://github.com/bytedance/deer-flow")
+        caps = policy.required_capabilities(request)
+
+        self.assertIn("github:read", caps)
 
 
 class TestPolicyEvaluate(unittest.TestCase):
@@ -97,6 +106,22 @@ class TestPolicyEvaluate(unittest.TestCase):
 
         self.assertEqual(decision.outcome, "deny")
 
+    def test_github_read_is_allowed(self) -> None:
+        policy = HarnessPolicy()
+        request = _make_request(topic="bytedance/deer-flow")
+        decision = policy._evaluate_capability("github:read", request)
+
+        self.assertEqual(decision.outcome, "allow")
+
+    def test_public_capability_authorizer_supports_operation_checks(self) -> None:
+        policy = HarnessPolicy()
+        request = _make_request()
+
+        decision = policy.evaluate_capability("llm:invoke", request)
+
+        self.assertEqual(decision.capability, "llm:invoke")
+        self.assertEqual(decision.outcome, "allow")
+
 
 class TestAssertExecutable(unittest.TestCase):
     """Verify that blocked decisions raise PermissionError."""
@@ -121,6 +146,18 @@ class TestAssertExecutable(unittest.TestCase):
         policy = HarnessPolicy()
         decisions = [
             PolicyDecision(capability="search:premium", outcome="ask", reason="strict"),
+        ]
+        with self.assertRaises(PermissionError):
+            policy.assert_executable(decisions)
+
+    def test_unknown_outcome_fails_closed(self) -> None:
+        policy = HarnessPolicy()
+        decisions = [
+            PolicyDecision(
+                capability="llm:invoke",
+                outcome="unexpected",
+                reason="invalid policy result",
+            ),
         ]
         with self.assertRaises(PermissionError):
             policy.assert_executable(decisions)
