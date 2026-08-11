@@ -12,7 +12,7 @@ _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _CITATION_RE = re.compile(
     r"(?i)(?:\[[^\]]+\]\(https?://|\b(?:sources?|references?)\s*:\s*|"
-    + "(?:\u6765\u6e90|\u53c2\u8003)\s*[:\uff1a])"
+    + r"(?:\u6765\u6e90|\u53c2\u8003)\s*[:\uff1a])"
 )
 _TRUNCATION_SUFFIXES = (
     "...",
