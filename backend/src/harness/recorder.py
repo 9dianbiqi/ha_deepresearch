@@ -92,10 +92,16 @@ def _stored_output(raw_output: dict[str, Any]) -> SummaryStateOutput:
                     repository=_optional_text(raw_item.get("repository")),
                 )
             )
+    raw_github_intelligence = raw_output.get("github_intelligence")
     return SummaryStateOutput(
         running_summary=_optional_text(raw_output.get("running_summary")),
         report_markdown=_optional_text(raw_output.get("report_markdown")),
         todo_items=items,
+        github_intelligence=(
+            dict(raw_github_intelligence)
+            if isinstance(raw_github_intelligence, dict)
+            else {}
+        ),
     )
 
 

@@ -548,6 +548,59 @@
           <p v-else class="empty-copy">暂无工具调用。</p>
         </section>
 
+        <section v-if="githubIntelligence" class="surface-card evidence-drawer">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">GitHub Evidence Drawer</p>
+              <h2>证据与覆盖</h2>
+            </div>
+            <span class="status-tag completed">
+              {{ githubIntelligence.evidence?.length || 0 }} 条
+            </span>
+          </div>
+          <p class="muted-copy">
+            覆盖率 {{ formatCoverage(githubIntelligence.coverage?.coverage_score) }} ·
+            {{ githubIntelligence.snapshots?.length || 0 }} 个固定快照
+          </p>
+          <div v-if="githubIntelligence.coverage?.missing_dimensions?.length" class="notice-list">
+            <p class="eyebrow">待补证据</p>
+            <p>{{ githubIntelligence.coverage.missing_dimensions.join("、") }}</p>
+          </div>
+          <div v-if="githubIntelligence.claims?.length" class="claim-list">
+            <article v-for="claim in githubIntelligence.claims.slice(0, 4)" :key="String(claim.claim_id)" class="claim-item">
+              <strong>{{ claim.category || "claim" }}</strong>
+              <span>{{ claim.statement || "" }}</span>
+            </article>
+          </div>
+          <div v-if="(githubIntelligence.snapshots?.length || 0) > 1" class="comparison-list">
+            <p class="eyebrow">Comparison View</p>
+            <article v-for="snapshot in githubIntelligence.snapshots" :key="String(snapshot.snapshot_id)" class="comparison-row">
+              <strong>{{ snapshot.repository || "repository" }}</strong>
+              <span>{{ snapshot.commit_sha || "未取得 SHA" }}</span>
+              <span>{{ snapshot.collection_status || "partial" }}</span>
+            </article>
+          </div>
+        </section>
+
+        <section v-if="artifactManifest.length" class="surface-card artifacts-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Artifacts Panel</p>
+              <h2>报告产物</h2>
+            </div>
+            <span class="status-tag pending">{{ artifactManifest.length }}</span>
+          </div>
+          <div class="artifact-list">
+            <article v-for="artifact in artifactManifest" :key="artifact.artifact_id" class="artifact-row">
+              <div>
+                <strong>{{ artifact.title }}</strong>
+                <span>{{ artifact.mime_type }}</span>
+              </div>
+              <button class="link-button" type="button" @click="downloadArtifact(artifact)">下载</button>
+            </article>
+          </div>
+        </section>
+
         <section class="surface-card report-actions-card">
           <div class="section-heading">
             <div>
@@ -631,6 +684,8 @@ import {
   runResearchStream,
   getRunRecord,
   listHistory,
+  type GithubArtifact,
+  type GithubIntelligence,
   type ContinueRequest,
   type HistoryItem,
   type ResearchStreamEvent,
@@ -709,6 +764,8 @@ const summaryHighlight = ref(false);
 const sourcesHighlight = ref(false);
 const reportHighlight = ref(false);
 const toolHighlight = ref(false);
+const githubIntelligence = ref<GithubIntelligence | null>(null);
+const artifactManifest = ref<GithubArtifact[]>([]);
 
 let currentController: AbortController | null = null;
 let pulseRaf = 0;
@@ -824,6 +881,42 @@ const renderedReport = computed(() => {
 
 function formatTaskStatus(status: string): string {
   return TASK_STATUS_LABEL[status] ?? status;
+}
+
+function formatCoverage(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${Math.round(value * 100)}%`
+    : "0%";
+}
+
+function setGithubIntelligence(value: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    githubIntelligence.value = null;
+    artifactManifest.value = [];
+    return;
+  }
+  const bundle = value as GithubIntelligence;
+  githubIntelligence.value = bundle;
+  const rawArtifacts = Array.isArray(bundle.artifacts)
+    ? bundle.artifacts
+    : bundle.artifact_manifest?.artifacts;
+  artifactManifest.value = Array.isArray(rawArtifacts)
+    ? rawArtifacts.filter(
+        (artifact): artifact is GithubArtifact =>
+          Boolean(artifact && typeof artifact.artifact_id === "string"),
+      )
+    : [];
+}
+
+function downloadArtifact(artifact: GithubArtifact): void {
+  if (typeof artifact.content !== "string") return;
+  const blob = new Blob([artifact.content], { type: artifact.mime_type || "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = artifact.path.split("/").pop() || `${artifact.artifact_id}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function pulse(flag: { value: boolean }) {
@@ -954,6 +1047,7 @@ async function openHistory(item: HistoryItem): Promise<void> {
       extractOptionalString(output.report_markdown) ??
       extractOptionalString(output.running_summary) ??
       "";
+    setGithubIntelligence(output.github_intelligence);
     progressLogs.value = [`已恢复历史研究：${currentTopic.value}`];
     historyRecallCount.value = 0;
     try {
@@ -965,6 +1059,17 @@ async function openHistory(item: HistoryItem): Promise<void> {
     historyError.value = err instanceof Error ? err.message : "无法加载研究记录";
   } finally {
     historyLoading.value = false;
+  }
+}
+
+async function hydrateRunArtifacts(runId: string | null): Promise<void> {
+  if (!runId) return;
+  try {
+    const record = await getRunRecord(runId);
+    const output = ensureRecord(record.output);
+    setGithubIntelligence(output.github_intelligence);
+  } catch {
+    // The SSE terminal event remains authoritative if the record is not yet readable.
   }
 }
 
@@ -1208,6 +1313,8 @@ function resetWorkflowState(
   todoTasks.value = [];
   activeTaskId.value = null;
   reportMarkdown.value = "";
+  githubIntelligence.value = null;
+  artifactManifest.value = [];
   streamTelemetry.value = null;
   progressLogs.value = [];
   summaryHighlight.value = false;
@@ -1251,12 +1358,49 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     return;
   }
 
+  if (event.type === "github_evidence") {
+    progressLogs.value.push(
+      `已冻结 GitHub 证据：${payload.evidence_count || 0} 条，${payload.claim_count || 0} 个结论`,
+    );
+    return;
+  }
+
+  if (event.type === "coverage_update") {
+    const current = githubIntelligence.value ?? {};
+    const coverageScore =
+      typeof payload.coverage_score === "number" ? payload.coverage_score : 0;
+    githubIntelligence.value = {
+      ...current,
+      coverage: {
+        ...(current.coverage || {}),
+        coverage_score: coverageScore,
+        covered_dimensions: Array.isArray(payload.covered_dimensions)
+          ? payload.covered_dimensions.filter((item): item is string => typeof item === "string")
+          : [],
+        missing_dimensions: Array.isArray(payload.missing_dimensions)
+          ? payload.missing_dimensions.filter((item): item is string => typeof item === "string")
+          : [],
+        gap_queries: Array.isArray(payload.gap_queries)
+          ? payload.gap_queries.filter((item): item is string => typeof item === "string")
+          : [],
+        allow_report: payload.allow_report === true,
+      },
+    };
+    return;
+  }
+
+  if (event.type === "artifact_ready") {
+    progressLogs.value.push(`已生成报告产物：${payload.title || payload.path || "artifact"}`);
+    return;
+  }
+
   if (event.type === "done") {
     if (event.resumable !== false && currentRunId.value) {
       resumableRunId.value = currentRunId.value;
     } else if (typeof event.last_resumable_parent === "string") {
       resumableRunId.value = event.last_resumable_parent;
     }
+    void hydrateRunArtifacts(currentRunId.value);
     try {
       if (currentRunId.value) {
         window.localStorage.setItem("helloagents:last-run-id", currentRunId.value);
@@ -2506,6 +2650,50 @@ button:disabled {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.evidence-drawer,
+.artifacts-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.claim-list,
+.artifact-list,
+.comparison-list {
+  display: grid;
+  gap: 7px;
+}
+
+.claim-item,
+.artifact-row,
+.comparison-row {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 6px;
+  background: #fbfffd;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.claim-item strong,
+.artifact-row strong,
+.comparison-row strong {
+  color: var(--color-foreground-strong);
+}
+
+.claim-item span,
+.artifact-row span,
+.comparison-row span {
+  color: #5f7d78;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.artifact-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
 
 .report-actions {

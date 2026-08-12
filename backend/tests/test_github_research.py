@@ -11,6 +11,7 @@ from research.session import CancellationRequestedError
 from services.github_research import (
     GitHubRepositoryTarget,
     GitHubResearchClient,
+    parse_github_repositories,
     parse_github_repository,
 )
 
@@ -81,6 +82,16 @@ class ParseGitHubRepositoryTests(unittest.TestCase):
 
     def test_ignores_non_repository_topics(self) -> None:
         self.assertIsNone(parse_github_repository("local llm deep research workflow"))
+
+    def test_parses_multiple_repositories_for_comparison(self) -> None:
+        targets = parse_github_repositories(
+            "compare bytedance/deer-flow with https://github.com/openai/openai-python"
+        )
+
+        self.assertEqual(
+            [target.full_name for target in targets],
+            ["bytedance/deer-flow", "openai/openai-python"],
+        )
 
 
 class GitHubResearchClientTests(unittest.TestCase):
@@ -215,6 +226,7 @@ class GitHubResearchClientTests(unittest.TestCase):
         self.assertTrue(
             any("GITHUB_TOKEN" in notice and "rate limit" in notice for notice in context.notices)
         )
+        self.assertIn("github_rate_limited", context.notice_codes)
         self.assertFalse(
             any("Authorization" in call["headers"] for call in session.calls)
         )

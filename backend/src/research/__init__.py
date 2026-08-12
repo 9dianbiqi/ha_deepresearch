@@ -1,14 +1,24 @@
 """Authoritative contracts and state transitions for research runs."""
 
 from .contracts import (
+    Artifact,
+    ArtifactManifest,
+    CoverageResult,
     EventKind,
+    EvidenceItem,
+    GitHubEvidenceBundle,
     PreparedTerminal,
+    ReportSpec,
+    RepositorySnapshot,
+    ResearchClaim,
     ResearchCommand,
     ResearchEvent,
     ResearchRunResult,
     RunError,
     RunSnapshot,
     RunStatus,
+    canonicalize_github_report,
+    deterministic_citation_block,
 )
 from .history import HistoryCursorError, HistoryPage, ResearchHistoryStore
 from .memory import (
@@ -30,17 +40,27 @@ from .session import (
 
 __all__ = [
     "NEVER_CANCELLED",
+    "Artifact",
+    "ArtifactManifest",
     "CancellationRequestedError",
     "CheckpointPersistenceError",
     "CancellationToken",
+    "CoverageResult",
+    "canonicalize_github_report",
+    "deterministic_citation_block",
     "EventKind",
+    "EvidenceItem",
+    "GitHubEvidenceBundle",
     "HistoryCursorError",
     "HistoryPage",
     "InvalidTransitionError",
     "PreparedTerminal",
+    "ReportSpec",
     "ResearchCommand",
     "ResearchEvent",
     "ResearchRunResult",
+    "RepositorySnapshot",
+    "ResearchClaim",
     "RunError",
     "RunSession",
     "RunSnapshot",

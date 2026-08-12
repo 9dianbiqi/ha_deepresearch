@@ -93,9 +93,50 @@ class ReportingService:
                 "活动指标、风险与限制、参考来源、置信度评估。\n\n"
             )
 
+        evidence_section = ""
+        github_intelligence = state.github_intelligence
+        if github_intelligence:
+            coverage = github_intelligence.get("coverage")
+            claims = github_intelligence.get("claims")
+            evidence = github_intelligence.get("evidence")
+            coverage_text = ""
+            if isinstance(coverage, dict):
+                coverage_text = (
+                    f"覆盖率：{coverage.get('coverage_score', 0)}；"
+                    f"缺口：{', '.join(str(item) for item in coverage.get('missing_dimensions', [])) or '无'}"
+                )
+            claim_lines: list[str] = []
+            if isinstance(claims, list):
+                for claim in claims[:20]:
+                    if not isinstance(claim, dict):
+                        continue
+                    claim_lines.append(
+                        f"- [{claim.get('category', 'unknown')}] {claim.get('statement', '')} "
+                        f"(evidence_ids: {', '.join(str(item) for item in claim.get('evidence_ids', []))})"
+                    )
+            evidence_lines: list[str] = []
+            if isinstance(evidence, list):
+                for item in evidence[:40]:
+                    if not isinstance(item, dict):
+                        continue
+                    source_url = str(item.get("source_url") or "")
+                    evidence_lines.append(
+                        f"- {item.get('evidence_id', '')}: {item.get('title', '')} — {source_url}"
+                    )
+            evidence_section = (
+                "## GitHub Evidence Contract (versioned)\n"
+                f"{coverage_text}\n"
+                "重要结论必须只引用下面 evidence_ids；不得编造 GitHub URL。"
+                "源码链接必须保留 commit SHA。\n"
+                + ("\n".join(claim_lines) + "\n" if claim_lines else "")
+                + ("可用证据：\n" + "\n".join(evidence_lines) + "\n" if evidence_lines else "")
+                + "\n"
+            )
+
         prompt = (
             f"研究主题：{state.research_topic}\n\n"
             f"{github_section}"
+            f"{evidence_section}"
             f"{''.join(tasks_block)}\n"
             f"{note_section}\n\n"
             "请基于以上所有信息撰写最终研究报告。"

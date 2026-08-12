@@ -98,6 +98,7 @@ class HarnessRunRecord:
             "todo_items": [
                 item.to_dict() for item in output.todo_items
             ],
+            "github_intelligence": dict(output.github_intelligence),
         }
 
         return cls(

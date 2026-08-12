@@ -75,8 +75,40 @@ export interface RunRecord {
     running_summary?: string;
     report_markdown?: string;
     todo_items?: unknown[];
+    github_intelligence?: GithubIntelligence;
   };
   events?: ResearchStreamEvent[];
+  [key: string]: unknown;
+}
+
+export interface GithubArtifact {
+  artifact_id: string;
+  artifact_type: string;
+  mime_type: string;
+  path: string;
+  title: string;
+  description?: string;
+  source_ids?: string[];
+  content?: string;
+  checksum?: string;
+}
+
+export interface GithubIntelligence {
+  schema_version?: number;
+  snapshots?: Array<Record<string, unknown>>;
+  evidence?: Array<Record<string, unknown>>;
+  claims?: Array<Record<string, unknown>>;
+  coverage?: {
+    coverage_score?: number;
+    covered_dimensions?: string[];
+    missing_dimensions?: string[];
+    gap_queries?: string[];
+    allow_report?: boolean;
+    [key: string]: unknown;
+  };
+  report_spec?: Record<string, unknown>;
+  artifacts?: GithubArtifact[];
+  artifact_manifest?: { schema_version?: number; artifacts?: GithubArtifact[] };
   [key: string]: unknown;
 }
 

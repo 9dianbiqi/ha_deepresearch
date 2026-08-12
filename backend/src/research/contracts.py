@@ -15,6 +15,40 @@ from uuid import UUID, uuid4
 from config import Configuration
 from models import SummaryStateOutput
 
+from .evidence import (
+    Artifact,
+    ArtifactManifest,
+    CoverageResult,
+    EvidenceItem,
+    GitHubEvidenceBundle,
+    ReportSpec,
+    RepositorySnapshot,
+    ResearchClaim,
+    canonicalize_github_report,
+    deterministic_citation_block,
+)
+
+__all__ = [
+    "Artifact",
+    "ArtifactManifest",
+    "CoverageResult",
+    "canonicalize_github_report",
+    "deterministic_citation_block",
+    "EvidenceItem",
+    "EventKind",
+    "GitHubEvidenceBundle",
+    "PreparedTerminal",
+    "ReportSpec",
+    "ResearchClaim",
+    "ResearchCommand",
+    "ResearchEvent",
+    "ResearchRunResult",
+    "RepositorySnapshot",
+    "RunError",
+    "RunSnapshot",
+    "RunStatus",
+]
+
 _MEMORY_SCOPE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
 
@@ -69,6 +103,9 @@ class EventKind(str, Enum):
     RUN_STARTED = "run_started"
     POLICY_CHECKED = "policy_checked"
     REPOSITORY_DETECTED = "repository_detected"
+    EVIDENCE_COLLECTED = "evidence_collected"
+    COVERAGE_UPDATED = "coverage_updated"
+    ARTIFACT_READY = "artifact_ready"
     PLAN_CREATED = "plan_created"
     TASK_STARTED = "task_started"
     SOURCES_COLLECTED = "sources_collected"

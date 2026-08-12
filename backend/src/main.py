@@ -85,6 +85,10 @@ class ResearchResponse(BaseModel):
         default_factory=list,
         description="Structured TODO items with summaries and sources",
     )
+    github_intelligence: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional versioned GitHub evidence intelligence bundle",
+    )
 
 
 class ContinueRequest(BaseModel):
@@ -142,6 +146,7 @@ class HarnessResponse(BaseModel):
     status: str
     report_markdown: str = ""
     todo_items: list[dict[str, Any]] = Field(default_factory=list)
+    github_intelligence: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
     findings: list[dict[str, Any]] = Field(default_factory=list)
     compressed_context: dict[str, Any] = Field(default_factory=dict)
@@ -249,6 +254,11 @@ def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
         status=result.status,
         report_markdown=(output.report_markdown or output.running_summary or "") if output else "",
         todo_items=_serialize_todo_items(output.todo_items if output else []),
+        github_intelligence=(
+            dict(output.github_intelligence)
+            if output and getattr(output, "github_intelligence", None)
+            else {}
+        ),
         metrics=result.metrics,
         findings=[
             {
@@ -574,6 +584,11 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
         return ResearchResponse(
             report_markdown=(output.report_markdown or output.running_summary or "") if output else "",
             todo_items=_serialize_todo_items(output.todo_items if output else []),
+            github_intelligence=(
+                dict(output.github_intelligence)
+                if output and getattr(output, "github_intelligence", None)
+                else {}
+            ),
         )
 
     @app.post("/research/stream")

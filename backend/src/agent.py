@@ -30,6 +30,14 @@ from research.adapters import (
 )
 from research.context import FollowupContext, ResearchContextAssembler
 from research.contracts import EventKind, ResearchCommand, ResearchEvent, RunStatus
+from research.evidence import (
+    build_github_evidence_bundle,
+    canonicalize_github_report,
+    freeze_github_evidence,
+    github_evidence_bundle_from_dict,
+    render_github_artifacts,
+    supplement_github_evidence,
+)
 from research.legacy_sse import project_legacy_event as _project_legacy_event
 from research.operations import (
     GovernedOperations,
@@ -47,6 +55,7 @@ from research.telemetry import TelemetryHelloAgentsLLM, llm_telemetry_scope
 from services.github_research import (
     GitHubRepositoryContext,
     GitHubRepositoryTarget,
+    parse_github_repositories,
     parse_github_repository,
 )
 from services.note_agent import NoteSubAgent
@@ -618,6 +627,7 @@ class DeepResearchAgent:
                 notes_context,
                 operation_scope=root_scope,
             )
+        report = self._canonicalize_github_report(session, report)
         session.raise_if_run_controlled()
         note_metadata = self._save_conclusion_note(
             session.command.topic,
@@ -635,6 +645,7 @@ class DeepResearchAgent:
                 title=note_title,
             )
         session.set_report(report, note_id=note_id, note_path=note_path)
+        self._refresh_github_artifacts(session, report)
         session.persist_checkpoint("report_retry_completed")
 
     def _generate_report(
@@ -657,6 +668,7 @@ class DeepResearchAgent:
             notes_context,
             operation_scope=root_scope,
         )
+        report = self._canonicalize_github_report(session, report)
         session.raise_if_run_controlled()
         note_metadata = self._save_conclusion_note(
             session.command.topic,
@@ -675,7 +687,43 @@ class DeepResearchAgent:
                 title=note_title,
             )
         session.set_report(report, note_id=note_id, note_path=note_path)
+        self._refresh_github_artifacts(session, report)
         session.persist_checkpoint("report_generated")
+
+    @staticmethod
+    def _canonicalize_github_report(session: RunSession, report: str) -> str:
+        """Keep report URLs and citations bound to the evidence ledger."""
+        raw_bundle = session.state.github_intelligence
+        if not raw_bundle:
+            return report
+        try:
+            bundle = github_evidence_bundle_from_dict(raw_bundle)
+            return canonicalize_github_report(report, bundle) if bundle else report
+        except (TypeError, ValueError):
+            return report
+
+    @staticmethod
+    def _refresh_github_artifacts(session: RunSession, report: str) -> None:
+        """Replace the deterministic HTML artifact with the final report text."""
+        raw_bundle = session.state.github_intelligence
+        if not raw_bundle:
+            return
+        try:
+            bundle = github_evidence_bundle_from_dict(raw_bundle)
+            if bundle is not None:
+                task_sources = [
+                    str(task.sources_summary or "")
+                    for task in session.state.todo_items
+                    if task.sources_summary
+                ]
+                if bundle.coverage.gap_queries and bundle.coverage.retry_count < 1:
+                    bundle = supplement_github_evidence(bundle, task_sources)
+                bundle = freeze_github_evidence(bundle)
+                session.replace_github_intelligence(
+                    render_github_artifacts(bundle, report_markdown=report).as_dict()
+                )
+        except (TypeError, ValueError):
+            logger.warning("Unable to refresh GitHub artifacts", exc_info=True)
 
     def _execute_governed(
         self,
@@ -712,14 +760,15 @@ class DeepResearchAgent:
             )
         else:
             session.raise_if_run_controlled()
-            github_context = self._prepare_github_context(
+            github_contexts = self._prepare_github_contexts(
                 planning_state,
                 config=session.command.config,
                 operation_scope=root_scope,
             )
             session.raise_if_run_controlled()
-            if github_context is not None:
-                serialized = self._serialize_github_context(github_context)
+            if github_contexts:
+                github_context = github_contexts[0]
+                serialized = self._serialize_github_contexts(github_contexts)
                 repository_event = self._github_repository_event(github_context)
                 session.record_repository(
                     github_context=serialized,
@@ -727,7 +776,19 @@ class DeepResearchAgent:
                     notices=list(repository_event["notices"]),
                     notice_codes=list(repository_event["notice_codes"]),
                 )
-                tasks = self._create_github_research_tasks(github_context.target)
+                bundle = render_github_artifacts(
+                    build_github_evidence_bundle(github_contexts)
+                )
+                session.record_github_intelligence(
+                    bundle.as_dict(),
+                    artifact_count=len(bundle.artifacts),
+                )
+                for artifact in bundle.artifacts:
+                    session.record_artifact(artifact.as_dict())
+                tasks = self._create_github_research_tasks(
+                    github_context.target,
+                    comparison_targets=[context.target for context in github_contexts[1:]],
+                )
             else:
                 assembled_prior = ResearchContextAssembler().assemble(prior_context)
                 related_history = session.related_history_context or None
@@ -1332,13 +1393,14 @@ class DeepResearchAgent:
         *,
         config: Configuration | None = None,
         operation_scope: OperationScope,
+        target: GitHubRepositoryTarget | None = None,
     ) -> GitHubRepositoryContext | None:
         """Collect GitHub repository context when the topic names a repository."""
         run_config = config or self.config
         if not getattr(run_config, "enable_github_research", True):
             return None
 
-        target = parse_github_repository(state.research_topic)
+        target = target or parse_github_repository(state.research_topic)
         if not target:
             return None
 
@@ -1386,9 +1448,31 @@ class DeepResearchAgent:
         logger.info("GitHub research mode enabled for %s", target.full_name)
         return context
 
+    def _prepare_github_contexts(
+        self,
+        state: SummaryState,
+        *,
+        config: Configuration | None = None,
+        operation_scope: OperationScope,
+    ) -> list[GitHubRepositoryContext]:
+        """Collect up to five distinct GitHub repositories for comparison mode."""
+        targets = parse_github_repositories(state.research_topic)
+        contexts: list[GitHubRepositoryContext] = []
+        for target in targets:
+            context = self._prepare_github_context(
+                state,
+                config=config,
+                operation_scope=operation_scope,
+                target=target,
+            )
+            if context is not None:
+                contexts.append(context)
+        return contexts
+
     @staticmethod
     def _create_github_research_tasks(
         target: GitHubRepositoryTarget,
+        comparison_targets: Sequence[GitHubRepositoryTarget] = (),
     ) -> list[TodoItem]:
         """Return fixed tasks for GitHub-first repository research."""
         repository = target.full_name
@@ -1415,7 +1499,7 @@ class DeepResearchAgent:
             ),
         ]
 
-        return [
+        tasks = [
             TodoItem(
                 id=index,
                 title=title,
@@ -1426,6 +1510,21 @@ class DeepResearchAgent:
             )
             for index, (title, intent, query) in enumerate(task_specs, start=1)
         ]
+        if comparison_targets:
+            repositories = ", ".join(
+                [target.full_name, *(item.full_name for item in comparison_targets)]
+            )
+            tasks.append(
+                TodoItem(
+                    id=len(tasks) + 1,
+                    title="多仓库统一维度对比",
+                    intent="使用统一维度比较候选仓库的架构、维护状态、扩展性和适用场景。",
+                    query=f"{repositories} compare architecture maintenance extensibility risk",
+                    source_strategy="github_api_compare",
+                    repository=repositories,
+                )
+            )
+        return tasks
 
     @staticmethod
     def _serialize_github_context(
@@ -1448,7 +1547,9 @@ class DeepResearchAgent:
                 "full_name": context.target.full_name,
                 "url": context.target.html_url,
             },
+            "commit_sha": context.commit_sha,
             "repository": dict(context.repository),
+            "file_manifest": [dict(item) for item in context.file_manifest],
             "languages": dict(context.languages),
             "contributors": list(context.contributors),
             "commits": list(context.commits),
@@ -1459,6 +1560,20 @@ class DeepResearchAgent:
             "notice_codes": notice_codes,
             "markdown": safe_context.to_markdown(),
         }
+
+    @classmethod
+    def _serialize_github_contexts(
+        cls,
+        contexts: Sequence[GitHubRepositoryContext],
+    ) -> dict[str, Any]:
+        """Serialize one or more contexts while preserving legacy primary fields."""
+        serialized = [cls._serialize_github_context(context) for context in contexts]
+        primary = dict(serialized[0]) if serialized else {}
+        primary["repositories"] = serialized
+        primary["markdown"] = "\n\n".join(
+            str(item.get("markdown") or "") for item in serialized if item.get("markdown")
+        )
+        return primary
 
     @staticmethod
     def _github_repository_event(context: GitHubRepositoryContext) -> dict[str, Any]:

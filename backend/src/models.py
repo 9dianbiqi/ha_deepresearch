@@ -62,6 +62,7 @@ class ResearchState:
     report_note_id: str | None = field(default=None)
     report_note_path: str | None = field(default=None)
     github_context: dict[str, Any] = field(default_factory=dict)
+    github_intelligence: dict[str, Any] = field(default_factory=dict)
 
 
 SummaryState = ResearchState
@@ -74,3 +75,4 @@ class SummaryStateOutput:
     running_summary: str | None = field(default=None)  # Backward-compatible文本
     report_markdown: str | None = field(default=None)
     todo_items: List[TodoItem] = field(default_factory=list)
+    github_intelligence: dict[str, Any] = field(default_factory=dict)

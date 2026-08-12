@@ -202,6 +202,46 @@ class LegacySseProjector:
                     "notice_codes": notice_codes,
                 }
             )
+        elif event.kind is EventKind.EVIDENCE_COLLECTED:
+            projected.update(
+                {
+                    "type": "github_evidence",
+                    "snapshot_count": _optional_int(payload.get("snapshot_count")) or 0,
+                    "evidence_count": _optional_int(payload.get("evidence_count")) or 0,
+                    "claim_count": _optional_int(payload.get("claim_count")) or 0,
+                    "artifact_count": _optional_int(payload.get("artifact_count")) or 0,
+                    "bundle_schema_version": _optional_int(
+                        payload.get("bundle_schema_version")
+                    )
+                    or 1,
+                }
+            )
+        elif event.kind is EventKind.COVERAGE_UPDATED:
+            score = payload.get("coverage_score")
+            projected.update(
+                {
+                    "type": "coverage_update",
+                    "coverage_score": (
+                        float(score) if isinstance(score, (int, float)) else 0.0
+                    ),
+                    "covered_dimensions": _text_list(payload.get("covered_dimensions")),
+                    "missing_dimensions": _text_list(payload.get("missing_dimensions")),
+                    "gap_queries": _text_list(payload.get("gap_queries")),
+                    "allow_report": bool(payload.get("allow_report", False)),
+                }
+            )
+        elif event.kind is EventKind.ARTIFACT_READY:
+            projected.update(
+                {
+                    "type": "artifact_ready",
+                    "artifact_id": _optional_text(payload.get("artifact_id")),
+                    "artifact_type": _optional_text(payload.get("artifact_type")),
+                    "mime_type": _optional_text(payload.get("mime_type")),
+                    "path": _optional_text(payload.get("path")),
+                    "title": _optional_text(payload.get("title")),
+                    "checksum": _optional_text(payload.get("checksum")),
+                }
+            )
         elif event.kind is EventKind.PLAN_CREATED:
             projected.update(
                 {

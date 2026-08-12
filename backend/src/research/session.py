@@ -443,6 +443,7 @@ class RunSession:
                 "research_topic": self.state.research_topic,
                 "research_loop_count": self.state.research_loop_count,
                 "github_context": dict(self.state.github_context),
+                "github_intelligence": dict(self.state.github_intelligence),
                 "report_note_id": self.state.report_note_id,
                 "report_note_path": self.state.report_note_path,
                 "permission_mode": self.command.permission_mode,
@@ -545,6 +546,18 @@ class RunSession:
             if typed_github_context is not None
             else {}
         )
+        raw_github_intelligence = continuation_state.get("github_intelligence")
+        if not isinstance(raw_github_intelligence, Mapping):
+            raw_github_intelligence = output.get("github_intelligence")
+        github_intelligence = (
+            {
+                str(key): value
+                for key, value in cast(Mapping[str, object], raw_github_intelligence).items()
+                if isinstance(key, str)
+            }
+            if isinstance(raw_github_intelligence, Mapping)
+            else {}
+        )
         raw_research_topic = continuation_state.get("research_topic")
         research_topic = (
             raw_research_topic
@@ -610,6 +623,7 @@ class RunSession:
             structured_report=structured_report,
             todo_items=tasks,
             github_context=github_context,
+            github_intelligence=github_intelligence,
             report_note_id=report_note_id,
             report_note_path=report_note_path,
         )
@@ -933,6 +947,75 @@ class RunSession:
         if should_drain:
             self._drain_notifications()
         return event
+
+    def record_github_intelligence(
+        self,
+        bundle: Mapping[str, Any],
+        *,
+        artifact_count: int = 0,
+    ) -> tuple[ResearchEvent, ResearchEvent]:
+        """Persist bounded GitHub evidence metadata and coverage events."""
+        snapshots = bundle.get("snapshots")
+        evidence = bundle.get("evidence")
+        claims = bundle.get("claims")
+        coverage = bundle.get("coverage")
+        snapshot_count = len(snapshots) if isinstance(snapshots, (list, tuple)) else 0
+        evidence_count = len(evidence) if isinstance(evidence, (list, tuple)) else 0
+        claim_count = len(claims) if isinstance(claims, (list, tuple)) else 0
+        coverage_payload = dict(coverage) if isinstance(coverage, Mapping) else {}
+        evidence_payload = {
+            "snapshot_count": snapshot_count,
+            "evidence_count": evidence_count,
+            "claim_count": claim_count,
+            "artifact_count": max(0, artifact_count),
+            "bundle_schema_version": bundle.get("schema_version", 1),
+        }
+        with self._lock:
+            self._require_running_locked()
+            evidence_event = self._validated_event_locked(
+                EventKind.EVIDENCE_COLLECTED,
+                evidence_payload,
+            )
+            coverage_event = self._validated_event_locked(
+                EventKind.COVERAGE_UPDATED,
+                {
+                    "coverage_score": coverage_payload.get("coverage_score", 0.0),
+                    "covered_dimensions": list(coverage_payload.get("covered_dimensions", [])),
+                    "missing_dimensions": list(coverage_payload.get("missing_dimensions", [])),
+                    "gap_queries": list(coverage_payload.get("gap_queries", [])),
+                    "allow_report": bool(coverage_payload.get("allow_report", False)),
+                },
+            )
+            self.state.github_intelligence = dict(bundle)
+            should_drain = self._commit_event_locked(evidence_event)
+            should_drain = self._commit_event_locked(coverage_event) or should_drain
+        if should_drain:
+            self._drain_notifications()
+        return evidence_event, coverage_event
+
+    def record_artifact(self, artifact: Mapping[str, Any]) -> ResearchEvent:
+        """Persist one artifact manifest event without exposing its content in SSE."""
+        payload = {
+            "artifact_id": artifact.get("artifact_id"),
+            "artifact_type": artifact.get("artifact_type"),
+            "mime_type": artifact.get("mime_type"),
+            "path": artifact.get("path"),
+            "title": artifact.get("title"),
+            "checksum": artifact.get("checksum"),
+        }
+        with self._lock:
+            self._require_running_locked()
+            event = self._validated_event_locked(EventKind.ARTIFACT_READY, payload)
+            should_drain = self._commit_event_locked(event)
+        if should_drain:
+            self._drain_notifications()
+        return event
+
+    def replace_github_intelligence(self, bundle: Mapping[str, Any]) -> None:
+        """Replace rendered GitHub intelligence while preserving the event ledger."""
+        with self._lock:
+            self._require_running_locked()
+            self.state.github_intelligence = dict(bundle)
 
     def start_task(self, task_id: int) -> ResearchEvent:
         """Mark one canonical task as in progress."""
@@ -1451,6 +1534,7 @@ class RunSession:
                 running_summary=self.state.running_summary,
                 report_markdown=self.state.structured_report,
                 todo_items=[TodoItem(**item.to_dict()) for item in self.state.todo_items],
+                github_intelligence=dict(self.state.github_intelligence),
             )
 
     def to_snapshot(
@@ -1484,6 +1568,7 @@ class RunSession:
                     "running_summary": output.running_summary,
                     "report_markdown": output.report_markdown,
                     "todo_items": [item.to_dict() for item in output.todo_items],
+                    "github_intelligence": dict(output.github_intelligence),
                 },
                 followup_context=dict(self.followup_context),
                 metrics=dict(self.metrics),

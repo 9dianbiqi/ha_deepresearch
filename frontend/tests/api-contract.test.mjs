@@ -78,3 +78,22 @@ test("consumeSSE never logs invalid raw payload or parser details", async () => 
   assert.equal(logged[0][0], "Failed to parse a research stream event.");
   assert.doesNotMatch(JSON.stringify(logged), /frontend-secret/);
 });
+
+test("v1.1 evidence events remain additive to the stream contract", async () => {
+  const events = [];
+  await api.consumeSSE(
+    responseFrom([
+      'data: {"type":"github_evidence","run_id":"run-1","evidence_count":3}\n\n',
+      'data: {"type":"coverage_update","run_id":"run-1","coverage_score":0.8}\n\n',
+      'data: {"type":"artifact_ready","run_id":"run-1","path":"artifacts/report.html"}\n\n',
+      'data: {"type":"done","run_id":"run-1"}\n\n',
+    ]),
+    (event) => events.push(event),
+  );
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["github_evidence", "coverage_update", "artifact_ready", "done"],
+  );
+  assert.match(source, /github_intelligence/);
+  assert.match(source, /artifact_manifest/);
+});
