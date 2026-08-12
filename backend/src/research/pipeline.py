@@ -44,6 +44,7 @@ from .sources import (
     SourceProviderRegistry,
     SourceRequestSpec,
     SourceRouter,
+    SourceSearchRequest,
     SourceSearchResult,
     SourceTarget,
 )
@@ -162,9 +163,17 @@ class ResearchKernel:
         collections: list[SourceCollection] = []
         for target in detection.targets:
             collections.append(provider.collect(target, provider_context))
+        detected_repositories = tuple(
+            target.source_id
+            for target in detection.targets
+            if target.source_id
+        )
         rendered_tasks = profile.render_tasks(
-            repository=repository,
-            comparison_repositories=comparison_repositories,
+            repository=repository or (detected_repositories[0] if detected_repositories else None),
+            comparison_repositories=(
+                tuple(comparison_repositories)
+                or detected_repositories[1:]
+            ),
         )
         source_context = {
             "provider_ids": [provider.provider_id],
@@ -239,6 +248,49 @@ class ResearchKernel:
         if decision.allow_report:
             bundle = replace(bundle, evidence_frozen=True)
         return bundle
+
+    def search(
+        self,
+        prepared: PreparedResearch,
+        *,
+        query: str,
+        topic: str,
+        config: Configuration,
+        loop_count: int = 0,
+        use_cache: bool = False,
+        operation_scope: OperationScope | None = None,
+    ) -> SourceSearchResult:
+        """Run one task search through the prepared profile's provider route."""
+        if not isinstance(prepared, PreparedResearch):
+            raise TypeError("Research kernel search requires PreparedResearch.")
+        request = SourceSearchRequest(
+            query=query,
+            topic=topic,
+            config=config,
+            loop_count=loop_count,
+            use_cache=use_cache,
+        )
+        fallback: SourceSearchResult | None = None
+        for provider_id in prepared.profile.source_priority:
+            try:
+                provider = self.provider_registry.get(provider_id)
+            except KeyError:
+                continue
+            if prepared.profile.mode not in provider.supported_modes:
+                continue
+            context = replace(
+                prepared.provider_context,
+                operation_scope=operation_scope or prepared.provider_context.operation_scope,
+            )
+            result = provider.search(request, context)
+            if result.results or result.answer:
+                return result
+            fallback = result
+        return fallback or SourceSearchResult(
+            provider_id=prepared.provider.provider_id,
+            notices=("No configured source provider returned search results.",),
+            notice_codes=("source_search_empty",),
+        )
 
     @staticmethod
     def _split_task_results(
@@ -489,6 +541,19 @@ class ResearchKernel:
             except (TypeError, ValueError):
                 pass
         file_path = record.get("file_path") if isinstance(record.get("file_path"), str) else None
+        line_start = record.get("line_start") if isinstance(record.get("line_start"), int) else None
+        line_end = record.get("line_end") if isinstance(record.get("line_end"), int) else None
+        if file_path and line_start is not None and line_end is not None:
+            try:
+                return EvidenceLocator(
+                    locator_type="line",
+                    url=url,
+                    file_path=file_path,
+                    line_start=line_start,
+                    line_end=line_end,
+                )
+            except ValueError:
+                pass
         page_start = record.get("page_start") if isinstance(record.get("page_start"), int) else None
         page_end = record.get("page_end") if isinstance(record.get("page_end"), int) else None
         if (page_start is None) != (page_end is None) or (

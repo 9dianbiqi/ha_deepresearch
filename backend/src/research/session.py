@@ -1267,6 +1267,20 @@ class RunSession:
             except (TypeError, ValueError):
                 self.state.research_intelligence = {}
 
+    def replace_legacy_github_intelligence(self, bundle: Mapping[str, Any]) -> None:
+        """Replace only the legacy GitHub projection after a v2 update."""
+        if not isinstance(bundle, Mapping):
+            raise TypeError("Legacy GitHub intelligence must be a mapping.")
+        try:
+            detached_bundle = json.loads(json.dumps(dict(bundle)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "Legacy GitHub intelligence must be JSON serializable."
+            ) from exc
+        with self._lock:
+            self._require_running_locked()
+            self.state.github_intelligence = detached_bundle
+
     def replace_research_intelligence(self, bundle: Mapping[str, Any]) -> None:
         """Replace canonical v2 intelligence without emitting an event."""
         if not isinstance(bundle, Mapping):

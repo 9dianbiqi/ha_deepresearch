@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
+from inspect import Parameter, signature
 from typing import Any
 
+from config import Configuration
 from research.operations import OperationRejectedError
 from research.profiles import ResearchMode
 from research.session import CancellationRequestedError, DeadlineExceededError
@@ -33,11 +35,36 @@ _ALLOWED_NOTICE_CODES = frozenset(
 )
 
 
+def _call_dispatcher(
+    dispatcher: Callable[..., Any],
+    query: str,
+    config: Configuration,
+    loop_count: int,
+    kwargs: Mapping[str, object],
+) -> Any:
+    """Pass only supported keyword arguments to legacy test and production dispatchers."""
+    try:
+        parameters = tuple(signature(dispatcher).parameters.values())
+    except (TypeError, ValueError):
+        parameters = ()
+    accepts_kwargs = any(item.kind is Parameter.VAR_KEYWORD for item in parameters)
+    if accepts_kwargs:
+        selected = dict(kwargs)
+    else:
+        allowed = {
+            item.name
+            for item in parameters
+            if item.kind in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY}
+        }
+        selected = {key: value for key, value in kwargs.items() if key in allowed}
+    return dispatcher(query, config, loop_count, **selected)
+
+
 class WebSourceProvider:
     """Adapt the existing retry/cache search dispatcher to typed results."""
 
     provider_id = "web"
-    supported_modes = frozenset({ResearchMode.WEB, ResearchMode.GITHUB, ResearchMode.PAPER})
+    supported_modes = frozenset({ResearchMode.WEB, ResearchMode.GITHUB})
 
     def __init__(
         self,
@@ -84,14 +111,17 @@ class WebSourceProvider:
         if context.operation_scope is None:
             raise ValueError("Web provider requires an operation scope.")
         try:
-            payload, notices, answer, backend = self._dispatcher(
+            payload, notices, answer, backend = _call_dispatcher(
+                self._dispatcher,
                 request.query,
                 request.config,
                 request.loop_count,
-                use_cache=request.use_cache,
-                cancellation=context.cancellation,
-                operation_scope=context.operation_scope,
-                search_adapter=self._search_adapter,
+                {
+                    "use_cache": request.use_cache,
+                    "cancellation": context.cancellation,
+                    "operation_scope": context.operation_scope,
+                    "search_adapter": self._search_adapter,
+                },
             )
         except (
             OperationRejectedError,

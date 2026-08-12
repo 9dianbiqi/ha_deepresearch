@@ -12,6 +12,7 @@ from config import Configuration
 from models import ResearchState
 from research.contracts import ResearchCommand
 from research.operations import GovernedOperations, OperationScope
+from research.pipeline import ResearchKernel
 from research.profiles import ResearchMode, RetrievalBudget
 from research.providers.github import GitHubSourceProvider
 from research.providers.web import WebSourceProvider
@@ -25,6 +26,7 @@ from research.sources import (
     ProviderContext,
     RetrievalBudgetTracker,
     SourceProviderRegistry,
+    SourceProviderUnavailableError,
     SourceRequestSpec,
     SourceRouter,
     SourceSearchRequest,
@@ -268,6 +270,18 @@ def test_provider_enrich_requires_a_target_and_consumes_a_bounded_budget() -> No
 
     with pytest.raises(ValueError, match="hints"):
         provider.enrich(EnrichmentRequest(target=target, hints=()), context)
+
+
+def test_default_kernel_does_not_fallback_paper_mode_to_web() -> None:
+    """Paper mode remains unavailable until a post-v1.1 provider is approved."""
+    kernel = ResearchKernel()
+
+    with pytest.raises(SourceProviderUnavailableError):
+        kernel.prepare(
+            "paper topic",
+            mode=ResearchMode.PAPER,
+            profile_id="paper.abstract.v1",
+        )
 
 
 def test_agent_accepts_an_injected_provider_registry_without_changing_execution() -> None:

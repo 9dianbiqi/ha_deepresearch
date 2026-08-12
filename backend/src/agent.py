@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -46,8 +46,10 @@ from research.operations import (
     OperationRejectedError,
     OperationScope,
 )
-from research.pipeline import ResearchKernel
-from research.profiles import built_in_profile_registry
+from research.pipeline import PreparedResearch, ResearchKernel
+from research.profiles import ResearchMode, built_in_profile_registry
+from research.providers.github import GitHubSourceProvider
+from research.providers.web import WebSourceProvider
 from research.report_validation import validate_citations
 from research.session import (
     CancellationRequestedError,
@@ -56,7 +58,10 @@ from research.session import (
     InvalidTransitionError,
     RunSession,
 )
-from research.sources import SourceProviderRegistry
+from research.sources import (
+    SourceProviderRegistry,
+    SourceSearchResult,
+)
 from research.telemetry import TelemetryHelloAgentsLLM, llm_telemetry_scope
 from services.github_research import (
     GitHubRepositoryContext,
@@ -180,6 +185,8 @@ class _TaskWorkItem:
     config: Configuration
     operations: GovernedOperations
     search_adapter: Any | None
+    research_kernel: ResearchKernel | None = None
+    prepared_research: PreparedResearch | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -343,10 +350,35 @@ class DeepResearchAgent:
             self.note_agent = note_agent
 
         self._github_adapter = github_adapter
-        self._source_provider_registry = source_provider_registry
-        self._research_kernel = research_kernel or ResearchKernel(
-            provider_registry=source_provider_registry,
-        )
+        if research_kernel is not None:
+            self._research_kernel = research_kernel
+            self._source_provider_registry = (
+                source_provider_registry or research_kernel.provider_registry
+            )
+        else:
+            effective_registry = source_provider_registry
+            if effective_registry is None:
+                github_dependency = (
+                    None
+                    if github_adapter is _DEFAULT_DEPENDENCY
+                    else github_adapter
+                )
+                effective_registry = SourceProviderRegistry(
+                    (
+                        GitHubSourceProvider(
+                            adapter=github_dependency,
+                            token=self.config.github_token,
+                            base_url=self.config.github_api_base_url,
+                        ),
+                        WebSourceProvider(
+                            dispatcher=self._search_adapter,
+                        ),
+                    )
+                )
+            self._source_provider_registry = effective_registry
+            self._research_kernel = ResearchKernel(
+                provider_registry=effective_registry,
+            )
         self._artifact_store = artifact_store
 
     @property
@@ -760,6 +792,38 @@ class DeepResearchAgent:
                         report_markdown=report,
                     )
                 session.replace_research_intelligence(bundle.as_dict())
+                recorded_artifacts = {
+                    event.payload.get("artifact_id")
+                    for event in session.events
+                    if event.kind is EventKind.ARTIFACT_READY
+                }
+                for artifact in bundle.artifact_manifest.artifacts:
+                    if artifact.artifact_id in recorded_artifacts:
+                        continue
+                    session.record_artifact(artifact.as_dict())
+
+                raw_legacy = session.state.github_intelligence
+                legacy_bundle = github_evidence_bundle_from_dict(raw_legacy)
+                if legacy_bundle is not None:
+                    task_sources = [
+                        str(task.sources_summary or "")
+                        for task in session.state.todo_items
+                        if task.sources_summary
+                    ]
+                    if (
+                        legacy_bundle.coverage.gap_queries
+                        and legacy_bundle.coverage.retry_count < 1
+                    ):
+                        legacy_bundle = supplement_github_evidence(
+                            legacy_bundle,
+                            task_sources,
+                        )
+                    session.replace_legacy_github_intelligence(
+                        render_github_artifacts(
+                            freeze_github_evidence(legacy_bundle),
+                            report_markdown=report,
+                        ).as_dict()
+                    )
             except (TypeError, ValueError, OSError):
                 logger.warning("Unable to persist generic research artifacts", exc_info=True)
             return
@@ -813,6 +877,7 @@ class DeepResearchAgent:
             in {"planning_completed", "research_tasks_progress"}
             and bool(session.state.todo_items)
         )
+        prepared_research: PreparedResearch | None = None
         if resuming_tasks:
             planned = [TodoItem(**task.to_dict()) for task in session.state.todo_items]
             pending_tasks = [
@@ -827,54 +892,73 @@ class DeepResearchAgent:
             )
         else:
             session.raise_if_run_controlled()
-            github_contexts = self._prepare_github_contexts(
-                planning_state,
-                config=session.command.config,
-                operation_scope=root_scope,
-            )
-            session.raise_if_run_controlled()
-            if github_contexts:
-                github_context = github_contexts[0]
-                serialized = self._serialize_github_contexts(github_contexts)
-                repository_event = self._github_repository_event(github_context)
-                session.record_repository(
-                    github_context=serialized,
-                    repository=dict(repository_event["repository"]),
-                    notices=list(repository_event["notices"]),
-                    notice_codes=list(repository_event["notice_codes"]),
-                )
-                bundle = render_github_artifacts(
-                    build_github_evidence_bundle(github_contexts)
-                )
-                session.record_github_intelligence(
-                    bundle.as_dict(),
-                    artifact_count=len(bundle.artifacts),
-                )
-                for artifact in bundle.artifacts:
-                    session.record_artifact(artifact.as_dict())
-                tasks = self._create_github_research_tasks(
-                    github_context.target,
-                    comparison_targets=[context.target for context in github_contexts[1:]],
-                )
-            else:
-                assembled_prior = ResearchContextAssembler().assemble(prior_context)
-                related_history = session.related_history_context or None
-                user_memories = session.user_memory_context or None
-                session.raise_if_run_controlled()
-                planner_kwargs: dict[str, object] = {
-                    "prior_context": assembled_prior,
-                }
-                if related_history:
-                    planner_kwargs["related_history"] = related_history
-                if user_memories:
-                    planner_kwargs["user_memories"] = user_memories
-                tasks = _call_with_operation_scope(
-                    self.planner.plan_todo_list,
-                    planning_state,
-                    **planner_kwargs,
+            if self._should_use_research_kernel(session):
+                prepared_research = self._prepare_kernel_research(
+                    session,
                     operation_scope=root_scope,
                 )
                 session.raise_if_run_controlled()
+                self._install_kernel_baseline(session, prepared_research)
+                tasks = [
+                    TodoItem(
+                        id=item.id,
+                        title=item.title,
+                        intent=item.intent,
+                        query=item.query,
+                        source_strategy=item.source_strategy,
+                        repository=item.repository,
+                    )
+                    for item in prepared_research.tasks
+                ]
+            else:
+                github_contexts = self._prepare_github_contexts(
+                    planning_state,
+                    config=session.command.config,
+                    operation_scope=root_scope,
+                )
+                session.raise_if_run_controlled()
+                if github_contexts:
+                    github_context = github_contexts[0]
+                    serialized = self._serialize_github_contexts(github_contexts)
+                    repository_event = self._github_repository_event(github_context)
+                    session.record_repository(
+                        github_context=serialized,
+                        repository=dict(repository_event["repository"]),
+                        notices=list(repository_event["notices"]),
+                        notice_codes=list(repository_event["notice_codes"]),
+                    )
+                    bundle = render_github_artifacts(
+                        build_github_evidence_bundle(github_contexts)
+                    )
+                    session.record_github_intelligence(
+                        bundle.as_dict(),
+                        artifact_count=len(bundle.artifacts),
+                    )
+                    for artifact in bundle.artifacts:
+                        session.record_artifact(artifact.as_dict())
+                    tasks = self._create_github_research_tasks(
+                        github_context.target,
+                        comparison_targets=[context.target for context in github_contexts[1:]],
+                    )
+                else:
+                    assembled_prior = ResearchContextAssembler().assemble(prior_context)
+                    related_history = session.related_history_context or None
+                    user_memories = session.user_memory_context or None
+                    session.raise_if_run_controlled()
+                    planner_kwargs: dict[str, object] = {
+                        "prior_context": assembled_prior,
+                    }
+                    if related_history:
+                        planner_kwargs["related_history"] = related_history
+                    if user_memories:
+                        planner_kwargs["user_memories"] = user_memories
+                    tasks = _call_with_operation_scope(
+                        self.planner.plan_todo_list,
+                        planning_state,
+                        **planner_kwargs,
+                        operation_scope=root_scope,
+                    )
+                    session.raise_if_run_controlled()
 
             if not tasks:
                 logger.info("No TODO items generated; falling back to single task")
@@ -900,9 +984,14 @@ class DeepResearchAgent:
             session,
             operations=operations,
             search_adapter=run_search_adapter,
+            research_kernel=self._research_kernel if prepared_research else None,
+            prepared_research=prepared_research,
         )
         self._execute_work_items(session, work_items)
         session.raise_if_run_controlled()
+        if prepared_research is not None:
+            self._finalize_kernel_research(session, prepared_research)
+            session.raise_if_run_controlled()
         session.persist_checkpoint("evidence_completed")
         self._generate_report(
             session,
@@ -916,6 +1005,8 @@ class DeepResearchAgent:
         *,
         operations: GovernedOperations,
         search_adapter: HelloAgentsSearchAdapter | None,
+        research_kernel: ResearchKernel | None = None,
+        prepared_research: PreparedResearch | None = None,
     ) -> list[_TaskWorkItem]:
         """Read note inputs on the coordinator thread and detach all worker data."""
         github_markdown = str(
@@ -958,6 +1049,8 @@ class DeepResearchAgent:
                     config=session.command.config,
                     operations=operations,
                     search_adapter=search_adapter,
+                    research_kernel=research_kernel,
+                    prepared_research=prepared_research,
                 )
             )
         return items
@@ -1138,21 +1231,44 @@ class DeepResearchAgent:
             cancellation.raise_if_cancelled()
             if stop_event.is_set():
                 return
-            search_kwargs: dict[str, object] = {
-                # Search retry/backoff must observe both explicit cancellation
-                # and the run's monotonic deadline.
-                "cancellation": item.operations.session,
-            }
-            if item.search_adapter is not None:
-                search_kwargs["search_adapter"] = item.search_adapter
-            search_result, notices, answer_text, backend = _call_with_operation_scope(
-                self._search_adapter,
-                query,
-                item.config,
-                item.loop_offset + attempt,
-                operation_scope=operation_scope,
-                **search_kwargs,
-            )
+            if item.research_kernel is not None and item.prepared_research is not None:
+                typed_search = _call_with_operation_scope(
+                    item.research_kernel.search,
+                    item.prepared_research,
+                    query=query,
+                    topic=item.topic,
+                    config=item.config,
+                    loop_count=item.loop_offset + attempt,
+                    use_cache=False,
+                    operation_scope=operation_scope,
+                )
+                if not isinstance(typed_search, SourceSearchResult):
+                    raise TypeError("Research kernel returned an invalid search result.")
+                search_result = {
+                    "results": [dict(result) for result in typed_search.results],
+                    "answer": typed_search.answer,
+                    "backend": typed_search.backend,
+                    "notice_codes": list(typed_search.notice_codes),
+                }
+                notices = list(typed_search.notices)
+                answer_text = typed_search.answer
+                backend = typed_search.backend
+            else:
+                search_kwargs: dict[str, object] = {
+                    # Search retry/backoff must observe both explicit cancellation
+                    # and the run's monotonic deadline.
+                    "cancellation": item.operations.session,
+                }
+                if item.search_adapter is not None:
+                    search_kwargs["search_adapter"] = item.search_adapter
+                search_result, notices, answer_text, backend = _call_with_operation_scope(
+                    self._search_adapter,
+                    query,
+                    item.config,
+                    item.loop_offset + attempt,
+                    operation_scope=operation_scope,
+                    **search_kwargs,
+                )
             if stop_event.is_set():
                 return
             item.operations.session.raise_if_cancelled()
@@ -1449,6 +1565,277 @@ class DeepResearchAgent:
 
         # attempt >= 1: broader English-oriented query
         return f"{task.title} overview latest research"
+
+    def _should_use_research_kernel(self, session: RunSession) -> bool:
+        """Resolve the explicit-mode-first boundary for the shared kernel."""
+        command = session.command
+        if command.research_mode is not None:
+            return command.research_mode is not ResearchMode.WEB
+        if command.research_profile_id is not None:
+            try:
+                profile = self._research_kernel.profile_registry.get(
+                    command.research_profile_id
+                )
+            except KeyError:
+                return True
+            return profile.mode is not ResearchMode.WEB
+        if not command.config.enable_github_research:
+            return False
+        return bool(parse_github_repositories(command.topic))
+
+    def _prepare_kernel_research(
+        self,
+        session: RunSession,
+        *,
+        operation_scope: OperationScope,
+    ) -> PreparedResearch:
+        """Prepare one explicit or automatically detected research profile."""
+        command = session.command
+        mode = command.research_mode
+        profile_id = command.research_profile_id
+        if mode is None and profile_id is not None:
+            mode = self._research_kernel.profile_registry.get(profile_id).mode
+        if mode is None:
+            mode = ResearchMode.GITHUB
+        if profile_id is None and mode is ResearchMode.GITHUB:
+            profile_id = "github.repository.v1"
+        return self._research_kernel.prepare(
+            command.topic,
+            mode=mode,
+            profile_id=profile_id,
+            run_id=session.run_id,
+            config=command.config,
+            cancellation=session.cancellation,
+            operation_scope=operation_scope,
+        )
+
+    def _install_kernel_baseline(
+        self,
+        session: RunSession,
+        prepared: PreparedResearch,
+    ) -> None:
+        """Persist the kernel's source context before task execution for recovery."""
+        if not prepared.targets:
+            raise ValueError("Research kernel did not produce a source target.")
+        serialized = self._serialize_kernel_contexts(prepared)
+        primary = serialized[0]
+        source_context = dict(prepared.source_context)
+        source_context["repositories"] = serialized
+        source_context["target"] = dict(primary.get("target") or {})
+        source_context["markdown"] = "\n\n".join(
+            str(item.get("markdown") or "")
+            for item in serialized
+            if item.get("markdown")
+        )
+        repository_event = self._kernel_repository_event(primary)
+        session.record_repository(
+            github_context=source_context,
+            repository=repository_event["repository"],
+            notices=repository_event["notices"],
+            notice_codes=repository_event["notice_codes"],
+        )
+        baseline = self._research_kernel.finalize(prepared)
+        session.replace_research_intelligence(baseline.as_dict())
+        legacy_bundle = self._legacy_bundle_for_kernel(prepared)
+        if legacy_bundle is not None:
+            session.replace_legacy_github_intelligence(legacy_bundle.as_dict())
+
+    def _finalize_kernel_research(
+        self,
+        session: RunSession,
+        prepared: PreparedResearch,
+    ) -> None:
+        """Finalize provider evidence after workers and emit the canonical events."""
+        task_results: list[str] = []
+        for task in session.state.todo_items:
+            if task.summary:
+                task_results.append(task.summary)
+            if task.sources_summary:
+                task_results.append(task.sources_summary)
+        bundle = self._research_kernel.finalize(
+            prepared,
+            task_results=task_results,
+        )
+        session.record_research_intelligence(
+            bundle.as_dict(),
+            provider_ids=(prepared.provider.provider_id,),
+        )
+        legacy_bundle = self._legacy_bundle_for_kernel(
+            prepared,
+            task_sources=tuple(task_results),
+        )
+        if legacy_bundle is not None:
+            session.replace_legacy_github_intelligence(legacy_bundle.as_dict())
+
+    @staticmethod
+    def _serialize_kernel_contexts(
+        prepared: PreparedResearch,
+    ) -> list[dict[str, Any]]:
+        """Project provider payloads into the existing safe GitHub context shape."""
+        serialized: list[dict[str, Any]] = []
+        for collection in prepared.collections:
+            target = collection.target
+            payload = collection.provider_payload
+            if isinstance(payload, GitHubRepositoryContext):
+                serialized.append(
+                    DeepResearchAgent._serialize_github_context(payload)
+                )
+                continue
+
+            def value(name: str, default: object = None) -> object:
+                if isinstance(payload, Mapping):
+                    return payload.get(name, default)
+                return getattr(payload, name, default)
+
+            def mappings(name: str) -> list[dict[str, Any]]:
+                raw = value(name, ())
+                if not isinstance(raw, (list, tuple)):
+                    return []
+                return [dict(item) for item in raw if isinstance(item, Mapping)]
+
+            raw_repository = value("repository", {})
+            repository = (
+                dict(raw_repository)
+                if isinstance(raw_repository, Mapping)
+                else {}
+            )
+            raw_notices = value("notices", collection.notices)
+            raw_codes = value("notice_codes", collection.notice_codes)
+            notice_values: Sequence[object] = (
+                tuple(raw_notices)
+                if isinstance(raw_notices, (list, tuple))
+                else ()
+            )
+            code_values: Sequence[object] = (
+                tuple(raw_codes)
+                if isinstance(raw_codes, (list, tuple))
+                else ()
+            )
+            notices, notice_codes = _safe_github_notice_fields(
+                notice_values,
+                code_values,
+            )
+            if collection.collection_status == "failed":
+                notices = [_GITHUB_CONTEXT_FAILED_MESSAGE]
+                notice_codes = [_GITHUB_CONTEXT_FAILED_CODE]
+            markdown = value("markdown", "")
+            if not isinstance(markdown, str) or not markdown.strip():
+                markdown = (
+                    "## GitHub Repository Context\n"
+                    f"- Repository: {target.source_id}\n"
+                    f"- URL: {target.canonical_url}"
+                )
+            owner, separator, repo = target.source_id.partition("/")
+            serialized.append(
+                {
+                    "target": {
+                        "owner": target.metadata.get("owner", owner),
+                        "repo": target.metadata.get("repo", repo if separator else target.source_id),
+                        "full_name": target.source_id,
+                        "url": target.canonical_url,
+                    },
+                    "commit_sha": collection.resolved_version,
+                    "repository": repository,
+                    "file_manifest": mappings("file_manifest"),
+                    "file_contents": mappings("file_contents"),
+                    "languages": (
+                        dict(raw_languages)
+                        if isinstance(
+                            raw_languages := value("languages", {}),
+                            Mapping,
+                        )
+                        else {}
+                    ),
+                    "contributors": mappings("contributors"),
+                    "commits": mappings("commits"),
+                    "issues": mappings("issues"),
+                    "pull_requests": mappings("pull_requests"),
+                    "releases": mappings("releases"),
+                    "notices": notices,
+                    "notice_codes": notice_codes,
+                    "markdown": markdown,
+                }
+            )
+        return serialized
+
+    @staticmethod
+    def _kernel_repository_event(primary: Mapping[str, Any]) -> dict[str, Any]:
+        """Build the allowlisted legacy repository event from kernel context."""
+        target = primary.get("target")
+        target_mapping = target if isinstance(target, Mapping) else {}
+        repository = primary.get("repository")
+        repository_mapping = repository if isinstance(repository, Mapping) else {}
+        projected = {
+            "owner": target_mapping.get("owner"),
+            "repo": target_mapping.get("repo"),
+            "full_name": target_mapping.get("full_name"),
+            "url": target_mapping.get("url"),
+            "stars": repository_mapping.get("stars"),
+            "forks": repository_mapping.get("forks"),
+            "open_issues": repository_mapping.get("open_issues"),
+            "default_branch": repository_mapping.get("default_branch"),
+            "language": repository_mapping.get("language"),
+        }
+        raw_notices = primary.get("notices")
+        raw_notice_codes = primary.get("notice_codes")
+        notice_values: Sequence[object] = (
+            tuple(raw_notices)
+            if isinstance(raw_notices, (list, tuple))
+            else ()
+        )
+        code_values: Sequence[object] = (
+            tuple(raw_notice_codes)
+            if isinstance(raw_notice_codes, (list, tuple))
+            else ()
+        )
+        notices, notice_codes = _safe_github_notice_fields(
+            notice_values,
+            code_values,
+        )
+        return {
+            "repository": projected,
+            "notices": notices,
+            "notice_codes": notice_codes,
+        }
+
+    @staticmethod
+    def _legacy_bundle_for_kernel(
+        prepared: PreparedResearch,
+        *,
+        task_sources: Sequence[str] = (),
+        report_markdown: str = "",
+    ) -> Any | None:
+        """Create the v1 GitHub payload only at the compatibility boundary."""
+        contexts: list[GitHubRepositoryContext] = []
+        for collection in prepared.collections:
+            payload = collection.provider_payload
+            if not isinstance(payload, GitHubRepositoryContext):
+                continue
+            notices, notice_codes = _safe_github_notice_fields(
+                collection.notices or payload.notices,
+                collection.notice_codes or payload.notice_codes,
+            )
+            contexts.append(
+                replace(
+                    payload,
+                    notices=notices,
+                    notice_codes=notice_codes,
+                )
+            )
+        if len(contexts) != len(prepared.collections) or not contexts:
+            return None
+        try:
+            bundle = build_github_evidence_bundle(
+                contexts,
+                task_sources=task_sources,
+            )
+            return render_github_artifacts(
+                bundle,
+                report_markdown=report_markdown,
+            )
+        except (TypeError, ValueError):
+            logger.warning("Unable to build the legacy GitHub compatibility projection")
+            return None
 
     # ------------------------------------------------------------------
     # GitHub research helpers

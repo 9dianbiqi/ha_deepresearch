@@ -15,6 +15,15 @@ Continual learning, autonomous self-training, Hermes-style experience learning,
 and claims of perfect citation accuracy are intentionally outside the v1.0
 contract.
 
+## Release 1.1 MVP boundary
+
+The single-instance production MVP routes single-repository GitHub research
+through `ResearchKernel`, while keeping the historical API/SSE GitHub fields as
+compatibility projections. Paper research is explicitly out of scope before
+this release: no paper provider, PDF/full-text pipeline, BibTeX, citation
+snowballing, paper UI, or silent fallback from paper mode to Web is shipped.
+See [the release boundary](docs/RELEASE_SCOPE_V1_1.md).
+
 ## 当前架构
 
 ```mermaid

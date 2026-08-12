@@ -162,6 +162,10 @@ class AgentGitHubStreamTests(unittest.TestCase):
         self.assertEqual(events[-2]["type"], "final_report")
         self.assertEqual(events[-2]["report"], "GitHub final report")
         self.assertEqual(events[-1]["type"], "done")
+        assert agent.last_session is not None
+        assert agent.last_session.state.research_intelligence["schema_version"] == 2
+        assert agent.last_session.state.github_intelligence["schema_version"] == 1
+        assert any(item.get("type") == "github_evidence" for item in events)
 
 
 if __name__ == "__main__":
