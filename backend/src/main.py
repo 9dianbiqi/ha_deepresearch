@@ -4,21 +4,31 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import tempfile
+from collections.abc import Mapping
+from hmac import compare_digest
+from pathlib import Path, PurePosixPath
+from threading import BoundedSemaphore
 from time import monotonic
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import anyio
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from config import Configuration, SearchAPI
 from harness import HarnessRunner, HarnessRunRequest, build_default_scenarios
+from research.artifacts import FileArtifactStore, normalize_artifact_id
+from research.contracts import normalize_run_id
+from research.intelligence import ArtifactDescriptorV2
 from research.memory import (
     MemoryNotFoundError,
     MemoryStateError,
@@ -42,6 +52,9 @@ _DEFAULT_CORS_ORIGINS = (
     "http://localhost:5174",
     "http://localhost:3000",
 )
+_MAX_TOPIC_LENGTH = 4000
+_MAX_METADATA_BYTES = 16 * 1024
+_PUBLIC_PROBE_PATHS = frozenset({"/healthz", "/readyz"})
 
 # 添加控制台日志处理程序
 logger.add(
@@ -55,7 +68,12 @@ logger.add(
 class ResearchRequest(BaseModel):
     """Payload for triggering a research run."""
 
-    topic: str = Field(..., description="Research topic supplied by the user")
+    topic: str = Field(
+        ...,
+        min_length=1,
+        max_length=_MAX_TOPIC_LENGTH,
+        description="Research topic supplied by the user",
+    )
     research_mode: ResearchMode | None = Field(
         default=None,
         description="Optional explicit research mode; omitted means automatic detection",
@@ -122,7 +140,12 @@ class ResearchResponse(BaseModel):
 class ContinueRequest(BaseModel):
     """Payload for continuing a previous research run with a follow-up topic."""
 
-    topic: str = Field(..., description="Follow-up research topic")
+    topic: str = Field(
+        ...,
+        min_length=1,
+        max_length=_MAX_TOPIC_LENGTH,
+        description="Follow-up research topic",
+    )
     parent_run_id: str = Field(..., description="run_id of the previous research to build upon")
     research_mode: ResearchMode | None = Field(
         default=None,
@@ -176,6 +199,22 @@ class HarnessRequest(ResearchRequest):
         default_factory=dict,
         description="Optional caller metadata attached to the run record.",
     )
+
+    @field_validator("metadata")
+    @classmethod
+    def _validate_metadata_size(
+        cls,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Reject oversized metadata before it reaches the research lifecycle."""
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Metadata must be JSON serializable.") from exc
+        if len(encoded.encode("utf-8")) > _MAX_METADATA_BYTES:
+            raise ValueError("Metadata exceeds the configured size limit.")
+        return value
+
 
 
 class HarnessResponse(BaseModel):
@@ -388,6 +427,49 @@ def _safe_http_error(
     )
 
 
+class _RunCapacity:
+    """Non-blocking process-local admission control for top-level runs."""
+
+    def __init__(self, limit: int) -> None:
+        """Create a bounded run gate."""
+        if limit < 1:
+            raise ValueError("MAX_CONCURRENT_RUNS must be positive.")
+        self.limit = limit
+        self._semaphore = BoundedSemaphore(limit)
+
+    def try_acquire(self) -> bool:
+        """Reserve one run slot without waiting for another request."""
+        return self._semaphore.acquire(blocking=False)
+
+    def release(self) -> None:
+        """Release one previously reserved run slot."""
+        self._semaphore.release()
+
+
+def _configured_run_capacity() -> int:
+    """Read and validate the single-process run admission limit."""
+    try:
+        return Configuration.from_env().max_concurrent_runs
+    except (TypeError, ValueError) as exc:
+        raise ValueError("MAX_CONCURRENT_RUNS must be an integer between 1 and 16.") from exc
+
+
+def _request_validation_response(
+    _request: Request,
+    _exc: Exception,
+) -> JSONResponse:
+    """Return a stable validation error without echoing request bodies."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {
+                "code": "invalid_request",
+                "message": "The request payload is invalid.",
+            }
+        },
+    )
+
+
 def _raise_for_failed_result(result: Any) -> None:
     """Translate a typed non-success run result to a stable HTTP error."""
     if getattr(result, "status", None) == "completed":
@@ -441,6 +523,7 @@ async def _iter_sse_events(
     *,
     stream_factory: Callable[[], Iterator[dict[str, Any]]] | None = None,
     run_id: str | None = None,
+    on_close: Callable[[], None] | None = None,
 ) -> AsyncIterator[str]:
     """Serialize one runner stream and own its terminal/error boundary."""
     iterator: Iterator[dict[str, Any]] | None = None
@@ -542,6 +625,8 @@ async def _iter_sse_events(
                 close()
             except Exception:
                 logger.warning("Research stream iterator close failed.")
+        if on_close is not None:
+            on_close()
 
 
 def _streaming_response(
@@ -550,6 +635,7 @@ def _streaming_response(
     *,
     stream_factory: Callable[[], Iterator[dict[str, Any]]] | None = None,
     run_id: str | None = None,
+    on_close: Callable[[], None] | None = None,
 ) -> StreamingResponse:
     """Build the shared SSE response for initial and follow-up research."""
     return StreamingResponse(
@@ -558,6 +644,7 @@ def _streaming_response(
             request,
             stream_factory=stream_factory,
             run_id=run_id,
+            on_close=on_close,
         ),
         media_type="text/event-stream",
         headers={
@@ -567,13 +654,166 @@ def _streaming_response(
     )
 
 
+_ARTIFACT_FILENAMES = {
+    "report_markdown": "report.md",
+    "evidence_json": "evidence.json",
+    "report_html": "report.html",
+    "chart_svg": "languages.svg",
+    "mermaid": "repository-structure.mmd",
+}
+_MIME_SUFFIXES = {
+    "application/json": ".json",
+    "text/markdown": ".md",
+    "text/html": ".html",
+    "image/svg+xml": ".svg",
+    "text/plain": ".txt",
+    "application/pdf": ".pdf",
+}
+
+
+def _artifact_descriptor_for_run(
+    record: Mapping[str, Any],
+    artifact_id: str,
+) -> ArtifactDescriptorV2 | None:
+    """Return a schema-v2 descriptor only when it belongs to the run record."""
+    output = record.get("output")
+    if not isinstance(output, Mapping):
+        return None
+    intelligence = output.get("research_intelligence")
+    if not isinstance(intelligence, Mapping):
+        return None
+    manifest = intelligence.get("artifact_manifest")
+    if not isinstance(manifest, Mapping) or manifest.get("schema_version") != 2:
+        return None
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, (list, tuple)):
+        return None
+    for raw_descriptor in artifacts:
+        if not isinstance(raw_descriptor, Mapping):
+            continue
+        if raw_descriptor.get("artifact_id") != artifact_id:
+            continue
+        try:
+            return ArtifactDescriptorV2.from_dict(raw_descriptor)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _artifact_filename(descriptor: ArtifactDescriptorV2) -> str:
+    """Build a stable download filename without trusting persisted path text."""
+    path_name = PurePosixPath(descriptor.path).name
+    if path_name and "." in path_name and path_name not in {".", ".."}:
+        candidate = path_name
+    else:
+        candidate = _ARTIFACT_FILENAMES.get(descriptor.artifact_type, "")
+        if not candidate:
+            candidate = f"artifact{_MIME_SUFFIXES.get(descriptor.mime_type, '')}"
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", candidate).strip("._")
+    return (sanitized or "artifact")[:160]
+
+
+def _artifact_content_disposition(filename: str) -> str:
+    """Return a header with both ASCII and RFC 5987 filename forms."""
+    fallback = re.sub(r"[^A-Za-z0-9._-]+", "_", filename) or "artifact"
+    return (
+        f'attachment; filename="{fallback}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
+    )
+
+
+def _artifact_store_for_runner(runner: Any) -> Any | None:
+    """Resolve the runner's durable FileArtifactStore without touching disk paths from HTTP."""
+    store = getattr(runner, "artifact_store", None)
+    if store is not None and callable(getattr(store, "get", None)):
+        return store
+    repository = getattr(runner, "repository", None)
+    if repository is None:
+        return None
+    return FileArtifactStore(repository)
+
+
+def _probe_directory(path: Path) -> bool:
+    """Verify one application-owned directory can be created, written, and read."""
+    temporary_path: Path | None = None
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if not path.is_dir():
+            return False
+        with tempfile.NamedTemporaryFile(
+            mode="w+b",
+            prefix=".readyz-",
+            dir=path,
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(b"ready")
+            handle.flush()
+            os.fsync(handle.fileno())
+        return temporary_path.read_bytes() == b"ready"
+    except (OSError, ValueError):
+        return False
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _readiness_paths(runner: Any) -> tuple[Path, ...]:
+    """Resolve only the repository and artifact directories used by this app."""
+    repository = getattr(runner, "repository", None)
+    root = getattr(repository, "root", None)
+    if not isinstance(root, Path):
+        return ()
+    store = _artifact_store_for_runner(runner)
+    artifact_root = getattr(store, "artifact_root", root / "artifacts")
+    if not isinstance(artifact_root, Path):
+        artifact_root = root / "artifacts"
+    return (root, root / "runs", artifact_root)
+
+
 def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title="HelloAgents Deep Researcher")
+    app.add_exception_handler(RequestValidationError, _request_validation_response)
+    run_capacity = _RunCapacity(_configured_run_capacity())
+    configured_app_api_key = (os.getenv("APP_API_KEY") or "").strip()
+
+    @app.middleware("http")
+    async def authenticate_request(request: Request, call_next: Any) -> Any:
+        """Require a configured bearer key for every non-probe HTTP route."""
+        if (
+            configured_app_api_key
+            and request.method != "OPTIONS"
+            and request.url.path not in _PUBLIC_PROBE_PATHS
+        ):
+            authorization = request.headers.get("Authorization", "")
+            scheme, separator, token = authorization.partition(" ")
+            if (
+                not separator
+                or scheme.casefold() != "bearer"
+                or not token
+                or not compare_digest(token, configured_app_api_key)
+            ):
+                return JSONResponse(
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                    content={
+                        "detail": {
+                            "code": "unauthorized",
+                            "message": "A valid bearer token is required.",
+                        }
+                    },
+                )
+        return await call_next(request)
+
     uses_default_runner = harness_runner is None
     if harness_runner is None:
+        configured_data_dir = Configuration.from_env().data_dir
         harness_runner = HarnessRunner.build_default(
-            base_path="./output/harness_runs"
+            base_path=configured_data_dir,
         )
 
     app.add_middleware(
@@ -581,7 +821,8 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
         allow_origins=_configured_cors_origins(),
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "Accept"],
+        allow_headers=["Content-Type", "Accept", "Authorization"],
+        expose_headers=["Content-Disposition"],
     )
 
     @app.on_event("startup")
@@ -614,14 +855,47 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
             _configuration_presence(config.llm_api_key),
         )
 
+    def reserve_run_slot() -> Callable[[], None]:
+        """Reserve one HTTP run slot or raise the public capacity error."""
+        if not run_capacity.try_acquire():
+            raise _safe_http_error(
+                status_code=429,
+                code="capacity_exceeded",
+                message="The maximum number of active research runs has been reached.",
+            )
+        released = False
+
+        def release() -> None:
+            nonlocal released
+            if released:
+                return
+            released = True
+            run_capacity.release()
+
+        return release
+
     @app.get("/healthz")
     def health_check() -> Dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/readyz")
+    def readiness_check() -> dict[str, str]:
+        """Report whether durable run and artifact directories are writable."""
+        paths = _readiness_paths(harness_runner)
+        if not paths or not all(_probe_directory(path) for path in paths):
+            raise _safe_http_error(
+                status_code=503,
+                code="not_ready",
+                message="Durable application storage is not ready.",
+            )
+        return {"status": "ready"}
+
     @app.post("/research", response_model=ResearchResponse)
     def run_research(payload: ResearchRequest) -> ResearchResponse:
+        release_slot: Callable[[], None] | None = None
         try:
             request = _normalize_harness_request(payload, caller_mode="public")
+            release_slot = reserve_run_slot()
             result = harness_runner.run(request)
             _raise_for_failed_result(result)
         except HTTPException:
@@ -644,6 +918,9 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 code="application_error",
                 message="The research run failed.",
             ) from exc
+        finally:
+            if release_slot is not None:
+                release_slot()
 
         output = result.output
         return ResearchResponse(
@@ -687,7 +964,16 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 message="The research command is invalid.",
             ) from exc
 
-        return _streaming_response(harness_runner, request)
+        release_slot = reserve_run_slot()
+        try:
+            return _streaming_response(
+                harness_runner,
+                request,
+                on_close=release_slot,
+            )
+        except Exception:
+            release_slot()
+            raise
 
     @app.post("/research/continue/stream")
     def stream_continue_research(payload: ContinueRequest) -> StreamingResponse:
@@ -710,12 +996,23 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 message="The research command is invalid.",
             ) from exc
 
-        return _streaming_response(harness_runner, request)
+        release_slot = reserve_run_slot()
+        try:
+            return _streaming_response(
+                harness_runner,
+                request,
+                on_close=release_slot,
+            )
+        except Exception:
+            release_slot()
+            raise
 
     @app.post("/research/recover", response_model=HarnessResponse)
     def recover_research(payload: RecoveryRequest) -> HarnessResponse:
         """Recover a failed run from its latest trusted checkpoint."""
+        release_slot: Callable[[], None] | None = None
         try:
+            release_slot = reserve_run_slot()
             result = harness_runner.resume(payload.run_id)
             _raise_for_failed_result(result)
         except HTTPException:
@@ -732,6 +1029,9 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 code="application_error",
                 message="The research run could not be recovered.",
             ) from exc
+        finally:
+            if release_slot is not None:
+                release_slot()
         return _build_harness_response(result, mode="recovery")
 
     @app.post("/research/recover/stream")
@@ -743,15 +1043,22 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 code="invalid_command",
                 message="The recovery request is invalid.",
             )
-        return _streaming_response(
-            harness_runner,
-            None,
-            stream_factory=lambda: harness_runner.resume_stream(payload.run_id),
-            run_id=payload.run_id,
-        )
+        release_slot = reserve_run_slot()
+        try:
+            return _streaming_response(
+                harness_runner,
+                None,
+                stream_factory=lambda: harness_runner.resume_stream(payload.run_id),
+                run_id=payload.run_id,
+                on_close=release_slot,
+            )
+        except Exception:
+            release_slot()
+            raise
 
     @app.post("/harness/run", response_model=HarnessResponse)
     def run_harness(payload: HarnessRequest) -> HarnessResponse:
+        release_slot: Callable[[], None] | None = None
         try:
             request = _normalize_harness_request(
                 payload,
@@ -759,6 +1066,7 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 permission_mode=payload.permission_mode,
                 metadata=payload.metadata,
             )
+            release_slot = reserve_run_slot()
             result = harness_runner.run(request)
             _raise_for_failed_result(result)
         except HTTPException:
@@ -781,13 +1089,18 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 code="application_error",
                 message="The research run failed.",
             ) from exc
+        finally:
+            if release_slot is not None:
+                release_slot()
 
         return _build_harness_response(result, mode="internal")
 
     @app.post("/harness/recover", response_model=HarnessResponse)
     def recover_harness(payload: RecoveryRequest) -> HarnessResponse:
         """Recover one harness run using the shared application service."""
+        release_slot: Callable[[], None] | None = None
         try:
+            release_slot = reserve_run_slot()
             result = harness_runner.resume(payload.run_id)
             _raise_for_failed_result(result)
         except HTTPException:
@@ -804,6 +1117,9 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 code="application_error",
                 message="The research run could not be recovered.",
             ) from exc
+        finally:
+            if release_slot is not None:
+                release_slot()
         return _build_harness_response(result, mode="recovery")
 
     @app.post("/harness/recover/stream")
@@ -815,12 +1131,18 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 code="invalid_command",
                 message="The recovery request is invalid.",
             )
-        return _streaming_response(
-            harness_runner,
-            None,
-            stream_factory=lambda: harness_runner.resume_stream(payload.run_id),
-            run_id=payload.run_id,
-        )
+        release_slot = reserve_run_slot()
+        try:
+            return _streaming_response(
+                harness_runner,
+                None,
+                stream_factory=lambda: harness_runner.resume_stream(payload.run_id),
+                run_id=payload.run_id,
+                on_close=release_slot,
+            )
+        except Exception:
+            release_slot()
+            raise
 
     @app.get("/memories")
     def list_user_memories(
@@ -1026,6 +1348,99 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 code="repository_error",
                 message="The run repository is unavailable.",
             ) from exc
+
+    @app.get("/runs/{run_id}/artifacts/{artifact_id}")
+    def download_run_artifact(run_id: str, artifact_id: str) -> Response:
+        """Download one schema-v2 artifact after validating run ownership."""
+        try:
+            normalized_run_id = normalize_run_id(run_id)
+        except (TypeError, ValueError) as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_run_id",
+                message="The run ID is invalid.",
+            ) from exc
+        try:
+            normalized_artifact_id = normalize_artifact_id(artifact_id)
+        except (TypeError, ValueError) as exc:
+            raise _safe_http_error(
+                status_code=400,
+                code="invalid_artifact_id",
+                message="The artifact ID is invalid.",
+            ) from exc
+
+        try:
+            record = harness_runner.load_record(run_id)
+        except (InvalidRunIdError, RunNotFoundError, FileNotFoundError) as exc:
+            raise _safe_http_error(
+                status_code=404,
+                code="artifact_not_found",
+                message="The artifact was not found.",
+            ) from exc
+        except (CorruptRunRecordError, UnsupportedSchemaError) as exc:
+            raise _safe_http_error(
+                status_code=500,
+                code="corrupt_run_record",
+                message="The stored run record is unavailable.",
+            ) from exc
+        except RunRepositoryError as exc:
+            raise _safe_http_error(
+                status_code=500,
+                code="repository_error",
+                message="The run repository is unavailable.",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            raise _safe_http_error(
+                status_code=500,
+                code="repository_error",
+                message="The run repository is unavailable.",
+            ) from exc
+
+        if not isinstance(record, Mapping):
+            raise _safe_http_error(
+                status_code=404,
+                code="artifact_not_found",
+                message="The artifact was not found.",
+            )
+        descriptor = _artifact_descriptor_for_run(record, normalized_artifact_id)
+        if descriptor is None:
+            raise _safe_http_error(
+                status_code=404,
+                code="artifact_not_found",
+                message="The artifact was not found.",
+            )
+
+        store = _artifact_store_for_runner(harness_runner)
+        if store is None:
+            raise _safe_http_error(
+                status_code=503,
+                code="artifact_store_unavailable",
+                message="The artifact store is unavailable.",
+            )
+        try:
+            body = store.get(normalized_run_id, normalized_artifact_id)
+        except (FileNotFoundError, TypeError, ValueError) as exc:
+            raise _safe_http_error(
+                status_code=404,
+                code="artifact_not_found",
+                message="The artifact was not found.",
+            ) from exc
+        except OSError as exc:
+            raise _safe_http_error(
+                status_code=500,
+                code="artifact_store_unavailable",
+                message="The artifact store is unavailable.",
+            ) from exc
+
+        return Response(
+            content=body,
+            media_type=descriptor.mime_type,
+            headers={
+                "Content-Disposition": _artifact_content_disposition(
+                    _artifact_filename(descriptor)
+                ),
+            },
+        )
 
     @app.get("/harness/scenarios")
     def list_harness_scenarios() -> list[dict[str, Any]]:

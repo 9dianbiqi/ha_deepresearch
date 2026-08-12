@@ -19,6 +19,7 @@ env/
 .env
 .env.*
 !.env.example
+!.env.production.example
 pip-wheel-metadata/
 
 # uv
@@ -54,3 +55,4 @@ backend/benchmark_runs/
 backend/benchmark_results.json
 backend/cache/
 backend/notes/
+backend/data/

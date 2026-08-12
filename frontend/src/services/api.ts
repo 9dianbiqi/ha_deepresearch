@@ -1,5 +1,15 @@
 const baseURL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const appApiKey =
+  typeof import.meta.env === "object" && import.meta.env
+    ? import.meta.env.VITE_APP_API_KEY || ""
+    : "";
+
+function apiHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  return appApiKey
+    ? { ...headers, Authorization: `Bearer ${appApiKey}` }
+    : headers;
+}
 
 export interface ResearchRequest {
   topic: string;
@@ -89,7 +99,7 @@ export interface RunRecord {
   [key: string]: unknown;
 }
 
-export interface GithubArtifact {
+export interface ArtifactDescriptor {
   artifact_id: string;
   artifact_type: string;
   mime_type: string;
@@ -97,9 +107,11 @@ export interface GithubArtifact {
   title: string;
   description?: string;
   source_ids?: string[];
-  content?: string;
+  size_bytes?: number;
   checksum?: string;
 }
+
+export type GithubArtifact = ArtifactDescriptor;
 
 export interface GithubEvidenceItem {
   evidence_id: string;
@@ -144,7 +156,7 @@ export interface ResearchIntelligence {
   report_spec?: Record<string, unknown>;
   artifact_manifest?: {
     schema_version?: number;
-    artifacts?: Array<Record<string, unknown>>;
+    artifacts?: ArtifactDescriptor[];
   };
   evidence_frozen?: boolean;
   [key: string]: unknown;
@@ -269,10 +281,10 @@ export async function runResearchStream(
 ): Promise<void> {
   const response = await fetch(`${baseURL}/research/stream`, {
     method: "POST",
-    headers: {
+    headers: apiHeaders({
       "Content-Type": "application/json",
       Accept: "text/event-stream"
-    },
+    }),
     body: JSON.stringify(payload),
     signal: options.signal
   });
@@ -294,10 +306,10 @@ export async function runContinueStream(
 ): Promise<void> {
   const response = await fetch(`${baseURL}/research/continue/stream`, {
     method: "POST",
-    headers: {
+    headers: apiHeaders({
       "Content-Type": "application/json",
       Accept: "text/event-stream"
-    },
+    }),
     body: JSON.stringify(payload),
     signal: options.signal
   });
@@ -319,10 +331,10 @@ export async function runRecoveryStream(
 ): Promise<void> {
   const response = await fetch(`${baseURL}/research/recover/stream`, {
     method: "POST",
-    headers: {
+    headers: apiHeaders({
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-    },
+    }),
     body: JSON.stringify(payload),
     signal: options.signal,
   });
@@ -342,7 +354,7 @@ export async function listHistory(
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set("cursor", cursor);
   const response = await fetch(`${baseURL}/runs?${params.toString()}`, {
-    headers: { Accept: "application/json" },
+    headers: apiHeaders({ Accept: "application/json" }),
   });
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
@@ -354,13 +366,47 @@ export async function listHistory(
 export async function getRunRecord(runId: string): Promise<RunRecord> {
   const response = await fetch(
     `${baseURL}/runs/${encodeURIComponent(runId)}`,
-    { headers: { Accept: "application/json" } },
+    { headers: apiHeaders({ Accept: "application/json" }) },
   );
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
     throw new Error(errorText || "无法加载研究记录");
   }
   return (await response.json()) as RunRecord;
+}
+
+function filenameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return null;
+    }
+  }
+  const plain = value.match(/filename="?([^";]+)"?/i)?.[1];
+  return plain?.trim() || null;
+}
+
+export async function fetchArtifact(
+  runId: string,
+  artifactId: string,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetch(
+    `${baseURL}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`,
+    { headers: apiHeaders({ Accept: "*/*" }) },
+  );
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || "无法下载研究产物");
+  }
+  return {
+    blob: await response.blob(),
+    filename: filenameFromContentDisposition(
+      response.headers.get("Content-Disposition"),
+    ),
+  };
 }
 
 export async function listMemories(
@@ -374,7 +420,7 @@ export async function listMemories(
     limit: String(limit),
   });
   const response = await fetch(`${baseURL}/memories?${params.toString()}`, {
-    headers: { Accept: "application/json" },
+    headers: apiHeaders({ Accept: "application/json" }),
   });
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
@@ -390,10 +436,10 @@ export async function createMemoryCandidate(
 ): Promise<UserMemory> {
   const response = await fetch(`${baseURL}/memories/candidates`, {
     method: "POST",
-    headers: {
+    headers: apiHeaders({
       "Content-Type": "application/json",
       Accept: "application/json",
-    },
+    }),
     body: JSON.stringify({ text, kind, scope }),
   });
   if (!response.ok) {
@@ -412,7 +458,7 @@ export async function confirmMemory(
     `${baseURL}/memories/${encodeURIComponent(memoryId)}/confirm?${params.toString()}`,
     {
       method: "POST",
-      headers: { Accept: "application/json" },
+      headers: apiHeaders({ Accept: "application/json" }),
     },
   );
   if (!response.ok) {
@@ -431,7 +477,7 @@ export async function deleteMemory(
     `${baseURL}/memories/${encodeURIComponent(memoryId)}?${params.toString()}`,
     {
       method: "DELETE",
-      headers: { Accept: "application/json" },
+      headers: apiHeaders({ Accept: "application/json" }),
     },
   );
   if (!response.ok) {

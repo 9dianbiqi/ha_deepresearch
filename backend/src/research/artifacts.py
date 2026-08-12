@@ -50,6 +50,11 @@ def _artifact_id(value: object) -> str:
     return normalized
 
 
+def normalize_artifact_id(value: object) -> str:
+    """Validate and return one canonical, path-safe artifact identifier."""
+    return _artifact_id(value)
+
+
 def _source_ids(value: object) -> tuple[str, ...]:
     """Detach source IDs without accepting path-like values."""
     if value is None:
@@ -291,5 +296,6 @@ __all__ = [
     "ArtifactPayload",
     "ArtifactStore",
     "FileArtifactStore",
+    "normalize_artifact_id",
     "persist_research_artifacts",
 ]

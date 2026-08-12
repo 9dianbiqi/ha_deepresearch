@@ -157,11 +157,13 @@ Vite 开发服务器使用 `http://localhost:5174`。前端默认访问 `http://
 | 方法 | 路径 | 当前用途 |
 |---|---|---|
 | `GET` | `/healthz` | 健康检查 |
+| `GET` | `/readyz` | 检查 DATA_DIR 是否可读写 |
 | `POST` | `/research` | 同步研究；返回报告和任务列表 |
 | `POST` | `/research/stream` | 新研究的 SSE 兼容流 |
 | `POST` | `/research/continue/stream` | 基于已持久化父运行的 follow-up SSE 流 |
 | `POST` | `/harness/run` | 兼容的内部同步入口；仍委托同一 Application 生命周期 |
 | `GET` | `/runs/{run_id}` | 读取 canonical schema-v1 运行快照 |
+| `GET` | `/runs/{run_id}/artifacts/{artifact_id}` | 下载 schema-v2 Artifact 字节 |
 | `GET` | `/harness/runs/{run_id}` | 已弃用的查询别名 |
 | `GET` | `/harness/scenarios` | 兼容的离线 benchmark fixture 列表 |
 
@@ -184,8 +186,16 @@ SSE 是 `data: <json>\n\n` 帧。兼容事件包括 `status`、`github_repositor
 按上述命令从 `backend/` 启动时，默认运行仓库位于：
 
 ```text
-backend/output/harness_runs/runs/<run_id>.json
+DATA_DIR/
+├── runs/<run_id>.json
+├── artifacts/<run_id>/<artifact_id>
+├── research-history.db
+└── user-memory.db
 ```
+
+生产环境默认使用 `DATA_DIR=/data`。Artifact 清单只保存描述信息，下载时通过
+`/runs/{run_id}/artifacts/{artifact_id}` 读取持久化字节。备份、恢复和安全清理见
+[生产运维说明](docs/PRODUCTION_OPERATIONS.md)。
 
 每个成功运行只写一个 schema-v1 JSON envelope，其中包含 canonical snapshot 和紧凑 follow-up context。写入使用同目录临时文件、`fsync` 和 `os.replace`；配置只保存 `Configuration.safe_snapshot()` 的非敏感字段。
 

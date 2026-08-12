@@ -21,6 +21,8 @@ SAFE_CONFIGURATION_FIELDS = (
     "enable_quality_gate",
     "enable_github_research",
     "run_timeout_seconds",
+    "max_concurrent_runs",
+    "retention_days",
 )
 
 
@@ -50,6 +52,27 @@ class Configuration(BaseModel):
         le=16,
         title="Maximum Concurrent Tasks",
         description="Maximum number of research tasks running concurrently",
+    )
+    max_concurrent_runs: int = Field(
+        default=1,
+        ge=1,
+        le=16,
+        title="Maximum Concurrent Runs",
+        description="Maximum number of research runs active in this process",
+    )
+    data_dir: str = Field(
+        default="./data",
+        min_length=1,
+        max_length=1024,
+        title="Data Directory",
+        description="Durable root for runs, artifacts, history, and memory",
+    )
+    retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        title="Retention Days",
+        description="Number of days to retain durable run data",
     )
     local_llm: str = Field(
         default="llama3.2",

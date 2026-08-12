@@ -98,3 +98,31 @@ test("v1.1 evidence events remain additive to the stream contract", async () => 
   assert.match(source, /artifact_manifest/);
   assert.match(source, /line_start/);
 });
+
+test("fetchArtifact uses the durable run artifact endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(
+      url,
+      "http://test/runs/run-1/artifacts/artifact_report_markdown",
+    );
+    assert.deepEqual(options, { headers: { Accept: "*/*" } });
+    return new Response("# persisted", {
+      status: 200,
+      headers: {
+        "Content-Type": "text/markdown",
+        "Content-Disposition": 'attachment; filename="report.md"',
+      },
+    });
+  };
+  try {
+    const downloaded = await api.fetchArtifact(
+      "run-1",
+      "artifact_report_markdown",
+    );
+    assert.equal(downloaded.filename, "report.md");
+    assert.equal(await downloaded.blob.text(), "# persisted");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

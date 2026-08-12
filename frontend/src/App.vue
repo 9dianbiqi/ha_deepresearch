@@ -697,6 +697,7 @@ import {
   confirmMemory,
   createMemoryCandidate,
   deleteMemory,
+  fetchArtifact,
   listMemories,
   runContinueStream,
   runResearchStream,
@@ -705,6 +706,7 @@ import {
   type GithubArtifact,
   type GithubEvidenceItem,
   type GithubIntelligence,
+  type ResearchIntelligence,
   type ContinueRequest,
   type HistoryItem,
   type ResearchStreamEvent,
@@ -925,34 +927,53 @@ function evidenceHref(evidence: GithubEvidenceItem): string | null {
     : null;
 }
 
-function setGithubIntelligence(value: unknown): void {
+function artifactDescriptors(value: unknown): GithubArtifact[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    githubIntelligence.value = null;
-    artifactManifest.value = [];
-    return;
+    return [];
   }
-  const bundle = value as GithubIntelligence;
-  githubIntelligence.value = bundle;
-  const rawArtifacts = Array.isArray(bundle.artifacts)
-    ? bundle.artifacts
-    : bundle.artifact_manifest?.artifacts;
-  artifactManifest.value = Array.isArray(rawArtifacts)
+  const bundle = value as ResearchIntelligence;
+  const rawArtifacts = bundle.artifact_manifest?.artifacts;
+  return Array.isArray(rawArtifacts)
     ? rawArtifacts.filter(
         (artifact): artifact is GithubArtifact =>
-          Boolean(artifact && typeof artifact.artifact_id === "string"),
+          Boolean(
+            artifact &&
+              typeof artifact.artifact_id === "string" &&
+              typeof artifact.mime_type === "string" &&
+              typeof artifact.path === "string" &&
+              typeof artifact.title === "string",
+          ),
       )
     : [];
 }
 
-function downloadArtifact(artifact: GithubArtifact): void {
-  if (typeof artifact.content !== "string") return;
-  const blob = new Blob([artifact.content], { type: artifact.mime_type || "text/plain" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = artifact.path.split("/").pop() || `${artifact.artifact_id}.txt`;
-  link.click();
-  URL.revokeObjectURL(url);
+function setGithubIntelligence(value: unknown, researchValue?: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    githubIntelligence.value = null;
+    artifactManifest.value = artifactDescriptors(researchValue);
+    return;
+  }
+  const bundle = value as GithubIntelligence;
+  githubIntelligence.value = bundle;
+  artifactManifest.value = artifactDescriptors(researchValue);
+}
+
+async function downloadArtifact(artifact: GithubArtifact): Promise<void> {
+  if (!currentRunId.value) return;
+  try {
+    const downloaded = await fetchArtifact(currentRunId.value, artifact.artifact_id);
+    const url = URL.createObjectURL(downloaded.blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download =
+      downloaded.filename || artifact.path.split("/").pop() || `${artifact.artifact_id}.bin`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "无法下载研究产物";
+  }
 }
 
 function pulse(flag: { value: boolean }) {
@@ -1083,7 +1104,7 @@ async function openHistory(item: HistoryItem): Promise<void> {
       extractOptionalString(output.report_markdown) ??
       extractOptionalString(output.running_summary) ??
       "";
-    setGithubIntelligence(output.github_intelligence);
+    setGithubIntelligence(output.github_intelligence, output.research_intelligence);
     progressLogs.value = [`已恢复历史研究：${currentTopic.value}`];
     historyRecallCount.value = 0;
     try {
@@ -1103,7 +1124,7 @@ async function hydrateRunArtifacts(runId: string | null): Promise<void> {
   try {
     const record = await getRunRecord(runId);
     const output = ensureRecord(record.output);
-    setGithubIntelligence(output.github_intelligence);
+    setGithubIntelligence(output.github_intelligence, output.research_intelligence);
   } catch {
     // The SSE terminal event remains authoritative if the record is not yet readable.
   }
@@ -1426,7 +1447,27 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
 
   if (event.type === "artifact_ready") {
-    progressLogs.value.push(`已生成报告产物：${payload.title || payload.path || "artifact"}`);
+    const artifactId = extractOptionalString(payload.artifact_id);
+    if (artifactId) {
+      const nextArtifact: GithubArtifact = {
+        artifact_id: artifactId,
+        artifact_type: extractOptionalString(payload.artifact_type) ?? "artifact",
+        mime_type: extractOptionalString(payload.mime_type) ?? "application/octet-stream",
+        path: extractOptionalString(payload.path) ?? artifactId,
+        title: extractOptionalString(payload.title) ?? artifactId,
+        checksum: extractOptionalString(payload.checksum) ?? undefined,
+      };
+      const existingIndex = artifactManifest.value.findIndex(
+        (item) => item.artifact_id === artifactId,
+      );
+      if (existingIndex === -1) {
+        artifactManifest.value = [...artifactManifest.value, nextArtifact];
+      } else {
+        artifactManifest.value = artifactManifest.value.map((item, index) =>
+          index === existingIndex ? { ...item, ...nextArtifact } : item,
+        );
+      }
+    }
     return;
   }
 

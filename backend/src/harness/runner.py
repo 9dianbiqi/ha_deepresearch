@@ -275,10 +275,11 @@ class HarnessRunner:
         history_store = ResearchHistoryStore(repository)
         memory_store = UserMemoryStore(repository.root)
         policy = HarnessPolicy()
+        artifact_store = FileArtifactStore(repository)
         coordinator = DeepResearchAgent(
             config=Configuration.from_env(),
             operation_authorizer=policy,
-            artifact_store=FileArtifactStore(repository),
+            artifact_store=artifact_store,
         )
         application = ResearchApplicationService(
             coordinator=coordinator,
@@ -296,6 +297,7 @@ class HarnessRunner:
             max_workers=1,
             history_store=history_store,
             memory_store=memory_store,
+            artifact_store=artifact_store,
         )
 
     def run(self, request: HarnessRunRequest) -> HarnessRunResult:

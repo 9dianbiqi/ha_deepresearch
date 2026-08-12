@@ -432,13 +432,13 @@ unknown capability 默认 deny。policy reason 在记录前转为固定可信文
 默认 composition root：
 
 ```python
-HarnessRunner.build_default(base_path="./output/harness_runs")
+HarnessRunner.build_default(base_path=Configuration.from_env().data_dir)
 ```
 
 从 `backend/` 启动时，文件为：
 
 ```text
-backend/output/harness_runs/runs/<canonical-run-id>.json
+DATA_DIR/runs/<canonical-run-id>.json
 ```
 
 文件顶层结构：

@@ -8,6 +8,20 @@ All notable changes to this project will be documented in this file.
 - **GitHub line-addressable evidence** with bounded commit-pinned source file excerpts, deterministic line ranges, citation sanitization, and Evidence Drawer links.
 - **GitHub evidence acceptance record** covering authenticated collection, rate-limit degradation, artifact round-trip, and SSE compatibility.
 
+## [1.1.0] — 2026-08-12
+
+### Added
+- **Durable schema-v2 artifact downloads** through `GET /runs/{run_id}/artifacts/{artifact_id}`, with Run ownership checks, MIME types, download names, stable `artifact_not_found` responses, and restart persistence coverage.
+- **Single-instance production protection** with Bearer `APP_API_KEY` authentication, public `/healthz` and `/readyz`, bounded concurrent runs, request-size limits, and secret-safe validation/logging.
+- **Unified `DATA_DIR` operations** with retention-aware cleanup, path safety checks, backup/restore guidance, Dockerfiles, Compose volume persistence, and CI verification.
+
+### Changed
+- Backend and frontend versions are now `1.1.0`.
+- The frontend downloads artifact bytes from the durable API instead of relying on inline artifact content.
+
+### Not included
+- Paper retrieval and research-provider expansion remain out of scope for v1.1.
+
 ## [1.0.0] — 2026-08-11
 
 ### Added

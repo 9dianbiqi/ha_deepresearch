@@ -1,0 +1,46 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      APP_API_KEY: ${APP_API_KEY:?APP_API_KEY must be set}
+      DATA_DIR: /data
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5174}
+      LLM_PROVIDER: ${LLM_PROVIDER:-custom}
+      LLM_MODEL_ID: ${LLM_MODEL_ID:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      SEARCH_API: ${SEARCH_API:-duckduckgo}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_API_BASE_URL: ${GITHUB_API_BASE_URL:-https://api.github.com}
+    volumes:
+      - helloagents_data:/data
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    environment:
+      APP_API_KEY: ${APP_API_KEY:?APP_API_KEY must be set}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-5174}:80"
+
+volumes:
+  helloagents_data:

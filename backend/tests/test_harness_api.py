@@ -7,9 +7,12 @@ import json
 import sys
 import traceback
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest.mock import patch
@@ -29,9 +32,16 @@ create_app = main_module.create_app
 _models = importlib.import_module("models")
 SummaryStateOutput = _models.SummaryStateOutput
 TodoItem = _models.TodoItem
+_artifacts = importlib.import_module("research.artifacts")
+ArtifactPayload = _artifacts.ArtifactPayload
+FileArtifactStore = _artifacts.FileArtifactStore
 _repository = importlib.import_module("research.repository")
 CorruptRunRecordError = _repository.CorruptRunRecordError
+FileRunRepository = _repository.FileRunRepository
 InvalidRunIdError = _repository.InvalidRunIdError
+_contracts = importlib.import_module("research.contracts")
+RunSnapshot = _contracts.RunSnapshot
+RunStatus = _contracts.RunStatus
 
 
 def test_configuration_log_presence_never_returns_secret_material() -> None:
@@ -445,6 +455,174 @@ class HarnessApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["run_id"], "run-sync-001")
         self.assertEqual(payload["evaluation"]["score"], 1.0)
+
+    def test_artifact_download_survives_new_app_instance_and_checks_ownership(self) -> None:
+        """Artifact bodies remain downloadable after rebuilding the service."""
+        root = Path(self.tmpdir.name) / "durable-data"
+        run_id = "12345678-1234-5678-1234-567812345678"
+
+        class PersistentRunner:
+            def __init__(self) -> None:
+                self.repository = FileRunRepository(root)
+                self.artifact_store = FileArtifactStore(self.repository)
+
+            def load_record(self, requested_run_id: str) -> dict[str, Any]:
+                return self.repository.load(requested_run_id).as_dict()
+
+        runner = PersistentRunner()
+        descriptor = runner.artifact_store.put(
+            run_id,
+            ArtifactPayload(
+                artifact_id="artifact_report_markdown",
+                artifact_type="report_markdown",
+                mime_type="text/markdown",
+                title="Report",
+                content="# Durable report\n",
+            ),
+        )
+        now = datetime.now(timezone.utc)
+        runner.repository.save(
+            RunSnapshot(
+                run_id=run_id,
+                topic="durable artifact",
+                status=RunStatus.COMPLETED,
+                started_at=now,
+                completed_at=now,
+                parent_run_id=None,
+                output={
+                    "report_markdown": "# Durable report\n",
+                    "research_intelligence": {
+                        "schema_version": 2,
+                        "mode": "web",
+                        "profile_id": "web.general",
+                        "profile_version": 1,
+                        "sources": [],
+                        "evidence": [],
+                        "claims": [],
+                        "coverage": {},
+                        "report_spec": {"title": "Report"},
+                        "artifact_manifest": {
+                            "schema_version": 2,
+                            "artifacts": [descriptor.as_dict()],
+                        },
+                        "evidence_frozen": True,
+                    },
+                },
+                followup_context={},
+                metrics={},
+                policy_decisions=(),
+                config_snapshot={},
+                events=(),
+            )
+        )
+
+        with TestClient(create_app(harness_runner=runner)) as client:
+            first = client.get(f"/runs/{run_id}/artifacts/{descriptor.artifact_id}")
+            missing = client.get(f"/runs/{run_id}/artifacts/not-owned")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.content, b"# Durable report\n")
+        self.assertTrue(first.headers["content-type"].startswith("text/markdown"))
+        self.assertIn("filename=\"report.md\"", first.headers["content-disposition"])
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["detail"]["code"], "artifact_not_found")
+
+        with TestClient(create_app(harness_runner=PersistentRunner())) as client:
+            restarted = client.get(
+                f"/runs/{run_id}/artifacts/{descriptor.artifact_id}"
+            )
+
+        self.assertEqual(restarted.status_code, 200)
+        self.assertEqual(restarted.content, b"# Durable report\n")
+
+    def test_readiness_probe_checks_durable_and_artifact_directories(self) -> None:
+        """The readiness probe verifies the same root used by the store."""
+        repository = FileRunRepository(Path(self.tmpdir.name) / "ready-data")
+        runner = SimpleNamespace(
+            repository=repository,
+            artifact_store=FileArtifactStore(repository),
+        )
+        with TestClient(create_app(harness_runner=runner)) as client:
+            self.assertEqual(client.get("/healthz").status_code, 200)
+            ready = client.get("/readyz")
+
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.json(), {"status": "ready"})
+        self.assertTrue(repository.root.is_dir())
+        self.assertTrue(repository.runs_dir.is_dir())
+        self.assertTrue(runner.artifact_store.artifact_root.is_dir())
+
+    def test_configured_bearer_key_protects_routes_but_not_probes(self) -> None:
+        """Health probes stay public while application routes require the key."""
+        secret = "test-app-key-not-for-logs"
+        with patch.dict("os.environ", {"APP_API_KEY": secret}, clear=False):
+            with TestClient(create_app(harness_runner=self.runner)) as client:
+                health = client.get("/healthz")
+                readiness = client.get("/readyz")
+                missing = client.get("/harness/scenarios")
+                wrong = client.get(
+                    "/harness/scenarios",
+                    headers={"Authorization": "Bearer wrong-key"},
+                )
+                valid = client.get(
+                    "/harness/scenarios",
+                    headers={"Authorization": f"Bearer {secret}"},
+                )
+
+        self.assertEqual(health.status_code, 200)
+        self.assertNotEqual(readiness.status_code, 401)
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(valid.status_code, 200)
+        self.assertNotIn(secret, missing.text)
+        self.assertNotIn(secret, wrong.text)
+
+    def test_run_capacity_returns_429_without_waiting(self) -> None:
+        """A second top-level run is rejected while the configured slot is active."""
+        started = Event()
+        release = Event()
+
+        class BlockingRunner(FakeRunner):
+            def run(self, request: Any) -> Any:
+                started.set()
+                release.wait(timeout=5)
+                return super().run(request)
+
+        runner = BlockingRunner(base_path=Path(self.tmpdir.name))
+        with patch.dict("os.environ", {"MAX_CONCURRENT_RUNS": "1"}, clear=False):
+            with TestClient(create_app(harness_runner=runner)) as client:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    first_future = executor.submit(
+                        client.post,
+                        "/research",
+                        json={"topic": "first"},
+                    )
+                    self.assertTrue(started.wait(timeout=5))
+                    second = client.post("/research", json={"topic": "second"})
+                    release.set()
+                    first = first_future.result(timeout=5)
+
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["detail"]["code"], "capacity_exceeded")
+        self.assertEqual(first.status_code, 200)
+
+    def test_request_limits_return_stable_errors_without_echoing_payloads(self) -> None:
+        """Topic and metadata limits do not reflect user text in validation errors."""
+        long_topic = "TOPIC_SENTINEL " + "x" * main_module._MAX_TOPIC_LENGTH
+        long_metadata = {"prompt": "METADATA_SENTINEL " + "x" * 20_000}
+
+        topic_response = self.client.post("/research", json={"topic": long_topic})
+        metadata_response = self.client.post(
+            "/harness/run",
+            json={"topic": "bounded", "metadata": long_metadata},
+        )
+
+        self.assertEqual(topic_response.status_code, 422)
+        self.assertEqual(topic_response.json()["detail"]["code"], "invalid_request")
+        self.assertEqual(metadata_response.status_code, 422)
+        self.assertEqual(metadata_response.json()["detail"]["code"], "invalid_request")
+        self.assertNotIn("TOPIC_SENTINEL", topic_response.text)
+        self.assertNotIn("METADATA_SENTINEL", metadata_response.text)
 
     def test_canonical_run_lookup_and_deprecated_alias_share_implementation(self) -> None:
         self.client.post("/harness/run", json={"topic": "record topic"})

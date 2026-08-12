@@ -825,7 +825,7 @@ class DeepResearchAgent:
                         ).as_dict()
                     )
             except (TypeError, ValueError, OSError):
-                logger.warning("Unable to persist generic research artifacts", exc_info=True)
+                logger.warning("Unable to persist generic research artifacts")
             return
         raw_bundle = session.state.github_intelligence
         if not raw_bundle:
@@ -854,7 +854,7 @@ class DeepResearchAgent:
                     ).as_dict()
                 )
         except (TypeError, ValueError):
-            logger.warning("Unable to refresh GitHub artifacts", exc_info=True)
+            logger.warning("Unable to refresh GitHub artifacts")
 
     def _execute_governed(
         self,

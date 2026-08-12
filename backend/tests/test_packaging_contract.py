@@ -30,9 +30,10 @@ def test_setuptools_discovers_runtime_modules_and_packages() -> None:
 
     assert set(setuptools["py-modules"]) == {
         "agent",
-        "config",
-        "main",
-        "models",
+            "config",
+            "main",
+            "maintenance",
+            "models",
         "prompts",
         "utils",
     }
