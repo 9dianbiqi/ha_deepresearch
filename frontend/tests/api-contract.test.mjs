@@ -96,4 +96,5 @@ test("v1.1 evidence events remain additive to the stream contract", async () => 
   );
   assert.match(source, /github_intelligence/);
   assert.match(source, /artifact_manifest/);
+  assert.match(source, /line_start/);
 });

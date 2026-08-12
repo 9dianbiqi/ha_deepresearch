@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **GitHub line-addressable evidence** with bounded commit-pinned source file excerpts, deterministic line ranges, citation sanitization, and Evidence Drawer links.
+- **GitHub evidence acceptance record** covering authenticated collection, rate-limit degradation, artifact round-trip, and SSE compatibility.
+
 ## [1.0.0] — 2026-08-11
 
 ### Added

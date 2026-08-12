@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
+from urllib.parse import quote
 
 import requests
 
@@ -20,6 +23,43 @@ OWNER_REPO_TOKEN_RE = re.compile(
 )
 MAX_README_CHARS = 6000
 MAX_TREE_LINES = 120
+MAX_SOURCE_FILES = 6
+MAX_SOURCE_FILE_CHARS = 8000
+MAX_SOURCE_PROMPT_CHARS = 16000
+_SOURCE_SUFFIXES = (
+    ".py",
+    ".pyi",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".vue",
+    ".go",
+    ".rs",
+    ".java",
+    ".md",
+    ".toml",
+    ".yaml",
+    ".yml",
+)
+_SOURCE_CONFIG_NAMES = frozenset(
+    {
+        "dockerfile",
+        "makefile",
+        "package.json",
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.cfg",
+    }
+)
+_SOURCE_EXCLUDED_NAMES = frozenset(
+    {
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "uv.lock",
+    }
+)
 
 
 class HTTPSession(Protocol):
@@ -64,6 +104,7 @@ class GitHubRepositoryContext:
     readme_excerpt: str = ""
     tree_excerpt: str = ""
     file_manifest: list[dict[str, Any]] = field(default_factory=list)
+    file_contents: list[dict[str, Any]] = field(default_factory=list)
     languages: dict[str, int] = field(default_factory=dict)
     contributors: list[dict[str, Any]] = field(default_factory=list)
     commits: list[dict[str, Any]] = field(default_factory=list)
@@ -116,6 +157,19 @@ class GitHubRepositoryContext:
         if self.tree_excerpt:
             parts.append("\n### Repository Tree")
             parts.append(f"```text\n{self.tree_excerpt}\n```")
+
+        if self.file_contents:
+            parts.append("\n### Source File Excerpts (commit-pinned)")
+            remaining = MAX_SOURCE_PROMPT_CHARS
+            for item in self.file_contents[:MAX_SOURCE_FILES]:
+                path = str(item.get("path") or "").strip()
+                content = str(item.get("content") or "")
+                if not path or not content or remaining <= 0:
+                    continue
+                excerpt = content[:remaining]
+                parts.append(f"\n#### {path}")
+                parts.append(f"```text\n{excerpt}\n```")
+                remaining -= len(excerpt)
 
         if self.commits:
             parts.append("\n### Recent Commits")
@@ -277,6 +331,12 @@ class GitHubResearchClient:
 
         commit_sha = self._latest_commit_sha(commits)
         file_manifest = self._format_file_manifest(tree)
+        file_contents = self._collect_source_files(
+            target,
+            file_manifest,
+            ref=commit_sha or default_branch,
+            notices=notices,
+        )
 
         return GitHubRepositoryContext(
             target=target,
@@ -285,6 +345,7 @@ class GitHubResearchClient:
             readme_excerpt=self._truncate(readme or "", MAX_README_CHARS),
             tree_excerpt=self._format_tree(tree),
             file_manifest=file_manifest,
+            file_contents=file_contents,
             languages=languages if isinstance(languages, dict) else {},
             contributors=self._summarize_contributors(contributors),
             commits=self._summarize_commits(commits),
@@ -470,6 +531,96 @@ class GitHubResearchClient:
             if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{7,64}", sha):
                 return sha.lower()
         return None
+
+    def _collect_source_files(
+        self,
+        target: GitHubRepositoryTarget,
+        manifest: list[dict[str, Any]],
+        *,
+        ref: str,
+        notices: list[str],
+    ) -> list[dict[str, Any]]:
+        """Fetch a small deterministic set of text files for line citations."""
+        selected = self._select_source_files(manifest)
+        source_files: list[dict[str, Any]] = []
+        for path in selected:
+            payload = self._get_json(
+                f"/repos/{target.full_name}/contents/{quote(path, safe='/')}",
+                notices=notices,
+                params={"ref": ref},
+            )
+            content = self._decode_file_content(payload)
+            if not content:
+                continue
+            bounded = self._truncate(content, MAX_SOURCE_FILE_CHARS)
+            source_files.append(
+                {
+                    "path": path,
+                    "sha": str(
+                        payload.get("sha")
+                        if isinstance(payload, dict) and payload.get("sha")
+                        else next(
+                            (
+                                item.get("sha")
+                                for item in manifest
+                                if item.get("path") == path and item.get("sha")
+                            ),
+                            None,
+                        )
+                        or ""
+                    ),
+                    "content": bounded,
+                    "truncated": len(content) > MAX_SOURCE_FILE_CHARS,
+                }
+            )
+        return source_files
+
+    @staticmethod
+    def _select_source_files(manifest: list[dict[str, Any]]) -> list[str]:
+        """Choose bounded, architecture-relevant text files in stable order."""
+        candidates: list[tuple[int, str]] = []
+        for item in manifest:
+            if str(item.get("type") or "blob") != "blob":
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            name = path.rsplit("/", 1)[-1].casefold()
+            if name in _SOURCE_EXCLUDED_NAMES:
+                continue
+            suffix = next(
+                (value for value in _SOURCE_SUFFIXES if name.endswith(value)),
+                None,
+            )
+            if suffix is None and name not in _SOURCE_CONFIG_NAMES:
+                continue
+            score = 0
+            if name in _SOURCE_CONFIG_NAMES:
+                score -= 20
+            if path.casefold().startswith(("src/", "backend/", "frontend/", "app/")):
+                score -= 10
+            if name in {"readme.md", "contributing.md"}:
+                score += 10
+            candidates.append((score, path))
+        candidates.sort(key=lambda item: (item[0], item[1].casefold()))
+        return [path for _, path in candidates[:MAX_SOURCE_FILES]]
+
+    @staticmethod
+    def _decode_file_content(payload: Any) -> str:
+        """Decode one GitHub contents API response as bounded UTF-8 text."""
+        if not isinstance(payload, dict):
+            return ""
+        value = payload.get("content")
+        if not isinstance(value, str):
+            return ""
+        encoding = str(payload.get("encoding") or "").casefold()
+        if encoding == "base64":
+            try:
+                decoded = base64.b64decode("".join(value.split()), validate=True)
+            except (ValueError, binascii.Error):
+                return ""
+            return decoded.decode("utf-8", errors="replace")
+        return value
 
     @staticmethod
     def _summarize_issues(payload: Any) -> list[dict[str, Any]]:

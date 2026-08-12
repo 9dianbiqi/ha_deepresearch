@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import unittest
 from typing import Any
 
@@ -124,8 +125,21 @@ class GitHubResearchClientTests(unittest.TestCase):
                     payload={
                         "tree": [
                             {"path": "backend", "type": "tree"},
-                            {"path": "backend/src/main.py", "type": "blob"},
+                            {
+                                "path": "backend/src/main.py",
+                                "type": "blob",
+                                "sha": "f" * 40,
+                            },
                         ]
+                    }
+                ),
+                "/repos/bytedance/deer-flow/contents/backend/src/main.py": FakeResponse(
+                    payload={
+                        "encoding": "base64",
+                        "content": base64.b64encode(
+                            b"def main():\n    return 'ok'\n"
+                        ).decode("ascii"),
+                        "sha": "f" * 40,
                     }
                 ),
                 "/repos/bytedance/deer-flow/languages": FakeResponse(
@@ -189,6 +203,12 @@ class GitHubResearchClientTests(unittest.TestCase):
         self.assertEqual(context.repository["stars"], 100)
         self.assertIn("# DeerFlow", context.readme_excerpt)
         self.assertIn("backend/src/main.py", context.tree_excerpt)
+        self.assertEqual(context.file_contents[0]["path"], "backend/src/main.py")
+        self.assertIn("return 'ok'", context.file_contents[0]["content"])
+        self.assertEqual(
+            context.file_contents[0]["sha"],
+            "f" * 40,
+        )
         self.assertEqual(context.languages["Python"], 10)
         self.assertEqual(context.contributors[0]["login"], "alice")
         self.assertEqual(context.commits[0]["message"], "feat: add research mode")

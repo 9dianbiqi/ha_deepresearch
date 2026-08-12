@@ -16,6 +16,9 @@ _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _URL_RE = re.compile(r"https?://[^\s)]+")
 _MAX_EVIDENCE = 180
 _MAX_EXCERPT_CHARS = 1200
+_MAX_SOURCE_CHUNKS_PER_FILE = 6
+_MAX_SOURCE_CHUNK_LINES = 40
+_MAX_SOURCE_CHUNK_CHARS = 1100
 
 
 def _now_iso() -> str:
@@ -375,6 +378,8 @@ def _append_evidence(
     source_url: str,
     file_path: str | None = None,
     commit_sha: str | None = None,
+    line_start: int | None = None,
+    line_end: int | None = None,
 ) -> None:
     """Append one bounded evidence item when it has usable content."""
     bounded = _clean(excerpt)
@@ -388,6 +393,9 @@ def _append_evidence(
                 evidence_type,
                 title,
                 source_url,
+                file_path or "",
+                line_start or "",
+                line_end or "",
             ),
             snapshot_id=snapshot.snapshot_id,
             evidence_type=evidence_type,
@@ -396,8 +404,37 @@ def _append_evidence(
             source_url=source_url,
             commit_sha=commit_sha,
             file_path=file_path,
+            line_start=line_start,
+            line_end=line_end,
         )
     )
+
+
+def _source_code_chunks(content: str) -> list[tuple[int, int, str]]:
+    """Split one source file into bounded, line-numbered evidence excerpts."""
+    lines = content.splitlines()
+    chunks: list[tuple[int, int, str]] = []
+    current: list[str] = []
+    current_chars = 0
+    start_line = 1
+    for index, line in enumerate(lines, start=1):
+        rendered = f"{index} | {line}"
+        separator_chars = 1 if current else 0
+        if current and (
+            len(current) >= _MAX_SOURCE_CHUNK_LINES
+            or current_chars + separator_chars + len(rendered) > _MAX_SOURCE_CHUNK_CHARS
+        ):
+            chunks.append((start_line, index - 1, "\n".join(current)))
+            if len(chunks) >= _MAX_SOURCE_CHUNKS_PER_FILE:
+                return chunks
+            current = []
+            current_chars = 0
+            start_line = index
+        current.append(rendered)
+        current_chars += separator_chars + len(rendered)
+    if current and len(chunks) < _MAX_SOURCE_CHUNKS_PER_FILE:
+        chunks.append((start_line, len(lines), "\n".join(current)))
+    return chunks
 
 
 def _claims_for_snapshot(
@@ -484,6 +521,28 @@ def build_github_evidence_bundle(
             source_url=_github_url(repository, sha=sha),
             commit_sha=sha,
         )
+        raw_file_contents = getattr(context, "file_contents", [])
+        if sha and isinstance(raw_file_contents, (list, tuple)):
+            for item in raw_file_contents[:12]:
+                if not isinstance(item, Mapping):
+                    continue
+                path = str(item.get("path") or "").strip()
+                content = str(item.get("content") or "")
+                if not path or not content:
+                    continue
+                for line_start, line_end, excerpt in _source_code_chunks(content):
+                    _append_evidence(
+                        evidence,
+                        snapshot=snapshot,
+                        evidence_type="source_code",
+                        title=f"{path}:{line_start}-{line_end}",
+                        excerpt=excerpt,
+                        source_url=_github_url(repository, sha=sha, path=path),
+                        file_path=path,
+                        commit_sha=sha,
+                        line_start=line_start,
+                        line_end=line_end,
+                    )
         if sha:
             for item in snapshot.file_manifest[:80]:
                 path = str(item.get("path") or "").strip()

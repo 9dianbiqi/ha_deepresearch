@@ -1550,6 +1550,7 @@ class DeepResearchAgent:
             "commit_sha": context.commit_sha,
             "repository": dict(context.repository),
             "file_manifest": [dict(item) for item in context.file_manifest],
+            "file_contents": [dict(item) for item in context.file_contents],
             "languages": dict(context.languages),
             "contributors": list(context.contributors),
             "commits": list(context.commits),

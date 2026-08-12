@@ -30,6 +30,13 @@ def make_context(
         readme_excerpt="# Project",
         tree_excerpt="src/main.py",
         file_manifest=[{"path": "src/main.py", "type": "blob"}],
+        file_contents=[
+            {
+                "path": "src/main.py",
+                "sha": "a" * 40,
+                "content": "def main():\n    return 1\n",
+            }
+        ],
         languages={"Python": 10},
         contributors=[{"login": "alice"}],
         commits=[
@@ -60,6 +67,25 @@ def test_bundle_pins_source_file_evidence_to_commit_sha() -> None:
         claim.evidence_ids and set(claim.evidence_ids).issubset({item.evidence_id for item in bundle.evidence})
         for claim in bundle.claims
     )
+
+
+def test_bundle_contains_line_addressable_source_code_evidence() -> None:
+    """Fetched source excerpts become commit-pinned line-range evidence."""
+    bundle = build_github_evidence_bundle([make_context()])
+
+    source = next(item for item in bundle.evidence if item.evidence_type == "source_code")
+    assert source.file_path == "src/main.py"
+    assert source.line_start == 1
+    assert source.line_end == 2
+    assert "1 | def main()" in source.excerpt
+    assert f"/blob/{'a' * 40}/src/main.py" in source.source_url
+
+    restored = github_evidence_bundle_from_dict(bundle.as_dict())
+    assert restored is not None
+    restored_source = next(
+        item for item in restored.evidence if item.evidence_type == "source_code"
+    )
+    assert (restored_source.line_start, restored_source.line_end) == (1, 2)
 
 
 def test_gap_enrichment_is_bounded_to_one_pass_and_freeze_blocks_more() -> None:

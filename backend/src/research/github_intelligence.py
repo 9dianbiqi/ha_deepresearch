@@ -59,13 +59,13 @@ def analyze_architecture(
     snapshot: RepositorySnapshot,
     evidence: Sequence[EvidenceItem],
 ) -> ResearchClaim | None:
-    """Analyze the source tree and file manifest without executing code."""
+    """Analyze pinned source excerpts and the file manifest without executing code."""
     return _claim(
         snapshot,
         evidence,
         category="architecture",
         statement=f"{snapshot.repository} 的目录树和关键文件清单可用于初步架构分析。",
-        evidence_types=("repository_tree", "source_file"),
+        evidence_types=("repository_tree", "source_file", "source_code"),
         confidence="medium",
     )
 

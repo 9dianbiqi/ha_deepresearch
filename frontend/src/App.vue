@@ -572,6 +572,24 @@
               <span>{{ claim.statement || "" }}</span>
             </article>
           </div>
+          <div v-if="sourceEvidence.length" class="source-evidence-list">
+            <p class="eyebrow">文件级引用</p>
+            <article v-for="evidence in sourceEvidence" :key="evidence.evidence_id" class="source-evidence-row">
+              <div>
+                <strong>{{ evidence.file_path || evidence.title }}</strong>
+                <span>{{ formatEvidenceLines(evidence) }}</span>
+              </div>
+              <a
+                v-if="evidenceHref(evidence)"
+                class="link-button"
+                :href="evidenceHref(evidence) || undefined"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                查看固定源码
+              </a>
+            </article>
+          </div>
           <div v-if="(githubIntelligence.snapshots?.length || 0) > 1" class="comparison-list">
             <p class="eyebrow">Comparison View</p>
             <article v-for="snapshot in githubIntelligence.snapshots" :key="String(snapshot.snapshot_id)" class="comparison-row">
@@ -685,6 +703,7 @@ import {
   getRunRecord,
   listHistory,
   type GithubArtifact,
+  type GithubEvidenceItem,
   type GithubIntelligence,
   type ContinueRequest,
   type HistoryItem,
@@ -809,6 +828,11 @@ const currentTask = computed(() => {
   return todoTasks.value[0] ?? null;
 });
 const currentTaskSources = computed(() => currentTask.value?.sourceItems ?? []);
+const sourceEvidence = computed<GithubEvidenceItem[]>(() =>
+  (githubIntelligence.value?.evidence ?? [])
+    .filter((item) => item.evidence_type === "source_code")
+    .slice(0, 6),
+);
 const currentTaskTitle = computed(() => currentTask.value?.title ?? "");
 const currentTaskIntent = computed(() => currentTask.value?.intent ?? "");
 const currentTaskQuery = computed(() => currentTask.value?.query ?? "");
@@ -887,6 +911,18 @@ function formatCoverage(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
     ? `${Math.round(value * 100)}%`
     : "0%";
+}
+
+function formatEvidenceLines(evidence: GithubEvidenceItem): string {
+  if (typeof evidence.line_start !== "number") return "固定 commit 快照";
+  const end = typeof evidence.line_end === "number" ? evidence.line_end : evidence.line_start;
+  return `第 ${evidence.line_start}-${end} 行 · ${evidence.commit_sha || "固定快照"}`;
+}
+
+function evidenceHref(evidence: GithubEvidenceItem): string | null {
+  return evidence.source_url.startsWith("https://github.com/")
+    ? evidence.source_url
+    : null;
 }
 
 function setGithubIntelligence(value: unknown): void {
@@ -2660,14 +2696,16 @@ button:disabled {
 
 .claim-list,
 .artifact-list,
-.comparison-list {
+.comparison-list,
+.source-evidence-list {
   display: grid;
   gap: 7px;
 }
 
 .claim-item,
 .artifact-row,
-.comparison-row {
+.comparison-row,
+.source-evidence-row {
   display: grid;
   gap: 3px;
   border: 1px solid var(--color-border-soft);
@@ -2685,7 +2723,8 @@ button:disabled {
 
 .claim-item span,
 .artifact-row span,
-.comparison-row span {
+.comparison-row span,
+.source-evidence-row span {
   color: #5f7d78;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -2694,6 +2733,15 @@ button:disabled {
 .artifact-row {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+}
+
+.source-evidence-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.source-evidence-row a {
+  white-space: nowrap;
 }
 
 .report-actions {

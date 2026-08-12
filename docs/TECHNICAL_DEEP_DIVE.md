@@ -267,6 +267,13 @@ planner LLM
 
 GitHub 仓库路径使用既有的固定研究任务和报告 context，不另建 lifecycle。
 
+Evidence/Intelligence 层在同一 Run 内生成版本化 repository snapshot。若能取得
+commit SHA，客户端会从 `contents` API 有界读取少量架构相关文本文件，并把源码按行号
+切成 `source_code` evidence；每条记录都带 `commit_sha`、`file_path`、`line_start`、
+`line_end` 和 commit-pinned blob URL。原始源码不会进入普通 SSE 或 operation event，
+只进入受控的 Run output/evidence artifact。报告中的 GitHub URL 会经过 evidence ledger
+规范化，前端可从 Evidence Drawer 打开固定源码位置。
+
 ### 5.3 Worker ownership
 
 任务 worker 接收冻结的 `_TaskWorkItem`，其中包含文本输入、config snapshot、scope 坐标和 typed adapters。worker 通过 bounded queue 发送：

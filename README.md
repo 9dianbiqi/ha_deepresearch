@@ -55,6 +55,7 @@ flowchart LR
 - DuckDuckGo、Tavily、Perplexity、SearXNG、Advanced 搜索后端
 - 搜索重试、DuckDuckGo 降级和显式 opt-in 的安全投影缓存（默认关闭）
 - GitHub 仓库识别与仓库上下文研究
+- GitHub 固定 commit 快照、文件内容/行号级证据、覆盖率分析和可下载研究产物
 - 逐任务流式摘要与最终 Markdown 报告
 - 可选 NoteTool 任务笔记与结论笔记
 - 类型化运行事件、operation 审计和安全元数据
@@ -167,7 +168,7 @@ Vite 开发服务器使用 `http://localhost:5174`。前端默认访问 `http://
 
 `/research/continue/stream` 要求非空、合法 UUID 格式的 `parent_run_id`。`/harness/run` 额外接受 `permission_mode`（`default` 或 `strict`）和 `metadata`。
 
-SSE 是 `data: <json>\n\n` 帧。兼容事件包括 `status`、`github_repository`、`todo_list`、`task_status`、`sources`、`task_summary_chunk`、`task_retry`、`report_note`、`final_report`，最终以 `done` 或 `error` 结束。每个投影事件都携带 `run_id`、`schema_version` 和单调递增的 `sequence`。
+SSE 是 `data: <json>\n\n` 帧。兼容事件包括 `status`、`github_repository`、`github_evidence`、`coverage_update`、`artifact_ready`、`todo_list`、`task_status`、`sources`、`task_summary_chunk`、`task_retry`、`report_note`、`final_report`，最终以 `done` 或 `error` 结束。每个投影事件都携带 `run_id`、`schema_version` 和单调递增的 `sequence`。
 
 ## 持久化与 follow-up
 

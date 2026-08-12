@@ -93,10 +93,22 @@ export interface GithubArtifact {
   checksum?: string;
 }
 
+export interface GithubEvidenceItem {
+  evidence_id: string;
+  evidence_type: string;
+  title: string;
+  excerpt: string;
+  source_url: string;
+  commit_sha?: string | null;
+  file_path?: string | null;
+  line_start?: number | null;
+  line_end?: number | null;
+}
+
 export interface GithubIntelligence {
   schema_version?: number;
   snapshots?: Array<Record<string, unknown>>;
-  evidence?: Array<Record<string, unknown>>;
+  evidence?: GithubEvidenceItem[];
   claims?: Array<Record<string, unknown>>;
   coverage?: {
     coverage_score?: number;
