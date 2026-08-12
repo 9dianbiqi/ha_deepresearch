@@ -61,6 +61,10 @@ class ResearchState:
     structured_report: str | None = field(default=None)
     report_note_id: str | None = field(default=None)
     report_note_path: str | None = field(default=None)
+    research_mode: str | None = field(default=None)
+    research_profile_id: str | None = field(default=None)
+    source_context: dict[str, Any] = field(default_factory=dict)
+    research_intelligence: dict[str, Any] = field(default_factory=dict)
     github_context: dict[str, Any] = field(default_factory=dict)
     github_intelligence: dict[str, Any] = field(default_factory=dict)
 
@@ -75,4 +79,8 @@ class SummaryStateOutput:
     running_summary: str | None = field(default=None)  # Backward-compatible文本
     report_markdown: str | None = field(default=None)
     todo_items: List[TodoItem] = field(default_factory=list)
+    research_mode: str | None = field(default=None)
+    research_profile_id: str | None = field(default=None)
+    source_context: dict[str, Any] = field(default_factory=dict)
+    research_intelligence: dict[str, Any] = field(default_factory=dict)
     github_intelligence: dict[str, Any] = field(default_factory=dict)

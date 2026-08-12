@@ -34,7 +34,13 @@ from .ports import (
     ResearchEventObserver,
     RunRepository,
 )
-from .report_validation import ReportValidationResult, validate_report
+from .quality import EvidenceGateBlockedError
+from .report_validation import (
+    CitationGate,
+    ReportValidationResult,
+    validate_citations,
+    validate_report,
+)
 from .repository import (
     CorruptRunRecordError,
     InvalidRunIdError,
@@ -472,6 +478,14 @@ class ResearchApplicationService:
                 code="checkpoint_persistence_failed",
                 message="A recovery checkpoint could not be persisted.",
             )
+        except EvidenceGateBlockedError:
+            return self._finish_started(
+                session,
+                status=RunStatus.REPORT_INCOMPLETE,
+                kind=EventKind.RUN_FAILED,
+                code="report_incomplete",
+                message="Research evidence did not meet the report quality gate.",
+            )
         except Exception:
             return self._finish_started(
                 session,
@@ -801,10 +815,12 @@ class ResearchApplicationService:
     ) -> ReportValidationResult:
         """Validate the report and invoke at most one coordinator retry."""
         attempts: list[dict[str, object]] = []
+        citation_gate = self._citation_gate(session)
         validation = validate_report(
             session.state.structured_report,
             session.state.todo_items,
             finish_reason=session.latest_llm_finish_reason(role="reporter"),
+            citation_gate=citation_gate,
         )
         attempts.append({"attempt": 1, **validation.as_dict()})
         existing_validation = session.metrics.get("report_validation")
@@ -868,10 +884,12 @@ class ResearchApplicationService:
                         "final": attempts[-1],
                     }
                     return validation
+                citation_gate = self._citation_gate(session)
                 validation = validate_report(
                     session.state.structured_report,
                     session.state.todo_items,
                     finish_reason=session.latest_llm_finish_reason(role="reporter"),
+                    citation_gate=citation_gate,
                 )
                 attempts.append({"attempt": 2, **validation.as_dict()})
 
@@ -881,6 +899,14 @@ class ResearchApplicationService:
             "final": validation.as_dict(),
         }
         return validation
+
+    @staticmethod
+    def _citation_gate(session: RunSession) -> CitationGate | None:
+        """Build a citation gate only for a persisted schema-v2 bundle."""
+        raw_bundle = session.state.research_intelligence
+        if not isinstance(raw_bundle, Mapping) or raw_bundle.get("schema_version") != 2:
+            return None
+        return validate_citations(session.state.structured_report, raw_bundle)
 
     @staticmethod
     def _parse_followup_context(

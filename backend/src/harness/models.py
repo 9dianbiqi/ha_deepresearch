@@ -98,6 +98,10 @@ class HarnessRunRecord:
             "todo_items": [
                 item.to_dict() for item in output.todo_items
             ],
+            "research_mode": output.research_mode,
+            "research_profile_id": output.research_profile_id,
+            "source_context": dict(output.source_context),
+            "research_intelligence": dict(output.research_intelligence),
             "github_intelligence": dict(output.github_intelligence),
         }
 

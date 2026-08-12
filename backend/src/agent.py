@@ -28,6 +28,7 @@ from research.adapters import (
     GovernedHelloAgentsLLM,
     HelloAgentsSearchAdapter,
 )
+from research.artifacts import ArtifactStore, persist_research_artifacts
 from research.context import FollowupContext, ResearchContextAssembler
 from research.contracts import EventKind, ResearchCommand, ResearchEvent, RunStatus
 from research.evidence import (
@@ -38,12 +39,16 @@ from research.evidence import (
     render_github_artifacts,
     supplement_github_evidence,
 )
+from research.intelligence import ResearchIntelligenceBundle
 from research.legacy_sse import project_legacy_event as _project_legacy_event
 from research.operations import (
     GovernedOperations,
     OperationRejectedError,
     OperationScope,
 )
+from research.pipeline import ResearchKernel
+from research.profiles import built_in_profile_registry
+from research.report_validation import validate_citations
 from research.session import (
     CancellationRequestedError,
     CancellationToken,
@@ -51,6 +56,7 @@ from research.session import (
     InvalidTransitionError,
     RunSession,
 )
+from research.sources import SourceProviderRegistry
 from research.telemetry import TelemetryHelloAgentsLLM, llm_telemetry_scope
 from services.github_research import (
     GitHubRepositoryContext,
@@ -240,6 +246,9 @@ class DeepResearchAgent:
         reporting: Any | None = None,
         note_agent: Any = _DEFAULT_DEPENDENCY,
         github_adapter: Any = _DEFAULT_DEPENDENCY,
+        source_provider_registry: SourceProviderRegistry | None = None,
+        research_kernel: ResearchKernel | None = None,
+        artifact_store: ArtifactStore | None = None,
         operation_authorizer: Any | None = None,
         legacy_event_queue_capacity: int = 64,
     ) -> None:
@@ -334,12 +343,32 @@ class DeepResearchAgent:
             self.note_agent = note_agent
 
         self._github_adapter = github_adapter
+        self._source_provider_registry = source_provider_registry
+        self._research_kernel = research_kernel or ResearchKernel(
+            provider_registry=source_provider_registry,
+        )
+        self._artifact_store = artifact_store
 
     @property
     def last_session(self) -> RunSession | None:
         """Return the most recently completed direct legacy session."""
         with self._last_session_lock:
             return self._last_session
+
+    @property
+    def source_provider_registry(self) -> SourceProviderRegistry | None:
+        """Return the optional provider registry reserved for kernel routing."""
+        return self._source_provider_registry
+
+    @property
+    def research_kernel(self) -> ResearchKernel | None:
+        """Return the optional kernel injected by the production composition."""
+        return self._research_kernel
+
+    @property
+    def artifact_store(self) -> ArtifactStore | None:
+        """Return the optional external artifact store used by v2 runs."""
+        return self._artifact_store
 
     def _set_last_session(self, session: RunSession) -> None:
         with self._last_session_lock:
@@ -693,34 +722,72 @@ class DeepResearchAgent:
     @staticmethod
     def _canonicalize_github_report(session: RunSession, report: str) -> str:
         """Keep report URLs and citations bound to the evidence ledger."""
+        raw_generic = session.state.research_intelligence
+        if isinstance(raw_generic, dict) and raw_generic.get("schema_version") == 2:
+            try:
+                bundle = ResearchIntelligenceBundle.from_dict(raw_generic)
+                if not bundle.evidence_frozen:
+                    bundle = replace(bundle, evidence_frozen=True)
+                return validate_citations(report, bundle).sanitized_report or report
+            except (TypeError, ValueError):
+                return report
         raw_bundle = session.state.github_intelligence
         if not raw_bundle:
             return report
         try:
-            bundle = github_evidence_bundle_from_dict(raw_bundle)
-            return canonicalize_github_report(report, bundle) if bundle else report
+            github_bundle = github_evidence_bundle_from_dict(raw_bundle)
+            return (
+                canonicalize_github_report(report, github_bundle)
+                if github_bundle
+                else report
+            )
         except (TypeError, ValueError):
             return report
 
-    @staticmethod
-    def _refresh_github_artifacts(session: RunSession, report: str) -> None:
+    def _refresh_github_artifacts(self, session: RunSession, report: str) -> None:
         """Replace the deterministic HTML artifact with the final report text."""
+        raw_generic = session.state.research_intelligence
+        if isinstance(raw_generic, dict) and raw_generic.get("schema_version") == 2:
+            try:
+                bundle = ResearchIntelligenceBundle.from_dict(raw_generic)
+                if not bundle.evidence_frozen:
+                    bundle = replace(bundle, evidence_frozen=True)
+                if self._artifact_store is not None:
+                    bundle = persist_research_artifacts(
+                        self._artifact_store,
+                        session.run_id,
+                        bundle,
+                        report_markdown=report,
+                    )
+                session.replace_research_intelligence(bundle.as_dict())
+            except (TypeError, ValueError, OSError):
+                logger.warning("Unable to persist generic research artifacts", exc_info=True)
+            return
         raw_bundle = session.state.github_intelligence
         if not raw_bundle:
             return
         try:
-            bundle = github_evidence_bundle_from_dict(raw_bundle)
-            if bundle is not None:
+            github_bundle = github_evidence_bundle_from_dict(raw_bundle)
+            if github_bundle is not None:
                 task_sources = [
                     str(task.sources_summary or "")
                     for task in session.state.todo_items
                     if task.sources_summary
                 ]
-                if bundle.coverage.gap_queries and bundle.coverage.retry_count < 1:
-                    bundle = supplement_github_evidence(bundle, task_sources)
-                bundle = freeze_github_evidence(bundle)
+                if (
+                    github_bundle.coverage.gap_queries
+                    and github_bundle.coverage.retry_count < 1
+                ):
+                    github_bundle = supplement_github_evidence(
+                        github_bundle,
+                        task_sources,
+                    )
+                github_bundle = freeze_github_evidence(github_bundle)
                 session.replace_github_intelligence(
-                    render_github_artifacts(bundle, report_markdown=report).as_dict()
+                    render_github_artifacts(
+                        github_bundle,
+                        report_markdown=report,
+                    ).as_dict()
                 )
         except (TypeError, ValueError):
             logger.warning("Unable to refresh GitHub artifacts", exc_info=True)
@@ -1474,57 +1541,23 @@ class DeepResearchAgent:
         target: GitHubRepositoryTarget,
         comparison_targets: Sequence[GitHubRepositoryTarget] = (),
     ) -> list[TodoItem]:
-        """Return fixed tasks for GitHub-first repository research."""
-        repository = target.full_name
-        task_specs = [
-            (
-                "仓库概览与定位",
-                "梳理项目用途、核心能力、许可证、语言栈、README 中的主要承诺与当前活跃度。",
-                f"{repository} GitHub repository overview README features",
-            ),
-            (
-                "架构与代码结构",
-                "结合目录树和文档分析项目的主要模块、运行方式、扩展点与技术边界。",
-                f"{repository} architecture directory structure modules",
-            ),
-            (
-                "演进时间线与路线图",
-                "根据 commits、releases、issues 和 PRs 梳理近期变化、维护节奏、待解决问题和路线图信号。",
-                f"{repository} commits releases issues roadmap",
-            ),
-            (
-                "社区评价与替代方案",
-                "补充外部文章、社区讨论和竞品信息，评估采用价值、风险与适用场景。",
-                f"{repository} community adoption alternatives comparison",
-            ),
-        ]
-
-        tasks = [
+        """Render the versioned GitHub Profile into legacy TODO objects."""
+        profile = built_in_profile_registry().get("github.repository.v1")
+        rendered = profile.render_tasks(
+            repository=target.full_name,
+            comparison_repositories=tuple(item.full_name for item in comparison_targets),
+        )
+        return [
             TodoItem(
-                id=index,
-                title=title,
-                intent=intent,
-                query=query,
-                source_strategy="github_api_then_web",
-                repository=repository,
+                id=item.id,
+                title=item.title,
+                intent=item.intent,
+                query=item.query,
+                source_strategy=item.source_strategy,
+                repository=item.repository,
             )
-            for index, (title, intent, query) in enumerate(task_specs, start=1)
+            for item in rendered
         ]
-        if comparison_targets:
-            repositories = ", ".join(
-                [target.full_name, *(item.full_name for item in comparison_targets)]
-            )
-            tasks.append(
-                TodoItem(
-                    id=len(tasks) + 1,
-                    title="多仓库统一维度对比",
-                    intent="使用统一维度比较候选仓库的架构、维护状态、扩展性和适用场景。",
-                    query=f"{repositories} compare architecture maintenance extensibility risk",
-                    source_strategy="github_api_compare",
-                    repository=repositories,
-                )
-            )
-        return tasks
 
     @staticmethod
     def _serialize_github_context(

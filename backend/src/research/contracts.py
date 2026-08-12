@@ -27,6 +27,7 @@ from .evidence import (
     canonicalize_github_report,
     deterministic_citation_block,
 )
+from .profiles import ResearchMode
 
 __all__ = [
     "Artifact",
@@ -43,6 +44,7 @@ __all__ = [
     "ResearchCommand",
     "ResearchEvent",
     "ResearchRunResult",
+    "ResearchMode",
     "RepositorySnapshot",
     "RunError",
     "RunSnapshot",
@@ -50,6 +52,7 @@ __all__ = [
 ]
 
 _MEMORY_SCOPE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+_PROFILE_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
 
 
 def _thaw_json(value: Any) -> Any:
@@ -139,6 +142,8 @@ class ResearchCommand:
     permission_mode: str = "default"
     caller_mode: str = "public"
     parent_run_id: str | None = None
+    research_mode: ResearchMode | None = None
+    research_profile_id: str | None = None
     use_history_memory: bool = True
     memory_scope: str = "default"
 
@@ -172,6 +177,23 @@ class ResearchCommand:
                 self,
                 "parent_run_id",
                 normalize_run_id(self.parent_run_id),
+            )
+        if self.research_mode is not None:
+            try:
+                normalized_mode = ResearchMode(self.research_mode)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Research mode is not supported.") from exc
+            object.__setattr__(self, "research_mode", normalized_mode)
+        if self.research_profile_id is not None:
+            if (
+                not isinstance(self.research_profile_id, str)
+                or _PROFILE_ID_RE.fullmatch(self.research_profile_id.strip()) is None
+            ):
+                raise ValueError("Research profile ID is invalid.")
+            object.__setattr__(
+                self,
+                "research_profile_id",
+                self.research_profile_id.strip(),
             )
 
 

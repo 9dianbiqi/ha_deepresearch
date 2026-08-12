@@ -25,6 +25,7 @@ from research.memory import (
     MemoryStoreUnavailableError,
     MemoryValidationError,
 )
+from research.profiles import ResearchMode
 from research.repository import (
     CorruptRunRecordError,
     InvalidRunIdError,
@@ -55,6 +56,17 @@ class ResearchRequest(BaseModel):
     """Payload for triggering a research run."""
 
     topic: str = Field(..., description="Research topic supplied by the user")
+    research_mode: ResearchMode | None = Field(
+        default=None,
+        description="Optional explicit research mode; omitted means automatic detection",
+    )
+    research_profile: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$",
+        description="Optional ID of a registered research profile",
+    )
     search_api: SearchAPI | None = Field(
         default=None,
         description="Override the default search backend configured via env",
@@ -85,6 +97,22 @@ class ResearchResponse(BaseModel):
         default_factory=list,
         description="Structured TODO items with summaries and sources",
     )
+    research_mode: str | None = Field(
+        default=None,
+        description="Resolved research mode for the run",
+    )
+    research_profile_id: str | None = Field(
+        default=None,
+        description="Resolved research profile ID",
+    )
+    source_context: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Provider-neutral source context metadata",
+    )
+    research_intelligence: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Provider-neutral schema-v2 intelligence bundle",
+    )
     github_intelligence: dict[str, Any] = Field(
         default_factory=dict,
         description="Optional versioned GitHub evidence intelligence bundle",
@@ -96,6 +124,17 @@ class ContinueRequest(BaseModel):
 
     topic: str = Field(..., description="Follow-up research topic")
     parent_run_id: str = Field(..., description="run_id of the previous research to build upon")
+    research_mode: ResearchMode | None = Field(
+        default=None,
+        description="Optional explicit research mode for the follow-up",
+    )
+    research_profile: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$",
+        description="Optional ID of a registered research profile",
+    )
     search_api: SearchAPI | None = Field(
         default=None,
         description="Override the default search backend",
@@ -146,6 +185,10 @@ class HarnessResponse(BaseModel):
     status: str
     report_markdown: str = ""
     todo_items: list[dict[str, Any]] = Field(default_factory=list)
+    research_mode: str | None = None
+    research_profile_id: str | None = None
+    source_context: dict[str, Any] = Field(default_factory=dict)
+    research_intelligence: dict[str, Any] = Field(default_factory=dict)
     github_intelligence: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
     findings: list[dict[str, Any]] = Field(default_factory=list)
@@ -241,6 +284,8 @@ def _normalize_harness_request(
         permission_mode=permission_mode,
         caller_mode=caller_mode,
         parent_run_id=payload.parent_run_id,
+        research_mode=payload.research_mode,
+        research_profile_id=payload.research_profile,
         use_history_memory=payload.use_history_memory,
         memory_scope=payload.memory_scope,
     )
@@ -254,6 +299,26 @@ def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
         status=result.status,
         report_markdown=(output.report_markdown or output.running_summary or "") if output else "",
         todo_items=_serialize_todo_items(output.todo_items if output else []),
+        research_mode=(
+            output.research_mode
+            if output and getattr(output, "research_mode", None)
+            else None
+        ),
+        research_profile_id=(
+            output.research_profile_id
+            if output and getattr(output, "research_profile_id", None)
+            else None
+        ),
+        source_context=(
+            dict(output.source_context)
+            if output and getattr(output, "source_context", None)
+            else {}
+        ),
+        research_intelligence=(
+            dict(output.research_intelligence)
+            if output and getattr(output, "research_intelligence", None)
+            else {}
+        ),
         github_intelligence=(
             dict(output.github_intelligence)
             if output and getattr(output, "github_intelligence", None)
@@ -584,6 +649,26 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
         return ResearchResponse(
             report_markdown=(output.report_markdown or output.running_summary or "") if output else "",
             todo_items=_serialize_todo_items(output.todo_items if output else []),
+            research_mode=(
+                output.research_mode
+                if output and getattr(output, "research_mode", None)
+                else None
+            ),
+            research_profile_id=(
+                output.research_profile_id
+                if output and getattr(output, "research_profile_id", None)
+                else None
+            ),
+            source_context=(
+                dict(output.source_context)
+                if output and getattr(output, "source_context", None)
+                else {}
+            ),
+            research_intelligence=(
+                dict(output.research_intelligence)
+                if output and getattr(output, "research_intelligence", None)
+                else {}
+            ),
             github_intelligence=(
                 dict(output.github_intelligence)
                 if output and getattr(output, "github_intelligence", None)
@@ -612,6 +697,8 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
                 topic=payload.topic,
                 search_api=payload.search_api,
                 parent_run_id=payload.parent_run_id,
+                research_mode=payload.research_mode,
+                research_profile=payload.research_profile,
                 use_history_memory=payload.use_history_memory,
                 memory_scope=payload.memory_scope,
             )

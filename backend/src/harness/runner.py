@@ -13,6 +13,7 @@ from typing import Any, Iterator
 from agent import DeepResearchAgent
 from config import Configuration
 from research.application import RecoveryFailure, ResearchApplicationService
+from research.artifacts import ArtifactStore, FileArtifactStore
 from research.contracts import ResearchCommand, ResearchEvent, ResearchRunResult
 from research.history import ResearchHistoryStore
 from research.legacy_sse import LegacySseProjector
@@ -228,6 +229,7 @@ class HarnessRunner:
     admission_capacity: int | None = None
     history_store: ResearchHistoryStore | None = None
     memory_store: UserMemoryStore | None = None
+    artifact_store: ArtifactStore | None = None
     _executor: ThreadPoolExecutor = field(init=False, repr=False)
     _admission: BoundedSemaphore = field(init=False, repr=False)
     _projector: LegacySseProjector = field(init=False, repr=False)
@@ -276,6 +278,7 @@ class HarnessRunner:
         coordinator = DeepResearchAgent(
             config=Configuration.from_env(),
             operation_authorizer=policy,
+            artifact_store=FileArtifactStore(repository),
         )
         application = ResearchApplicationService(
             coordinator=coordinator,

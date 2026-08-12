@@ -1,0 +1,294 @@
+{
+  "single_bundle": {
+    "schema_version": 1,
+    "snapshots": [
+      {
+        "schema_version": 1,
+        "snapshot_id": "snapshot_owner_repo",
+        "repository": "owner/repo",
+        "repository_url": "https://github.com/owner/repo",
+        "requested_ref": "main",
+        "default_branch": "main",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "collected_at": "2026-08-12T00:00:00+00:00",
+        "metadata": {
+          "full_name": "owner/repo",
+          "license": "MIT",
+          "default_branch": "main"
+        },
+        "languages": {
+          "Python": 10
+        },
+        "file_manifest": [
+          {
+            "path": "src/main.py",
+            "type": "blob",
+            "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "contributors": [],
+        "releases": [],
+        "collection_status": "complete",
+        "notices": [],
+        "notice_codes": []
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "evidence_owner_repo_metadata",
+        "snapshot_id": "snapshot_owner_repo",
+        "evidence_type": "repository_metadata",
+        "title": "owner/repo repository metadata",
+        "excerpt": "MIT license and main default branch",
+        "source_url": "https://github.com/owner/repo/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "file_path": null,
+        "line_start": null,
+        "line_end": null,
+        "captured_at": "2026-08-12T00:00:00+00:00",
+        "content_hash": "fixture-owner-repo-metadata"
+      }
+    ],
+    "claims": [
+      {
+        "claim_id": "claim_owner_repo_overview",
+        "category": "overview",
+        "statement": "owner/repo has a fixed public repository snapshot.",
+        "confidence": "high",
+        "evidence_ids": [
+          "evidence_owner_repo_metadata"
+        ],
+        "conflicting_evidence_ids": [],
+        "limitations": [
+          "The claim is based on a fixed commit snapshot."
+        ]
+      }
+    ],
+    "coverage": {
+      "required_dimensions": [
+        "overview"
+      ],
+      "covered_dimensions": [
+        "overview"
+      ],
+      "missing_dimensions": [],
+      "weak_claims": [],
+      "conflicting_claims": [],
+      "coverage_score": 1.0,
+      "allow_report": true,
+      "gap_queries": [],
+      "retry_count": 0
+    },
+    "report_spec": {
+      "title": "owner/repo GitHub research",
+      "executive_summary": "",
+      "sections": [
+        {
+          "id": "overview",
+          "title": "Overview",
+          "required": true
+        }
+      ],
+      "claim_ids": [
+        "claim_owner_repo_overview"
+      ],
+      "citation_ids": [
+        "evidence_owner_repo_metadata"
+      ],
+      "tables": [],
+      "charts": [],
+      "diagrams": [],
+      "limitations": []
+    },
+    "artifacts": [],
+    "artifact_manifest": {
+      "schema_version": 1,
+      "artifacts": []
+    },
+    "evidence_frozen": false
+  },
+  "multi_bundle": {
+    "schema_version": 1,
+    "snapshots": [
+      {
+        "schema_version": 1,
+        "snapshot_id": "snapshot_owner_repo",
+        "repository": "owner/repo",
+        "repository_url": "https://github.com/owner/repo",
+        "requested_ref": "main",
+        "default_branch": "main",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "collected_at": "2026-08-12T00:00:00+00:00",
+        "metadata": {
+          "full_name": "owner/repo"
+        },
+        "languages": {},
+        "file_manifest": [],
+        "contributors": [],
+        "releases": [],
+        "collection_status": "complete",
+        "notices": [],
+        "notice_codes": []
+      },
+      {
+        "schema_version": 1,
+        "snapshot_id": "snapshot_other_repo",
+        "repository": "other/repo",
+        "repository_url": "https://github.com/other/repo",
+        "requested_ref": "main",
+        "default_branch": "main",
+        "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "collected_at": "2026-08-12T00:00:00+00:00",
+        "metadata": {
+          "full_name": "other/repo"
+        },
+        "languages": {},
+        "file_manifest": [],
+        "contributors": [],
+        "releases": [],
+        "collection_status": "complete",
+        "notices": [],
+        "notice_codes": []
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "evidence_owner_repo_metadata",
+        "snapshot_id": "snapshot_owner_repo",
+        "evidence_type": "repository_metadata",
+        "title": "owner/repo metadata",
+        "excerpt": "owner/repo",
+        "source_url": "https://github.com/owner/repo/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "captured_at": "2026-08-12T00:00:00+00:00",
+        "content_hash": "fixture-owner-repo"
+      },
+      {
+        "evidence_id": "evidence_other_repo_metadata",
+        "snapshot_id": "snapshot_other_repo",
+        "evidence_type": "repository_metadata",
+        "title": "other/repo metadata",
+        "excerpt": "other/repo",
+        "source_url": "https://github.com/other/repo/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "captured_at": "2026-08-12T00:00:00+00:00",
+        "content_hash": "fixture-other-repo"
+      }
+    ],
+    "claims": [
+      {
+        "claim_id": "claim_owner_repo_overview",
+        "category": "overview",
+        "statement": "owner/repo is represented by a fixed snapshot.",
+        "confidence": "medium",
+        "evidence_ids": [
+          "evidence_owner_repo_metadata"
+        ],
+        "conflicting_evidence_ids": [],
+        "limitations": []
+      },
+      {
+        "claim_id": "claim_other_repo_overview",
+        "category": "overview",
+        "statement": "other/repo is represented by a fixed snapshot.",
+        "confidence": "medium",
+        "evidence_ids": [
+          "evidence_other_repo_metadata"
+        ],
+        "conflicting_evidence_ids": [],
+        "limitations": []
+      }
+    ],
+    "coverage": {
+      "required_dimensions": [
+        "overview",
+        "comparison"
+      ],
+      "covered_dimensions": [
+        "overview",
+        "comparison"
+      ],
+      "missing_dimensions": [],
+      "weak_claims": [],
+      "conflicting_claims": [],
+      "coverage_score": 1.0,
+      "allow_report": true,
+      "gap_queries": [],
+      "retry_count": 0
+    },
+    "report_spec": {
+      "title": "GitHub repository comparison",
+      "executive_summary": "",
+      "sections": [
+        {
+          "id": "overview",
+          "title": "Overview",
+          "required": true
+        },
+        {
+          "id": "comparison",
+          "title": "Comparison",
+          "required": true
+        }
+      ],
+      "claim_ids": [
+        "claim_owner_repo_overview",
+        "claim_other_repo_overview"
+      ],
+      "citation_ids": [
+        "evidence_owner_repo_metadata",
+        "evidence_other_repo_metadata"
+      ],
+      "tables": [],
+      "charts": [],
+      "diagrams": [],
+      "limitations": []
+    },
+    "artifacts": [],
+    "artifact_manifest": {
+      "schema_version": 1,
+      "artifacts": []
+    },
+    "evidence_frozen": false
+  },
+  "legacy_checkpoint": {
+    "schema_version": 1,
+    "phase": "evidence_completed",
+    "state": {
+      "research_topic": "owner/repo GitHub research",
+      "github_context": {
+        "target": {
+          "owner": "owner",
+          "repo": "repo",
+          "full_name": "owner/repo"
+        },
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "github_intelligence": {
+        "schema_version": 1,
+        "snapshots": [],
+        "evidence": [],
+        "claims": [],
+        "coverage": {
+          "required_dimensions": [],
+          "covered_dimensions": [],
+          "missing_dimensions": [],
+          "allow_report": false,
+          "gap_queries": [],
+          "retry_count": 0
+        },
+        "report_spec": {
+          "title": "owner/repo GitHub research"
+        },
+        "artifacts": [],
+        "evidence_frozen": false
+      },
+      "report_note_id": null,
+      "report_note_path": null,
+      "permission_mode": "default",
+      "caller_mode": "public",
+      "use_history_memory": true,
+      "memory_scope": "default"
+    }
+  }
+}

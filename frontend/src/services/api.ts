@@ -4,6 +4,8 @@ const baseURL =
 export interface ResearchRequest {
   topic: string;
   search_api?: string;
+  research_mode?: "web" | "github" | "paper";
+  research_profile?: string;
   parent_run_id?: string;
   use_history_memory?: boolean;
   memory_scope?: string;
@@ -13,6 +15,8 @@ export interface ContinueRequest {
   topic: string;
   parent_run_id: string;
   search_api?: string;
+  research_mode?: "web" | "github" | "paper";
+  research_profile?: string;
   use_history_memory?: boolean;
   memory_scope?: string;
 }
@@ -75,6 +79,10 @@ export interface RunRecord {
     running_summary?: string;
     report_markdown?: string;
     todo_items?: unknown[];
+    research_mode?: "web" | "github" | "paper";
+    research_profile_id?: string;
+    source_context?: Record<string, unknown>;
+    research_intelligence?: ResearchIntelligence;
     github_intelligence?: GithubIntelligence;
   };
   events?: ResearchStreamEvent[];
@@ -124,6 +132,24 @@ export interface GithubIntelligence {
   [key: string]: unknown;
 }
 
+export interface ResearchIntelligence {
+  schema_version?: number;
+  mode?: "web" | "github" | "paper";
+  profile_id?: string;
+  profile_version?: number;
+  sources?: Array<Record<string, unknown>>;
+  evidence?: Array<Record<string, unknown>>;
+  claims?: Array<Record<string, unknown>>;
+  coverage?: Record<string, unknown>;
+  report_spec?: Record<string, unknown>;
+  artifact_manifest?: {
+    schema_version?: number;
+    artifacts?: Array<Record<string, unknown>>;
+  };
+  evidence_frozen?: boolean;
+  [key: string]: unknown;
+}
+
 export interface StreamTelemetry {
   duration_ms: number;
   event_count: number;
@@ -145,6 +171,10 @@ export interface ResearchStreamEvent {
   recovery_resumable?: boolean;
   last_resumable_parent?: string | null;
   checkpoint?: string | null;
+  research_mode?: "web" | "github" | "paper";
+  profile_id?: string;
+  research_source?: Record<string, unknown>;
+  research_evidence?: Record<string, unknown>;
   stream_telemetry?: StreamTelemetry;
   [key: string]: unknown;
 }

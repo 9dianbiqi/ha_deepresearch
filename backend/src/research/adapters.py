@@ -6,6 +6,7 @@ import hashlib
 import json
 import sys
 from collections.abc import Callable, Iterable, Iterator
+from inspect import Parameter, signature
 from threading import Lock, local
 from typing import Any
 
@@ -22,6 +23,38 @@ _LLM_PUBLIC_DATA_ATTRIBUTES = frozenset({"provider"})
 
 class MissingOperationScopeError(RuntimeError):
     """Signal that a governed framework call omitted its per-run scope."""
+
+
+def invoke_with_operation_scope(
+    callback: Callable[..., Any],
+    *args: object,
+    operation_scope: OperationScope,
+    **kwargs: object,
+) -> Any:
+    """Invoke an adapter while retaining compatibility with narrow test fakes."""
+    try:
+        parameters = tuple(signature(callback).parameters.values())
+    except (TypeError, ValueError):
+        parameters = ()
+    accepts_scope = any(
+        parameter.name == "operation_scope"
+        or parameter.kind is Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    accepts_kwargs = any(
+        parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters
+    )
+    if not accepts_kwargs:
+        allowed = {
+            parameter.name
+            for parameter in parameters
+            if parameter.kind
+            in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY}
+        }
+        kwargs = {key: value for key, value in kwargs.items() if key in allowed}
+    if accepts_scope:
+        kwargs["operation_scope"] = operation_scope
+    return callback(*args, **kwargs)
 
 
 def _require_operation_scope(value: object) -> OperationScope:
@@ -237,4 +270,5 @@ __all__ = [
     "HelloAgentsSearchAdapter",
     "MissingOperationScopeError",
     "OPERATION_SCOPE_KWARG",
+    "invoke_with_operation_scope",
 ]

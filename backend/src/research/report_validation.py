@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from models import TodoItem
+
+from .intelligence import ResearchIntelligenceBundle
 
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
@@ -28,6 +30,153 @@ _TRUNCATION_SUFFIXES = (
 )
 _MIN_REPORT_CHARS = 160
 _MIN_SECTIONS = 2
+_EVIDENCE_ID_RE = re.compile(r"\b(?:ev|evidence)[_-][A-Za-z0-9][A-Za-z0-9._-]*\b")
+
+
+def _citation_url(value: str) -> str:
+    """Strip Markdown punctuation that is not part of a URL."""
+    return value.rstrip(".,;:!?)]}>")
+
+
+@dataclass(frozen=True, slots=True)
+class CitationGate:
+    """Deterministic citation allowlist result for one generated report."""
+
+    valid: bool
+    sanitized_report: str
+    allowed_evidence_ids: tuple[str, ...] = ()
+    used_evidence_ids: tuple[str, ...] = ()
+    unknown_evidence_ids: tuple[str, ...] = ()
+    allowed_locator_urls: tuple[str, ...] = ()
+    illegal_urls: tuple[str, ...] = ()
+    missing_evidence_ids: tuple[str, ...] = ()
+    failure_reasons: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready citation gate decision."""
+        return {
+            "valid": self.valid,
+            "allowed_evidence_ids": list(self.allowed_evidence_ids),
+            "used_evidence_ids": list(self.used_evidence_ids),
+            "unknown_evidence_ids": list(self.unknown_evidence_ids),
+            "allowed_locator_urls": list(self.allowed_locator_urls),
+            "illegal_urls": list(self.illegal_urls),
+            "missing_evidence_ids": list(self.missing_evidence_ids),
+            "failure_reasons": list(self.failure_reasons),
+        }
+
+
+# Descriptive alias for callers that prefer the result-oriented name.
+CitationValidationResult = CitationGate
+
+
+def _bundle_from_value(value: object) -> ResearchIntelligenceBundle | None:
+    """Resolve a v2 bundle from a bundle, context, or JSON mapping."""
+    if isinstance(value, ResearchIntelligenceBundle):
+        return value
+    candidate = getattr(value, "bundle", None)
+    if isinstance(candidate, ResearchIntelligenceBundle):
+        return candidate
+    if isinstance(value, Mapping):
+        try:
+            if value.get("schema_version") == 2:
+                return ResearchIntelligenceBundle.from_dict(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def validate_citations(
+    report: object,
+    bundle_or_context: object,
+    *,
+    require_evidence_ids: bool = True,
+) -> CitationGate:
+    """Allow only frozen Evidence IDs and their locator URLs in a report."""
+    text = report if isinstance(report, str) else ""
+    bundle = _bundle_from_value(bundle_or_context)
+    if bundle is None:
+        return CitationGate(
+            valid=not require_evidence_ids,
+            sanitized_report=text,
+            failure_reasons=("intelligence_bundle_missing",) if require_evidence_ids else (),
+        )
+    evidence_by_id = {
+        evidence.evidence_id: evidence
+        for evidence in bundle.evidence
+        if bundle.evidence_frozen
+    }
+    allowed_ids = tuple(sorted(evidence_by_id))
+    allowed_urls = tuple(
+        sorted(
+            {
+                evidence.locator.url
+                for evidence in evidence_by_id.values()
+                if evidence.locator.url
+            }
+        )
+    )
+    raw_ids = tuple(dict.fromkeys(_EVIDENCE_ID_RE.findall(text)))
+    unknown_ids = tuple(item for item in raw_ids if item not in evidence_by_id)
+    used_ids = tuple(item for item in raw_ids if item in evidence_by_id)
+    raw_urls = tuple(dict.fromkeys(_citation_url(item) for item in _URL_RE.findall(text)))
+    illegal_urls = tuple(item for item in raw_urls if item not in allowed_urls)
+    required_ids = tuple(
+        dict.fromkeys(
+            evidence_id
+            for claim in bundle.claims
+            if claim.reportable
+            for evidence_id in claim.evidence_ids
+        )
+    )
+    missing_ids = (
+        tuple(item for item in required_ids if item not in used_ids)
+        if require_evidence_ids
+        else ()
+    )
+
+    sanitized = text
+    if unknown_ids:
+        unknown_set = set(unknown_ids)
+        sanitized = _EVIDENCE_ID_RE.sub(
+            lambda match: match.group(0)
+            if match.group(0) not in unknown_set
+            else "[unapproved evidence removed]",
+            sanitized,
+        )
+    if illegal_urls:
+        illegal_set = set(illegal_urls)
+
+        def replace_url(match: re.Match[str]) -> str:
+            raw = match.group(0)
+            normalized = _citation_url(raw)
+            if normalized not in illegal_set:
+                return raw
+            suffix = raw[len(normalized) :]
+            return "[unapproved source removed]" + suffix
+
+        sanitized = _URL_RE.sub(replace_url, sanitized)
+
+    reasons: list[str] = []
+    if not bundle.evidence_frozen:
+        reasons.append("evidence_not_frozen")
+    if unknown_ids:
+        reasons.append("unknown_evidence_id")
+    if illegal_urls:
+        reasons.append("illegal_locator_url")
+    if missing_ids:
+        reasons.append("claim_evidence_missing")
+    return CitationGate(
+        valid=not reasons,
+        sanitized_report=sanitized,
+        allowed_evidence_ids=allowed_ids,
+        used_evidence_ids=used_ids,
+        unknown_evidence_ids=unknown_ids,
+        allowed_locator_urls=allowed_urls,
+        illegal_urls=illegal_urls,
+        missing_evidence_ids=missing_ids,
+        failure_reasons=tuple(dict.fromkeys(reasons)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +194,8 @@ class ReportValidationResult:
     has_citations: bool
     finish_reason: str | None = None
     failure_reasons: tuple[str, ...] = ()
+    citation_valid: bool = True
+    citation_failure_reasons: tuple[str, ...] = ()
 
     @property
     def failure_reason(self) -> str | None:
@@ -66,6 +217,8 @@ class ReportValidationResult:
             "finish_reason": self.finish_reason,
             "failure_reason": self.failure_reason,
             "failure_reasons": list(self.failure_reasons),
+            "citation_valid": self.citation_valid,
+            "citation_failure_reasons": list(self.citation_failure_reasons),
         }
 
 
@@ -87,6 +240,7 @@ def validate_report(
     tasks: Sequence[TodoItem],
     *,
     finish_reason: str | None = None,
+    citation_gate: CitationGate | None = None,
 ) -> ReportValidationResult:
     r"""Validate one report without asking another model to judge it.
 
@@ -165,6 +319,14 @@ def validate_report(
     if requires_citations and not has_citations:
         reasons.append("citations_missing")
 
+    citation_valid = True
+    citation_failure_reasons: tuple[str, ...] = ()
+    if citation_gate is not None:
+        citation_valid = citation_gate.valid
+        citation_failure_reasons = citation_gate.failure_reasons
+        if not citation_valid:
+            reasons.extend(f"citation_{item}" for item in citation_failure_reasons)
+
     return ReportValidationResult(
         valid=not reasons,
         output_chars=len(text),
@@ -177,7 +339,15 @@ def validate_report(
         has_citations=has_citations,
         finish_reason=finish_reason,
         failure_reasons=tuple(dict.fromkeys(reasons)),
+        citation_valid=citation_valid,
+        citation_failure_reasons=citation_failure_reasons,
     )
 
 
-__all__ = ["ReportValidationResult", "validate_report"]
+__all__ = [
+    "CitationGate",
+    "CitationValidationResult",
+    "ReportValidationResult",
+    "validate_citations",
+    "validate_report",
+]

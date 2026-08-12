@@ -27,6 +27,7 @@ from .contracts import (
     RunSnapshot,
     RunStatus,
 )
+from .profiles import ResearchMode
 
 if TYPE_CHECKING:
     from .operations import OperationSpec
@@ -192,6 +193,13 @@ class RunSession:
         """Fill the canonical topic from the immutable command when absent."""
         if self.state.research_topic is None:
             self.state.research_topic = self.command.topic
+        if self.state.research_mode is None and self.command.research_mode is not None:
+            self.state.research_mode = self.command.research_mode.value
+        if (
+            self.state.research_profile_id is None
+            and self.command.research_profile_id is not None
+        ):
+            self.state.research_profile_id = self.command.research_profile_id
         timeout = self.command.config.run_timeout_seconds
         if timeout is not None:
             self._deadline_at = self.monotonic_clock() + timeout
@@ -442,6 +450,20 @@ class RunSession:
             "state": {
                 "research_topic": self.state.research_topic,
                 "research_loop_count": self.state.research_loop_count,
+                "research_mode": (
+                    self.state.research_mode
+                    or (
+                        self.command.research_mode.value
+                        if self.command.research_mode is not None
+                        else None
+                    )
+                ),
+                "research_profile_id": (
+                    self.state.research_profile_id
+                    or self.command.research_profile_id
+                ),
+                "source_context": dict(self.state.source_context),
+                "research_intelligence": dict(self.state.research_intelligence),
                 "github_context": dict(self.state.github_context),
                 "github_intelligence": dict(self.state.github_intelligence),
                 "report_note_id": self.state.report_note_id,
@@ -511,6 +533,13 @@ class RunSession:
         memory_scope = continuation_state.get("memory_scope")
         if not isinstance(memory_scope, str):
             memory_scope = "default"
+        raw_research_mode = continuation_state.get("research_mode")
+        research_mode: ResearchMode | None = None
+        if isinstance(raw_research_mode, str):
+            research_mode = ResearchMode(raw_research_mode)
+        research_profile_id = continuation_state.get("research_profile_id")
+        if not isinstance(research_profile_id, str):
+            research_profile_id = None
         command = ResearchCommand(
             topic=snapshot.topic,
             config=Configuration.from_env(overrides=config_values),
@@ -518,6 +547,8 @@ class RunSession:
             parent_run_id=snapshot.parent_run_id,
             permission_mode=permission_mode,
             caller_mode=caller_mode,
+            research_mode=research_mode,
+            research_profile_id=research_profile_id,
             use_history_memory=use_history_memory,
             memory_scope=memory_scope,
         )
@@ -558,6 +589,53 @@ class RunSession:
             if isinstance(raw_github_intelligence, Mapping)
             else {}
         )
+        raw_source_context = continuation_state.get("source_context")
+        source_context = (
+            {
+                str(key): value
+                for key, value in cast(Mapping[str, object], raw_source_context).items()
+                if isinstance(key, str)
+            }
+            if isinstance(raw_source_context, Mapping)
+            else {}
+        )
+        raw_research_intelligence = continuation_state.get("research_intelligence")
+        if not isinstance(raw_research_intelligence, Mapping):
+            raw_research_intelligence = output.get("research_intelligence")
+        research_intelligence = (
+            {
+                str(key): value
+                for key, value in cast(
+                    Mapping[str, object], raw_research_intelligence
+                ).items()
+                if isinstance(key, str)
+            }
+            if isinstance(raw_research_intelligence, Mapping)
+            else {}
+        )
+        # Older checkpoints only carry the GitHub v1 projection.  Adapt it in
+        # memory so recovery can use one canonical intelligence field without
+        # rewriting the persisted checkpoint or changing the legacy output.
+        if not research_intelligence and github_intelligence:
+            try:
+                from .compatibility import GitHubEvidenceV1Adapter
+
+                research_intelligence = GitHubEvidenceV1Adapter.to_v2(
+                    github_intelligence
+                ).as_dict()
+            except (TypeError, ValueError):
+                research_intelligence = {}
+        if research_mode is None:
+            output_mode = output.get("research_mode")
+            if isinstance(output_mode, str):
+                try:
+                    research_mode = ResearchMode(output_mode)
+                except ValueError:
+                    research_mode = None
+        if research_profile_id is None:
+            output_profile = output.get("research_profile_id")
+            if isinstance(output_profile, str):
+                research_profile_id = output_profile
         raw_research_topic = continuation_state.get("research_topic")
         research_topic = (
             raw_research_topic
@@ -622,6 +700,12 @@ class RunSession:
             running_summary=running_summary,
             structured_report=structured_report,
             todo_items=tasks,
+            research_mode=(
+                research_mode.value if research_mode is not None else None
+            ),
+            research_profile_id=research_profile_id,
+            source_context=source_context,
+            research_intelligence=research_intelligence,
             github_context=github_context,
             github_intelligence=github_intelligence,
             report_note_id=report_note_id,
@@ -942,6 +1026,11 @@ class RunSession:
                 EventKind.REPOSITORY_DETECTED,
                 payload,
             )
+            self.state.research_mode = ResearchMode.GITHUB.value
+            self.state.research_profile_id = (
+                self.command.research_profile_id or "github.repository.v1"
+            )
+            self.state.source_context = dict(github_context)
             self.state.github_context = dict(github_context)
             should_drain = self._commit_event_locked(event)
         if should_drain:
@@ -976,6 +1065,7 @@ class RunSession:
                 EventKind.EVIDENCE_COLLECTED,
                 evidence_payload,
             )
+            should_drain = self._commit_event_locked(evidence_event)
             coverage_event = self._validated_event_locked(
                 EventKind.COVERAGE_UPDATED,
                 {
@@ -987,7 +1077,103 @@ class RunSession:
                 },
             )
             self.state.github_intelligence = dict(bundle)
+            self.state.research_mode = ResearchMode.GITHUB.value
+            self.state.research_profile_id = (
+                self.command.research_profile_id or "github.repository.v1"
+            )
+            try:
+                from .compatibility import GitHubEvidenceV1Adapter
+
+                self.state.research_intelligence = (
+                    GitHubEvidenceV1Adapter.to_v2(bundle).as_dict()
+                )
+            except (TypeError, ValueError):
+                # Keep the legacy projection available when a partial bundle
+                # cannot be adapted during this compatibility transition.
+                self.state.research_intelligence = {}
+            should_drain = self._commit_event_locked(coverage_event) or should_drain
+        if should_drain:
+            self._drain_notifications()
+        return evidence_event, coverage_event
+
+    def record_research_intelligence(
+        self,
+        bundle: Mapping[str, Any],
+        *,
+        provider_ids: Sequence[str] = (),
+    ) -> tuple[ResearchEvent, ResearchEvent]:
+        """Persist a v2 intelligence bundle and emit safe generic events."""
+        if not isinstance(bundle, Mapping):
+            raise TypeError("Research intelligence must be a mapping.")
+        try:
+            detached_bundle = json.loads(json.dumps(dict(bundle)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("Research intelligence must be JSON serializable.") from exc
+        sources = detached_bundle.get("sources")
+        evidence = detached_bundle.get("evidence")
+        claims = detached_bundle.get("claims")
+        manifest = detached_bundle.get("artifact_manifest")
+        coverage = detached_bundle.get("coverage")
+        mode = detached_bundle.get("mode")
+        profile_id = detached_bundle.get("profile_id")
+        source_count = len(sources) if isinstance(sources, list) else 0
+        evidence_count = len(evidence) if isinstance(evidence, list) else 0
+        claim_count = len(claims) if isinstance(claims, list) else 0
+        artifact_count = (
+            len(manifest.get("artifacts", []))
+            if isinstance(manifest, Mapping)
+            and isinstance(manifest.get("artifacts"), list)
+            else 0
+        )
+        inferred_providers = (
+            [
+                item.get("provider_id")
+                for item in sources
+                if isinstance(item, Mapping)
+                and isinstance(item.get("provider_id"), str)
+            ]
+            if isinstance(sources, list)
+            else []
+        )
+        safe_provider_ids = list(dict.fromkeys([*provider_ids, *inferred_providers]))
+        evidence_payload = {
+            "research_mode": mode,
+            "profile_id": profile_id,
+            "provider_ids": safe_provider_ids,
+            "source_count": source_count,
+            "evidence_count": evidence_count,
+            "claim_count": claim_count,
+            "artifact_count": artifact_count,
+            "bundle_schema_version": detached_bundle.get("schema_version", 2),
+        }
+        coverage_payload = dict(coverage) if isinstance(coverage, Mapping) else {}
+        coverage_event_payload = {
+            "research_mode": mode,
+            "profile_id": profile_id,
+            "provider_ids": safe_provider_ids,
+            "source_count": source_count,
+            "coverage_score": coverage_payload.get("coverage_score", 0.0),
+            "covered_dimensions": list(coverage_payload.get("covered_dimensions", [])),
+            "missing_dimensions": list(coverage_payload.get("missing_dimensions", [])),
+            "gap_queries": list(coverage_payload.get("gap_queries", [])),
+            "allow_report": bool(coverage_payload.get("allow_report", False)),
+        }
+        with self._lock:
+            self._require_running_locked()
+            evidence_event = self._validated_event_locked(
+                EventKind.EVIDENCE_COLLECTED,
+                evidence_payload,
+            )
             should_drain = self._commit_event_locked(evidence_event)
+            coverage_event = self._validated_event_locked(
+                EventKind.COVERAGE_UPDATED,
+                coverage_event_payload,
+            )
+            self.state.research_intelligence = detached_bundle
+            if isinstance(mode, str):
+                self.state.research_mode = mode
+            if isinstance(profile_id, str):
+                self.state.research_profile_id = profile_id
             should_drain = self._commit_event_locked(coverage_event) or should_drain
         if should_drain:
             self._drain_notifications()
@@ -1011,11 +1197,93 @@ class RunSession:
             self._drain_notifications()
         return event
 
+    def record_source_context(
+        self,
+        source_context: Mapping[str, Any],
+        *,
+        provider_ids: Sequence[str] = (),
+        source_count: int = 0,
+        research_mode: ResearchMode | str | None = None,
+        profile_id: str | None = None,
+    ) -> ResearchEvent:
+        """Persist provider-neutral source context and emit safe metadata."""
+        if not isinstance(source_context, Mapping):
+            raise TypeError("Source context must be a mapping.")
+        try:
+            detached_context = json.loads(json.dumps(dict(source_context)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("Source context must be JSON serializable.") from exc
+        normalized_mode = (
+            ResearchMode(research_mode).value
+            if research_mode is not None
+            else (
+                self.command.research_mode.value
+                if self.command.research_mode is not None
+                else None
+            )
+        )
+        normalized_profile = profile_id or self.command.research_profile_id
+        safe_provider_ids = list(
+            dict.fromkeys(
+                item.strip()
+                for item in provider_ids
+                if isinstance(item, str) and item.strip()
+            )
+        )
+        if not source_count:
+            raw_sources = detached_context.get("sources")
+            source_count = len(raw_sources) if isinstance(raw_sources, list) else 0
+        payload = {
+            "research_mode": normalized_mode,
+            "profile_id": normalized_profile,
+            "provider_ids": safe_provider_ids,
+            "source_count": max(0, int(source_count)),
+        }
+        with self._lock:
+            self._require_running_locked()
+            event = self._validated_event_locked(
+                EventKind.REPOSITORY_DETECTED,
+                payload,
+            )
+            self.state.research_mode = normalized_mode
+            self.state.research_profile_id = normalized_profile
+            self.state.source_context = detached_context
+            should_drain = self._commit_event_locked(event)
+        if should_drain:
+            self._drain_notifications()
+        return event
+
     def replace_github_intelligence(self, bundle: Mapping[str, Any]) -> None:
         """Replace rendered GitHub intelligence while preserving the event ledger."""
         with self._lock:
             self._require_running_locked()
             self.state.github_intelligence = dict(bundle)
+            try:
+                from .compatibility import GitHubEvidenceV1Adapter
+
+                self.state.research_intelligence = (
+                    GitHubEvidenceV1Adapter.to_v2(bundle).as_dict()
+                )
+            except (TypeError, ValueError):
+                self.state.research_intelligence = {}
+
+    def replace_research_intelligence(self, bundle: Mapping[str, Any]) -> None:
+        """Replace canonical v2 intelligence without emitting an event."""
+        if not isinstance(bundle, Mapping):
+            raise TypeError("Research intelligence must be a mapping.")
+        try:
+            detached_bundle = json.loads(json.dumps(dict(bundle)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("Research intelligence must be JSON serializable.") from exc
+        with self._lock:
+            self._require_running_locked()
+            self.state.research_intelligence = detached_bundle
+            mode = detached_bundle.get("mode")
+            profile_id = detached_bundle.get("profile_id")
+            if isinstance(mode, str):
+                self.state.research_mode = mode
+            if isinstance(profile_id, str):
+                self.state.research_profile_id = profile_id
 
     def start_task(self, task_id: int) -> ResearchEvent:
         """Mark one canonical task as in progress."""
@@ -1534,6 +1802,10 @@ class RunSession:
                 running_summary=self.state.running_summary,
                 report_markdown=self.state.structured_report,
                 todo_items=[TodoItem(**item.to_dict()) for item in self.state.todo_items],
+                research_mode=self.state.research_mode,
+                research_profile_id=self.state.research_profile_id,
+                source_context=dict(self.state.source_context),
+                research_intelligence=dict(self.state.research_intelligence),
                 github_intelligence=dict(self.state.github_intelligence),
             )
 
@@ -1568,6 +1840,10 @@ class RunSession:
                     "running_summary": output.running_summary,
                     "report_markdown": output.report_markdown,
                     "todo_items": [item.to_dict() for item in output.todo_items],
+                    "research_mode": output.research_mode,
+                    "research_profile_id": output.research_profile_id,
+                    "source_context": dict(output.source_context),
+                    "research_intelligence": dict(output.research_intelligence),
                     "github_intelligence": dict(output.github_intelligence),
                 },
                 followup_context=dict(self.followup_context),

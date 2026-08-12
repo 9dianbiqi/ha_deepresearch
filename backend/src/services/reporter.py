@@ -1,24 +1,234 @@
-"""Service that consolidates task results into the final report."""
+"""Provider-neutral report generation with a compatibility state wrapper."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from threading import Lock
+from types import MappingProxyType
 from typing import Any
 
 from hello_agents import SimpleAgent
 
 from config import Configuration
-from models import SummaryState
+from models import SummaryState, TodoItem
+from research.intelligence import (
+    ClaimRecord,
+    CoverageDecision,
+    EvidenceRecord,
+    GenericReportSpec,
+    ResearchIntelligenceBundle,
+)
 from research.operations import OperationRejectedError, OperationScope
+from research.profiles import (
+    ResearchMode,
+    ResearchProfile,
+    built_in_profile_registry,
+)
+from research.report_validation import validate_citations
 from research.session import CancellationRequestedError, DeadlineExceededError
 from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
 
 
+def _compact_text(value: object, limit: int) -> str:
+    """Return bounded text suitable for a reporter prompt."""
+    text = value.strip() if isinstance(value, str) else ""
+    return text if len(text) <= limit else text[:limit] + "\n\n... [truncated]"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GenericReportingContext:
+    """Immutable, provider-neutral input consumed by ``ReportingService``."""
+
+    topic: str
+    profile: ResearchProfile
+    bundle: ResearchIntelligenceBundle | None = None
+    tasks: tuple[TodoItem, ...] = ()
+    claims: tuple[ClaimRecord, ...] = ()
+    evidence: tuple[EvidenceRecord, ...] = ()
+    coverage: CoverageDecision = field(default_factory=CoverageDecision)
+    report_spec: GenericReportSpec | None = None
+    notes: Mapping[str, Any] = field(default_factory=dict)
+    source_context: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate and detach context data before it reaches an LLM."""
+        if not isinstance(self.topic, str) or not self.topic.strip():
+            raise ValueError("Reporting topic must not be empty.")
+        if not isinstance(self.profile, ResearchProfile):
+            raise TypeError("Reporting profile must be a ResearchProfile.")
+        if self.bundle is not None and not isinstance(
+            self.bundle,
+            ResearchIntelligenceBundle,
+        ):
+            raise TypeError("Reporting bundle must be schema-v2 intelligence.")
+        normalized_tasks = tuple(self.tasks)
+        if any(not isinstance(item, TodoItem) for item in normalized_tasks):
+            raise TypeError("Reporting tasks must be TodoItem objects.")
+        object.__setattr__(self, "tasks", normalized_tasks)
+        normalized_claims = tuple(self.claims)
+        normalized_evidence = tuple(self.evidence)
+        if any(not isinstance(item, ClaimRecord) for item in normalized_claims):
+            raise TypeError("Reporting claims must be ClaimRecord objects.")
+        if any(not isinstance(item, EvidenceRecord) for item in normalized_evidence):
+            raise TypeError("Reporting evidence must be EvidenceRecord objects.")
+        if self.bundle is not None:
+            if not normalized_claims:
+                normalized_claims = self.bundle.claims
+            if not normalized_evidence:
+                normalized_evidence = self.bundle.evidence
+            if self.coverage == CoverageDecision():
+                object.__setattr__(self, "coverage", self.bundle.coverage)
+            if self.report_spec is None:
+                object.__setattr__(self, "report_spec", self.bundle.report_spec)
+        if self.report_spec is None:
+            object.__setattr__(self, "report_spec", GenericReportSpec(title=self.topic))
+        object.__setattr__(self, "claims", normalized_claims)
+        object.__setattr__(self, "evidence", normalized_evidence)
+        for field_name in ("notes", "source_context"):
+            value = getattr(self, field_name)
+            if not isinstance(value, Mapping):
+                raise TypeError(f"Reporting {field_name} must be a mapping.")
+            object.__setattr__(
+                self,
+                field_name,
+                MappingProxyType(dict(value)),
+            )
+
+    @classmethod
+    def from_state(
+        cls,
+        state: SummaryState,
+        *,
+        notes_context: Mapping[str, Any] | None = None,
+    ) -> GenericReportingContext:
+        """Adapt legacy mutable state at the compatibility boundary only."""
+        registry = built_in_profile_registry()
+        raw_mode = state.research_mode
+        try:
+            profile = registry.resolve(
+                profile_id=state.research_profile_id,
+                mode=raw_mode,
+            )
+        except (KeyError, TypeError, ValueError):
+            profile = registry.resolve(mode=ResearchMode.WEB)
+
+        bundle: ResearchIntelligenceBundle | None = None
+        raw_bundle = state.research_intelligence
+        if isinstance(raw_bundle, Mapping) and raw_bundle.get("schema_version") == 2:
+            try:
+                bundle = ResearchIntelligenceBundle.from_dict(raw_bundle)
+            except (TypeError, ValueError):
+                bundle = None
+        return cls(
+            topic=state.research_topic or "Research report",
+            profile=profile,
+            bundle=bundle,
+            tasks=tuple(state.todo_items),
+            notes=notes_context or {},
+            source_context=state.source_context,
+        )
+
+
+def _task_block(tasks: Sequence[TodoItem]) -> str:
+    """Render bounded task summaries without exposing worker-only content."""
+    lines: list[str] = []
+    for task in tasks:
+        lines.append(
+            f"- Task {task.id}: {task.title} ({task.status})\n"
+            f"  Intent: {_compact_text(task.intent, 240)}\n"
+            f"  Summary: {_compact_text(task.summary or 'No summary', 800)}"
+        )
+        if task.sources_summary:
+            lines.append(f"  Source references: {_compact_text(task.sources_summary, 600)}")
+    return "\n".join(lines) or "- No completed tasks were recorded."
+
+
+def _generic_prompt(context: GenericReportingContext) -> str:
+    """Build one provider-neutral prompt from frozen generic contracts."""
+    sections = context.profile.report_sections
+    section_lines = "\n".join(
+        f"- {section.id}: {section.title} (dimension={section.dimension})"
+        for section in sections
+    ) or "- Findings\n- Limitations"
+    claims = "\n".join(
+        f"- {claim.claim_id}: {claim.statement} "
+        f"[evidence: {', '.join(claim.evidence_ids) or 'none'}]"
+        for claim in context.claims
+        if claim.reportable
+    ) or "- No structured claims are available."
+    evidence = "\n".join(
+        f"- {item.evidence_id}: {item.title}; locator={item.locator.url}; "
+        f"excerpt={_compact_text(item.excerpt, 700)}"
+        for item in context.evidence
+    ) or "- No frozen evidence is available."
+    coverage = context.coverage
+    notes = "\n".join(
+        f"- {key}: {_compact_text(value, 400)}"
+        for key, value in context.notes.items()
+    ) or "- No note references."
+    return (
+        f"Research topic: {context.topic}\n"
+        f"Research mode: {context.profile.mode.value}\n"
+        f"Profile: {context.profile.profile_id} v{context.profile.version}\n\n"
+        "Required report sections:\n"
+        f"{section_lines}\n\n"
+        "Completed task summaries:\n"
+        f"{_task_block(context.tasks)}\n\n"
+        "Structured claims (do not invent claim or evidence IDs):\n"
+        f"{claims}\n\n"
+        "Frozen evidence (cite only the listed IDs and locator URLs):\n"
+        f"{evidence}\n\n"
+        f"Coverage score: {coverage.coverage_score:.3f}; "
+        f"missing dimensions: {', '.join(coverage.missing_dimensions) or 'none'}; "
+        f"warnings: {', '.join(coverage.warnings) or 'none'}\n\n"
+        "Note references:\n"
+        f"{notes}\n\n"
+        "Write concise Markdown. Do not create new URLs, Evidence IDs, claims, "
+        "or unsupported conclusions."
+    )
+
+
+def _deterministic_sections(context: GenericReportingContext) -> str:
+    """Append deterministic traceability sections after model prose."""
+    if context.report_spec is None:  # pragma: no cover - normalized in __post_init__
+        report_spec = GenericReportSpec(title=context.topic)
+    else:
+        report_spec = context.report_spec
+    claims_lines = [
+        f"- {claim.statement} — Evidence: "
+        + (", ".join(f"`{item}`" for item in claim.evidence_ids) or "none")
+        for claim in context.claims
+        if claim.reportable
+    ]
+    references_lines = [
+        f"- `{item.evidence_id}` — [{item.title}]({item.locator.url})"
+        for item in context.evidence
+        if context.bundle is not None and context.bundle.evidence_frozen
+    ]
+    coverage = context.coverage
+    limitation_lines = list(report_spec.limitations)
+    limitation_lines.extend(coverage.warnings)
+    limitation_lines.extend(
+        f"Missing dimension: {item}" for item in coverage.missing_dimensions
+    )
+    if not limitation_lines:
+        limitation_lines.append("No additional limitations were recorded.")
+    return (
+        "\n\n## Claim—Evidence Index\n"
+        + ("\n".join(claims_lines) if claims_lines else "- No reportable claims.")
+        + "\n\n## Evidence References\n"
+        + ("\n".join(references_lines) if references_lines else "- No frozen evidence references.")
+        + "\n\n## Coverage and Limitations\n"
+        + "\n".join(f"- {item}" for item in limitation_lines)
+    )
+
+
 class ReportingService:
-    """Generates the final structured report."""
+    """Generate one generic report while preserving the legacy call boundary."""
 
     def __init__(self, report_agent: SimpleAgent, config: Configuration) -> None:
         """Initialize the service with its reporting agent and configuration."""
@@ -28,120 +238,20 @@ class ReportingService:
 
     def generate_report(
         self,
-        state: SummaryState,
+        context_or_state: GenericReportingContext | SummaryState,
         notes_context: dict[str, Any] | None = None,
         *,
         operation_scope: OperationScope | None = None,
     ) -> str:
-        """Generate a structured report based on completed tasks and notes."""
-        max_summary_chars = 800  # truncate verbose summaries for the reporter
-
-        tasks_block = []
-        for task in state.todo_items:
-            summary = (task.summary or "暂无可用信息").strip()
-            if len(summary) > max_summary_chars:
-                summary = summary[:max_summary_chars] + "\n\n... [摘要已截断]"
-
-            # Compact source list — title + URL only, not full content
-            sources_compact = (task.sources_summary or "").strip()
-            if sources_compact:
-                source_lines = sources_compact.splitlines()
-                compact = []
-                for line in source_lines:
-                    stripped = line.strip()
-                    if stripped and ("http" in stripped or not stripped.startswith("*")):
-                        compact.append(stripped)
-                    elif stripped:
-                        compact.append(stripped[:120])
-                sources_compact = "\n".join(compact[:8])  # keep at most 8 lines
-
-            tasks_block.append(
-                f"### 任务 {task.id}: {task.title}\n"
-                f"- 目标：{task.intent}\n"
-                f"- 状态：{task.status}\n"
-                + (f"- 仓库：{task.repository}\n" if task.repository else "")
-                + (
-                    f"- 来源策略：{task.source_strategy}\n"
-                    if task.source_strategy else ""
-                )
-                + f"- 总结：\n{summary}\n"
-                + (f"- 来源：\n{sources_compact}\n" if sources_compact else "")
-            )
-
-        # Compact note reference list instead of full note content
-        note_ids = [t.note_id for t in state.todo_items if t.note_id]
-        note_section = ""
-        if note_ids:
-            note_items = [
-                f"- 任务 {t.id}《{t.title}》: {t.note_id}"
-                for t in state.todo_items if t.note_id
-            ]
-            note_section = "可用笔记：\n" + "\n".join(note_items)
+        """Generate a report from generic context or adapt legacy state once."""
+        if isinstance(context_or_state, GenericReportingContext):
+            context = context_or_state
         else:
-            note_section = "- 暂无可用任务笔记"
-
-        github_section = ""
-        if state.github_context:
-            github_markdown = str(state.github_context.get("markdown") or "").strip()
-            if len(github_markdown) > 4000:
-                github_markdown = github_markdown[:4000] + "\n\n... [GitHub context truncated]"
-            github_section = (
-                "## GitHub 仓库结构化上下文\n"
-                f"{github_markdown}\n\n"
-                "请将本次报告视为 GitHub 项目专项研究，优先使用 GitHub API 数据；"
-                "最终报告需包含：仓库信息、核心洞察、时间线、架构概览、"
-                "活动指标、风险与限制、参考来源、置信度评估。\n\n"
+            context = GenericReportingContext.from_state(
+                context_or_state,
+                notes_context=notes_context,
             )
-
-        evidence_section = ""
-        github_intelligence = state.github_intelligence
-        if github_intelligence:
-            coverage = github_intelligence.get("coverage")
-            claims = github_intelligence.get("claims")
-            evidence = github_intelligence.get("evidence")
-            coverage_text = ""
-            if isinstance(coverage, dict):
-                coverage_text = (
-                    f"覆盖率：{coverage.get('coverage_score', 0)}；"
-                    f"缺口：{', '.join(str(item) for item in coverage.get('missing_dimensions', [])) or '无'}"
-                )
-            claim_lines: list[str] = []
-            if isinstance(claims, list):
-                for claim in claims[:20]:
-                    if not isinstance(claim, dict):
-                        continue
-                    claim_lines.append(
-                        f"- [{claim.get('category', 'unknown')}] {claim.get('statement', '')} "
-                        f"(evidence_ids: {', '.join(str(item) for item in claim.get('evidence_ids', []))})"
-                    )
-            evidence_lines: list[str] = []
-            if isinstance(evidence, list):
-                for item in evidence[:40]:
-                    if not isinstance(item, dict):
-                        continue
-                    source_url = str(item.get("source_url") or "")
-                    evidence_lines.append(
-                        f"- {item.get('evidence_id', '')}: {item.get('title', '')} — {source_url}"
-                    )
-            evidence_section = (
-                "## GitHub Evidence Contract (versioned)\n"
-                f"{coverage_text}\n"
-                "重要结论必须只引用下面 evidence_ids；不得编造 GitHub URL。"
-                "源码链接必须保留 commit SHA。\n"
-                + ("\n".join(claim_lines) + "\n" if claim_lines else "")
-                + ("可用证据：\n" + "\n".join(evidence_lines) + "\n" if evidence_lines else "")
-                + "\n"
-            )
-
-        prompt = (
-            f"研究主题：{state.research_topic}\n\n"
-            f"{github_section}"
-            f"{evidence_section}"
-            f"{''.join(tasks_block)}\n"
-            f"{note_section}\n\n"
-            "请基于以上所有信息撰写最终研究报告。"
-        )
-
+        prompt = _generic_prompt(context)
         with self._agent_lock:
             try:
                 if operation_scope is None:
@@ -160,14 +270,28 @@ class ReportingService:
             except Exception:
                 logger.error("Reporter LLM call failed")
                 return (
-                    "报告生成失败，请稍后重试。\n\n"
-                    "各任务总结已保存在左侧任务清单中，可下载笔记查看。"
+                    "# Report generation failed\n\n"
+                    "## Limitations\n"
+                    "The report agent could not produce a response."
                 )
             finally:
                 self._agent.clear_history()
 
-        report_text = response.strip()
-        if self._config.strip_thinking_tokens:
+        report_text = response.strip() if isinstance(response, str) else ""
+        if getattr(self._config, "strip_thinking_tokens", False):
             report_text = strip_thinking_tokens(report_text)
+        if context.bundle is not None:
+            citation_bundle = context.bundle
+            if not citation_bundle.evidence_frozen:
+                # The legacy coordinator freezes immediately after the report
+                # call.  Validate against the captured ledger now; the
+                # session-level gate rechecks the frozen replacement later.
+                citation_bundle = replace(citation_bundle, evidence_frozen=True)
+            citation_gate = validate_citations(report_text, citation_bundle)
+            report_text = citation_gate.sanitized_report
+            if report_text:
+                report_text += _deterministic_sections(context)
+        return report_text or "# Report generation failed\n\n## Limitations\nNo report content was returned."
 
-        return report_text or "报告生成失败，请检查输入。"
+
+__all__ = ["GenericReportingContext", "ReportingService"]

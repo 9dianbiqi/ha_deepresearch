@@ -172,6 +172,33 @@ def _safe_backend(value: object) -> str | None:
     return value if isinstance(value, str) and value in _SEARCH_BACKENDS else None
 
 
+def _generic_research(payload: Mapping[str, Any]) -> bool:
+    """Return whether an event belongs to a non-GitHub research mode."""
+    mode = payload.get("research_mode")
+    return isinstance(mode, str) and mode != "github"
+
+
+def _generic_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Project only safe provider-neutral metadata into an additive event."""
+    projected: dict[str, Any] = {}
+    mode = payload.get("research_mode")
+    profile_id = payload.get("profile_id")
+    if isinstance(mode, str):
+        projected["research_mode"] = mode
+    if isinstance(profile_id, str):
+        projected["profile_id"] = profile_id
+    provider_ids = payload.get("provider_ids")
+    if isinstance(provider_ids, (list, tuple)):
+        projected["provider_ids"] = [
+            item for item in provider_ids if isinstance(item, str)
+        ]
+    for field in ("source_count", "bundle_schema_version"):
+        value = _optional_int(payload.get(field))
+        if value is not None:
+            projected[field] = value
+    return projected
+
+
 class LegacySseProjector:
     """Project immutable typed events into the historical flat SSE envelope."""
 
@@ -189,6 +216,14 @@ class LegacySseProjector:
         elif event.kind is EventKind.RUN_RECOVERY_STARTED:
             projected.update({"type": "status", "message": "从可信检查点恢复研究"})
         elif event.kind is EventKind.REPOSITORY_DETECTED:
+            if _generic_research(payload):
+                projected.update(
+                    {
+                        "type": "research_source",
+                        **_generic_metadata(payload),
+                    }
+                )
+                return projected
             repository = _repository(payload.get("repository"))
             notices, notice_codes = _notice_fields(payload)
             projected.update(
@@ -205,7 +240,11 @@ class LegacySseProjector:
         elif event.kind is EventKind.EVIDENCE_COLLECTED:
             projected.update(
                 {
-                    "type": "github_evidence",
+                    "type": (
+                        "research_evidence"
+                        if _generic_research(payload)
+                        else "github_evidence"
+                    ),
                     "snapshot_count": _optional_int(payload.get("snapshot_count")) or 0,
                     "evidence_count": _optional_int(payload.get("evidence_count")) or 0,
                     "claim_count": _optional_int(payload.get("claim_count")) or 0,
@@ -216,6 +255,8 @@ class LegacySseProjector:
                     or 1,
                 }
             )
+            if _generic_research(payload):
+                projected.update(_generic_metadata(payload))
         elif event.kind is EventKind.COVERAGE_UPDATED:
             score = payload.get("coverage_score")
             projected.update(
@@ -230,6 +271,8 @@ class LegacySseProjector:
                     "allow_report": bool(payload.get("allow_report", False)),
                 }
             )
+            if _generic_research(payload):
+                projected.update(_generic_metadata(payload))
         elif event.kind is EventKind.ARTIFACT_READY:
             projected.update(
                 {

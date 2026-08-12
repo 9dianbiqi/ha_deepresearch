@@ -132,6 +132,9 @@ def _redact(value: Any) -> Any:
         for key, item in value.items():
             if not isinstance(key, str):
                 continue
+            if key == "research_intelligence" and isinstance(item, Mapping):
+                redacted[key] = _redact_v2_intelligence(item)
+                continue
             if key.strip().casefold().replace("-", "_") == "stream_token":
                 if item is None:
                     redacted[key] = None
@@ -143,6 +146,201 @@ def _redact(value: Any) -> Any:
         return [_redact(item) for item in value]
     if isinstance(value, Enum):
         return value.value
+    return value
+
+
+_V2_TOP_FIELDS = frozenset(
+    {
+        "schema_version",
+        "mode",
+        "profile_id",
+        "profile_version",
+        "sources",
+        "evidence",
+        "claims",
+        "coverage",
+        "report_spec",
+        "artifact_manifest",
+        "evidence_frozen",
+    }
+)
+_V2_SOURCE_FIELDS = frozenset(
+    {
+        "provider_id",
+        "source_kind",
+        "source_id",
+        "canonical_url",
+        "requested_ref",
+        "resolved_version",
+        "captured_at",
+        "content_hash",
+    }
+)
+_V2_EVIDENCE_FIELDS = frozenset(
+    {
+        "evidence_id",
+        "source",
+        "evidence_type",
+        "evidence_level",
+        "title",
+        "excerpt",
+        "locator",
+        "attributes",
+    }
+)
+_V2_LOCATOR_FIELDS = frozenset(
+    {
+        "locator_type",
+        "url",
+        "file_path",
+        "line_start",
+        "line_end",
+        "page_start",
+        "page_end",
+        "section",
+        "paragraph",
+        "fragment",
+    }
+)
+_V2_CLAIM_FIELDS = frozenset(
+    {
+        "claim_id",
+        "dimension",
+        "statement",
+        "confidence",
+        "evidence_ids",
+        "conflicting_evidence_ids",
+        "limitations",
+        "reportable",
+    }
+)
+_V2_ARTIFACT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifacts",
+        "artifact_id",
+        "artifact_type",
+        "mime_type",
+        "path",
+        "title",
+        "description",
+        "source_ids",
+        "size_bytes",
+        "checksum",
+        "created_at",
+    }
+)
+
+
+def _redact_v2_intelligence(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve safe v2 URLs/locators while never persisting artifact bodies."""
+    child_sections = {
+        "sources": "source_list",
+        "evidence": "evidence_list",
+        "claims": "claim_list",
+        "coverage": "coverage",
+        "report_spec": "report",
+        "artifact_manifest": "artifact_list",
+    }
+    return {
+        key: _redact_v2_value(
+            item,
+            section=child_sections.get(key, "scalar"),
+        )
+        for key, item in value.items()
+        if isinstance(key, str) and key in _V2_TOP_FIELDS
+    }
+
+
+def _redact_v2_value(value: Any, *, section: str) -> Any:
+    """Redact one allowlisted v2 section without treating source URLs as secrets."""
+    if isinstance(value, Mapping):
+        section = {
+            "source_list": "source",
+            "evidence_list": "evidence",
+            "claim_list": "claim",
+            "artifact_list": "artifact",
+        }.get(section, section)
+        allowed = {
+            "top": _V2_TOP_FIELDS,
+            "source": _V2_SOURCE_FIELDS,
+            "evidence": _V2_EVIDENCE_FIELDS,
+            "locator": _V2_LOCATOR_FIELDS,
+            "claim": _V2_CLAIM_FIELDS,
+            "artifact": _V2_ARTIFACT_FIELDS,
+            "coverage": frozenset(
+                {
+                    "required_dimensions",
+                    "covered_dimensions",
+                    "missing_dimensions",
+                    "weak_claims",
+                    "conflicting_claims",
+                    "coverage_score",
+                    "allow_report",
+                    "gap_queries",
+                    "retry_count",
+                    "blockers",
+                    "warnings",
+                    "dimension_results",
+                }
+            ),
+            "report": frozenset(
+                {
+                    "title",
+                    "executive_summary",
+                    "sections",
+                    "claim_ids",
+                    "citation_ids",
+                    "tables",
+                    "charts",
+                    "diagrams",
+                    "limitations",
+                }
+            ),
+            "attributes": frozenset(),
+        }.get(section, frozenset())
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                continue
+            if section != "attributes" and key not in allowed:
+                continue
+            if section == "attributes" and _is_sensitive_key(key):
+                continue
+            child_section = section
+            if section == "top":
+                child_section = {
+                    "sources": "source_list",
+                    "evidence": "evidence_list",
+                    "claims": "claim_list",
+                    "coverage": "coverage",
+                    "report_spec": "report",
+                    "artifact_manifest": "artifact_list",
+                }.get(key, "scalar")
+            elif section == "source_list":
+                child_section = "source"
+            elif section == "evidence_list":
+                child_section = "evidence"
+            elif section == "claim_list":
+                child_section = "claim"
+            elif section == "artifact_list":
+                child_section = "artifact"
+            elif section == "evidence" and key == "source":
+                child_section = "source"
+            elif section == "evidence" and key == "locator":
+                child_section = "locator"
+            elif section == "evidence" and key == "attributes":
+                child_section = "attributes"
+            result[key] = _redact_v2_value(item, section=child_section)
+        return result
+    if isinstance(value, (list, tuple)):
+        item_section = {
+            "source_list": "source",
+            "evidence_list": "evidence",
+            "claim_list": "claim",
+            "artifact_list": "artifact",
+        }.get(section, section)
+        return [_redact_v2_value(item, section=item_section) for item in value]
     return value
 
 
@@ -226,6 +424,9 @@ def _contains_sensitive_key(value: Any) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str):
+                continue
+            if key == "research_intelligence" and isinstance(item, dict):
+                # This subtree was already reduced by _redact_v2_intelligence.
                 continue
             normalized = key.strip().casefold().replace("-", "_")
             if normalized == "stream_token" and item is None:

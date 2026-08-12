@@ -1,5 +1,12 @@
 """Authoritative contracts and state transitions for research runs."""
 
+from .artifacts import (
+    ArtifactPayload,
+    ArtifactStore,
+    FileArtifactStore,
+    persist_research_artifacts,
+)
+from .compatibility import GitHubEvidenceV1Adapter
 from .contracts import (
     Artifact,
     ArtifactManifest,
@@ -21,6 +28,21 @@ from .contracts import (
     deterministic_citation_block,
 )
 from .history import HistoryCursorError, HistoryPage, ResearchHistoryStore
+from .intelligence import (
+    INTELLIGENCE_SCHEMA_VERSION,
+    ArtifactDescriptorV2,
+    ArtifactManifestV2,
+    ClaimRecord,
+    CoverageDecision,
+    EvidenceLocator,
+    EvidenceRecord,
+    GenericReportSpec,
+    ResearchIntelligenceBundle,
+    SourceReference,
+    stable_claim_id,
+    stable_evidence_id,
+    stable_source_id,
+)
 from .memory import (
     MemoryNotFoundError,
     MemoryStateError,
@@ -29,6 +51,21 @@ from .memory import (
     UserMemory,
     UserMemoryStore,
 )
+from .pipeline import PreparedResearch, ResearchKernel
+from .profiles import (
+    CitationPolicy,
+    CoveragePolicy,
+    RenderedResearchTask,
+    ReportSectionSpec,
+    ResearchDimension,
+    ResearchMode,
+    ResearchProfile,
+    ResearchProfileRegistry,
+    ResearchTaskTemplate,
+    RetrievalBudget,
+    built_in_profile_registry,
+)
+from .quality import EvidenceGateBlockedError, EvidenceQualityGate
 from .session import (
     NEVER_CANCELLED,
     CancellationRequestedError,
@@ -41,7 +78,9 @@ from .session import (
 __all__ = [
     "NEVER_CANCELLED",
     "Artifact",
+    "ArtifactPayload",
     "ArtifactManifest",
+    "ArtifactStore",
     "CancellationRequestedError",
     "CheckpointPersistenceError",
     "CancellationToken",
@@ -51,11 +90,31 @@ __all__ = [
     "EventKind",
     "EvidenceItem",
     "GitHubEvidenceBundle",
+    "GitHubEvidenceV1Adapter",
+    "EvidenceGateBlockedError",
+    "EvidenceQualityGate",
+    "FileArtifactStore",
     "HistoryCursorError",
     "HistoryPage",
     "InvalidTransitionError",
+    "INTELLIGENCE_SCHEMA_VERSION",
     "PreparedTerminal",
     "ReportSpec",
+    "ArtifactDescriptorV2",
+    "ArtifactManifestV2",
+    "ClaimRecord",
+    "CoverageDecision",
+    "EvidenceLocator",
+    "EvidenceRecord",
+    "GenericReportSpec",
+    "ResearchIntelligenceBundle",
+    "PreparedResearch",
+    "ResearchKernel",
+    "SourceReference",
+    "stable_claim_id",
+    "stable_evidence_id",
+    "stable_source_id",
+    "persist_research_artifacts",
     "ResearchCommand",
     "ResearchEvent",
     "ResearchRunResult",
@@ -72,4 +131,15 @@ __all__ = [
     "MemoryValidationError",
     "UserMemory",
     "UserMemoryStore",
+    "CitationPolicy",
+    "CoveragePolicy",
+    "RenderedResearchTask",
+    "ReportSectionSpec",
+    "ResearchDimension",
+    "ResearchMode",
+    "ResearchProfile",
+    "ResearchProfileRegistry",
+    "ResearchTaskTemplate",
+    "RetrievalBudget",
+    "built_in_profile_registry",
 ]
