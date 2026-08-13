@@ -1,25 +1,38 @@
 services:
   backend:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: backend/Dockerfile
     environment:
       APP_API_KEY: ${APP_API_KEY:?APP_API_KEY must be set}
       DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: 8000
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-1}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5174}
+      MAX_WEB_RESEARCH_LOOPS: ${MAX_WEB_RESEARCH_LOOPS:-3}
+      MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-4}
+      FETCH_FULL_PAGE: ${FETCH_FULL_PAGE:-true}
+      ENABLE_NOTES: ${ENABLE_NOTES:-true}
+      ENABLE_QUALITY_GATE: ${ENABLE_QUALITY_GATE:-true}
+      ENABLE_GITHUB_RESEARCH: ${ENABLE_GITHUB_RESEARCH:-true}
       LLM_PROVIDER: ${LLM_PROVIDER:-custom}
       LLM_MODEL_ID: ${LLM_MODEL_ID:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4000}
       SEARCH_API: ${SEARCH_API:-duckduckgo}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_API_BASE_URL: ${GITHUB_API_BASE_URL:-https://api.github.com}
     volumes:
       - helloagents_data:/data
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
+    expose:
+      - "8000"
     healthcheck:
       test:
         ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
@@ -29,18 +42,23 @@ services:
       start_period: 15s
 
   frontend:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
-    environment:
-      APP_API_KEY: ${APP_API_KEY:?APP_API_KEY must be set}
     depends_on:
       backend:
         condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-5174}:80"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
 
 volumes:
   helloagents_data:

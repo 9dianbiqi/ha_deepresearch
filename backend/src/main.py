@@ -55,6 +55,7 @@ _DEFAULT_CORS_ORIGINS = (
 _MAX_TOPIC_LENGTH = 4000
 _MAX_METADATA_BYTES = 16 * 1024
 _PUBLIC_PROBE_PATHS = frozenset({"/healthz", "/readyz"})
+_UNCONFIGURED_API_KEY_SENTINEL = "\x00app-api-key-unconfigured\x00"
 
 # 添加控制台日志处理程序
 logger.add(
@@ -242,6 +243,15 @@ class HarnessResponse(BaseModel):
 def _configuration_presence(value: str | None) -> str:
     """Describe whether a sensitive setting exists without returning its value."""
     return "configured" if value else "unset"
+
+
+def _configured_app_api_key() -> str | None:
+    """Read the HTTP API key without retaining it in application configuration."""
+    value = os.getenv("APP_API_KEY")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _configured_cors_origins(raw_value: str | None = None) -> list[str]:
@@ -779,24 +789,21 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
     app = FastAPI(title="HelloAgents Deep Researcher")
     app.add_exception_handler(RequestValidationError, _request_validation_response)
     run_capacity = _RunCapacity(_configured_run_capacity())
-    configured_app_api_key = (os.getenv("APP_API_KEY") or "").strip()
+    configured_app_api_key = _configured_app_api_key()
 
     @app.middleware("http")
     async def authenticate_request(request: Request, call_next: Any) -> Any:
         """Require a configured bearer key for every non-probe HTTP route."""
-        if (
-            configured_app_api_key
-            and request.method != "OPTIONS"
-            and request.url.path not in _PUBLIC_PROBE_PATHS
-        ):
+        if request.method != "OPTIONS" and request.url.path not in _PUBLIC_PROBE_PATHS:
             authorization = request.headers.get("Authorization", "")
             scheme, separator, token = authorization.partition(" ")
-            if (
-                not separator
-                or scheme.casefold() != "bearer"
-                or not token
-                or not compare_digest(token, configured_app_api_key)
-            ):
+            candidate = token if separator and scheme.casefold() == "bearer" else ""
+            expected = configured_app_api_key or _UNCONFIGURED_API_KEY_SENTINEL
+            authorized = bool(configured_app_api_key) and compare_digest(
+                candidate,
+                expected,
+            )
+            if not authorized:
                 return JSONResponse(
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
@@ -820,7 +827,7 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=_configured_cors_origins(),
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "Accept", "Authorization"],
         expose_headers=["Content-Disposition"],
     )

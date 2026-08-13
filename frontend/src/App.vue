@@ -1,5 +1,31 @@
 <template>
   <main class="app-shell">
+    <section v-if="!apiKeyReady" class="auth-gate">
+      <div class="auth-card surface-card">
+        <p class="eyebrow">生产访问</p>
+        <h1>输入 API Key</h1>
+        <p class="muted-copy">
+          API Key 只保存在当前浏览器标签页的 sessionStorage，并通过 Bearer 请求头发送。
+        </p>
+        <form class="auth-form" @submit.prevent="submitApiKey">
+          <label class="field">
+            <span>API Key</span>
+            <input
+              v-model="apiKeyInput"
+              type="password"
+              autocomplete="current-password"
+              placeholder="请输入服务端 API Key"
+              required
+            />
+          </label>
+          <button class="primary-button full-button" type="submit" :disabled="authLoading">
+            {{ authLoading ? "正在验证" : "验证并进入" }}
+          </button>
+        </form>
+        <p v-if="authError" class="error-banner">{{ authError }}</p>
+      </div>
+    </section>
+    <template v-else>
     <header class="app-topbar">
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true">
@@ -20,6 +46,14 @@
           <span class="live-dot"></span>
           {{ loading ? "正在接收流式事件" : "后端接口 localhost:8000" }}
         </span>
+        <button
+          class="link-button"
+          type="button"
+          :disabled="loading"
+          @click="signOut"
+        >
+          切换 API Key
+        </button>
         <button
           class="icon-button"
           type="button"
@@ -686,6 +720,7 @@
         </section>
       </aside>
     </div>
+    </template>
   </main>
 </template>
 
@@ -698,9 +733,14 @@ import {
   createMemoryCandidate,
   deleteMemory,
   fetchArtifact,
+  clearStoredApiKey,
+  getStoredApiKey,
   listMemories,
   runContinueStream,
   runResearchStream,
+  setStoredApiKey,
+  verifyApiKey,
+  ApiError,
   getRunRecord,
   listHistory,
   type GithubArtifact,
@@ -761,6 +801,10 @@ const form = reactive({
 
 const loading = ref(false);
 const error = ref("");
+const apiKey = ref("");
+const apiKeyInput = ref("");
+const authLoading = ref(false);
+const authError = ref("");
 const progressLogs = ref<string[]>([]);
 const logsCollapsed = ref(false);
 const todoTasks = ref<TodoTaskView[]>([]);
@@ -791,6 +835,8 @@ const artifactManifest = ref<GithubArtifact[]>([]);
 let currentController: AbortController | null = null;
 let pulseRaf = 0;
 let pulseTimer = 0;
+
+const apiKeyReady = computed(() => Boolean(apiKey.value));
 
 const searchOptions = [
   "advanced",
@@ -1006,6 +1052,72 @@ function formatHistoryDate(value: string): string {
   }).format(parsed);
 }
 
+function expireApiKey(): void {
+  clearStoredApiKey();
+  apiKey.value = "";
+  authError.value = "API Key 无效或已失效，请重新输入。";
+  if (currentController) {
+    currentController.abort();
+    currentController = null;
+  }
+}
+
+function isUnauthorized(errorValue: unknown): boolean {
+  return errorValue instanceof ApiError && errorValue.status === 401;
+}
+
+async function bootstrapApplication(): Promise<void> {
+  await loadHistory();
+  // Rehydrate the selected run after a browser refresh so the continuation
+  // anchor is available before the user starts the next follow-up.
+  let lastRunId = "";
+  try {
+    lastRunId = window.localStorage.getItem("helloagents:last-run-id") || "";
+  } catch {
+    // Local storage is optional; the history list remains authoritative.
+  }
+  if (lastRunId) {
+    const lastRun = historyItems.value.find((item) => item.run_id === lastRunId);
+    if (lastRun) {
+      await openHistory(lastRun);
+    }
+  }
+  await loadMemories();
+}
+
+async function submitApiKey(): Promise<void> {
+  const candidate = apiKeyInput.value.trim();
+  if (!candidate || authLoading.value) return;
+
+  authLoading.value = true;
+  authError.value = "";
+  setStoredApiKey(candidate);
+  try {
+    await verifyApiKey();
+    apiKey.value = candidate;
+    await bootstrapApplication();
+  } catch (errorValue) {
+    clearStoredApiKey();
+    apiKey.value = "";
+    authError.value = isUnauthorized(errorValue)
+      ? "API Key 错误，请检查后重试。"
+      : errorValue instanceof Error
+        ? errorValue.message
+        : "API Key 校验失败。";
+  } finally {
+    authLoading.value = false;
+  }
+}
+
+function signOut(): void {
+  expireApiKey();
+  apiKeyInput.value = "";
+  authError.value = "";
+  resetWorkflowState();
+  historyItems.value = [];
+  userMemories.value = [];
+}
+
 async function loadHistory(cursor?: string | null): Promise<void> {
   if (historyLoading.value) return;
   historyLoading.value = true;
@@ -1017,6 +1129,9 @@ async function loadHistory(cursor?: string | null): Promise<void> {
       : page.items;
     historyCursor.value = page.next_cursor;
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     historyError.value = err instanceof Error ? err.message : "无法加载研究历史";
   } finally {
     historyLoading.value = false;
@@ -1030,6 +1145,9 @@ async function loadMemories(): Promise<void> {
     const page = await listMemories("default", true, 50);
     userMemories.value = page.items;
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     memoryError.value = err instanceof Error ? err.message : "无法加载用户记忆";
   } finally {
     memoryLoading.value = false;
@@ -1694,6 +1812,9 @@ const handleSubmit = async () => {
       reportMarkdown.value = "暂无生成的报告";
     }
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     if (err instanceof DOMException && err.name === "AbortError") {
       progressLogs.value.push("已取消当前研究任务");
     } else {
@@ -1746,6 +1867,9 @@ const handleContinue = async () => {
       reportMarkdown.value = "暂无生成的报告";
     }
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     if (err instanceof DOMException && err.name === "AbortError") {
       progressLogs.value.push("已取消当前追问任务");
     } else {
@@ -1794,24 +1918,28 @@ const downloadReport = () => {
 };
 
 onMounted(() => {
+  const storedApiKey = getStoredApiKey();
+  apiKeyInput.value = storedApiKey;
+  if (!storedApiKey) return;
+
+  authLoading.value = true;
   void (async () => {
-    await loadHistory();
-    // Rehydrate the selected run after a browser refresh so the continuation
-    // anchor is available before the user starts the next follow-up.
-    let lastRunId = "";
     try {
-      lastRunId = window.localStorage.getItem("helloagents:last-run-id") || "";
-    } catch {
-      // Local storage is optional; the history list remains authoritative.
-    }
-    if (lastRunId) {
-      const lastRun = historyItems.value.find((item) => item.run_id === lastRunId);
-      if (lastRun) {
-        await openHistory(lastRun);
-      }
+      await verifyApiKey();
+      apiKey.value = storedApiKey;
+      await bootstrapApplication();
+    } catch (errorValue) {
+      clearStoredApiKey();
+      apiKey.value = "";
+      authError.value = isUnauthorized(errorValue)
+        ? "API Key 错误，请重新输入。"
+        : errorValue instanceof Error
+          ? errorValue.message
+          : "API Key 校验失败。";
+    } finally {
+      authLoading.value = false;
     }
   })();
-  void loadMemories();
 });
 
 onBeforeUnmount(() => {
@@ -1849,6 +1977,31 @@ onBeforeUnmount(() => {
   font-family: "Plus Jakarta Sans", "Noto Sans SC", "PingFang SC",
     "Microsoft YaHei", system-ui, sans-serif;
   letter-spacing: 0;
+}
+
+.auth-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--color-background);
+}
+
+.auth-card {
+  width: min(100%, 460px);
+  display: grid;
+  gap: 14px;
+  box-shadow: 0 18px 50px rgb(19 78 74 / 12%);
+}
+
+.auth-card h1 {
+  color: var(--color-foreground-strong);
+  font-size: 28px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 12px;
 }
 
 .app-topbar {

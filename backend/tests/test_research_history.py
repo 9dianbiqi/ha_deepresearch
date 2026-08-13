@@ -231,7 +231,10 @@ class HistoryApiRunner:
 
 def test_history_api_returns_bounded_page() -> None:
     """P0 exposes history through a stable GET endpoint."""
-    client = TestClient(create_app(harness_runner=HistoryApiRunner()))
+    client = TestClient(
+        create_app(harness_runner=HistoryApiRunner()),
+        headers={"Authorization": "Bearer test-app-key"},
+    )
     response = client.get("/runs?limit=5")
     assert response.status_code == 200
     assert response.json()["items"][0]["run_id"] == "a"
@@ -263,7 +266,10 @@ def test_http_history_followup_and_memory_toggle_end_to_end(tmp_path: Path) -> N
                 if line and line.startswith("data:")
             ]
 
-    with TestClient(create_app(harness_runner=runner)) as client:
+    with TestClient(
+        create_app(harness_runner=runner),
+        headers={"Authorization": "Bearer test-app-key"},
+    ) as client:
         first = stream(client, "/research/stream", {"topic": "SQLite memory retrieval"})
         first_run_id = first[0]["run_id"]
         assert first[-1]["type"] == "done"

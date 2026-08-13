@@ -552,10 +552,7 @@ def test_search_tool_is_lazy_and_constructed_inside_governed_attempt() -> None:
     search_adapter = adapters.HelloAgentsSearchAdapter(tool_factory=SearchTool)
     result, _notices, _answer, backend = dispatch_search(
         "private search query",
-        Configuration(
-            enable_notes=False,
-            search_api=SearchAPI.DUCKDUCKGO,
-        ),
+        Configuration(enable_notes=False, search_api=SearchAPI.TAVILY),
         0,
         use_cache=False,
         operation_scope=scope,
@@ -563,7 +560,7 @@ def test_search_tool_is_lazy_and_constructed_inside_governed_attempt() -> None:
     )
 
     assert result and result["results"]
-    assert backend == "duckduckgo"
+    assert backend == "tavily"
     assert created_after_started == [True]
     audit = [
         event
@@ -581,6 +578,47 @@ def test_search_tool_is_lazy_and_constructed_inside_governed_attempt() -> None:
     serialized = str([event.as_dict() for event in audit])
     assert "private search query" not in serialized
     assert "query_hash" in serialized
+
+
+def test_duckduckgo_compatibility_path_uses_auto_router() -> None:
+    """The DuckDuckGo fallback avoids ddgs' empty explicit backend route."""
+    adapters = _load_adapters()
+    calls: list[dict[str, Any]] = []
+
+    class FakeDDGS:
+        def __init__(self, *, timeout: int) -> None:
+            assert timeout == 10
+
+        def __enter__(self) -> "FakeDDGS":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def text(self, query: str, **kwargs: Any) -> list[dict[str, str]]:
+            calls.append({"query": query, **kwargs})
+            return [
+                {
+                    "title": "Result",
+                    "href": "https://example.test/result",
+                    "body": "Evidence",
+                }
+            ]
+
+    adapter = adapters.HelloAgentsSearchAdapter(duckduckgo_factory=FakeDDGS)
+    result = adapter.run(
+        {
+            "input": "compatibility query",
+            "backend": "duckduckgo",
+            "max_results": 3,
+        }
+    )
+
+    assert result["backend"] == "duckduckgo"
+    assert result["results"][0]["url"] == "https://example.test/result"
+    assert calls == [
+        {"query": "compatibility query", "max_results": 3, "backend": "auto"}
+    ]
 
 
 def test_search_tool_construction_never_replaces_or_swallows_process_stdout(

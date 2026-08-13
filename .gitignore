@@ -20,6 +20,8 @@ env/
 .env.*
 !.env.example
 !.env.production.example
+# Production secrets stay local and are never committed.
+/.env.production
 pip-wheel-metadata/
 
 # uv
@@ -56,3 +58,4 @@ backend/benchmark_results.json
 backend/cache/
 backend/notes/
 backend/data/
+data/

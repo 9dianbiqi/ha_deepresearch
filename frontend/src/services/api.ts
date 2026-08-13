@@ -1,14 +1,84 @@
 const baseURL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const appApiKey =
-  typeof import.meta.env === "object" && import.meta.env
-    ? import.meta.env.VITE_APP_API_KEY || ""
-    : "";
+
+const API_KEY_STORAGE_KEY = "helloagents:api-key";
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(message: string, status: number, code: string | null = null) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function getStoredApiKey(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.sessionStorage.getItem(API_KEY_STORAGE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setStoredApiKey(value: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const normalized = value.trim();
+    if (normalized) {
+      window.sessionStorage.setItem(API_KEY_STORAGE_KEY, normalized);
+    } else {
+      window.sessionStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // sessionStorage is optional; the caller can still keep the key in memory.
+  }
+}
+
+export function clearStoredApiKey(): void {
+  setStoredApiKey("");
+}
 
 function apiHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  const appApiKey = getStoredApiKey();
   return appApiKey
     ? { ...headers, Authorization: `Bearer ${appApiKey}` }
     : headers;
+}
+
+async function throwApiError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<never> {
+  const errorText = await response.text().catch(() => "");
+  let code: string | null = null;
+  let message = errorText || fallbackMessage;
+  try {
+    const payload = JSON.parse(errorText) as {
+      detail?: { code?: unknown; message?: unknown };
+    };
+    if (typeof payload.detail?.code === "string") {
+      code = payload.detail.code;
+    }
+    if (typeof payload.detail?.message === "string") {
+      message = payload.detail.message;
+    }
+  } catch {
+    // Keep the bounded fallback text for non-JSON responses.
+  }
+  throw new ApiError(message, response.status, code);
+}
+
+export async function verifyApiKey(): Promise<void> {
+  const response = await fetch(`${baseURL}/harness/scenarios`, {
+    headers: apiHeaders({ Accept: "application/json" }),
+  });
+  if (!response.ok) {
+    await throwApiError(response, "API Key 校验失败");
+  }
 }
 
 export interface ResearchRequest {
@@ -290,10 +360,7 @@ export async function runResearchStream(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(
-      errorText || `研究请求失败，状态码：${response.status}`
-    );
+    await throwApiError(response, `研究请求失败，状态码：${response.status}`);
   }
 
   return consumeSSE(response, onEvent);
@@ -315,10 +382,7 @@ export async function runContinueStream(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(
-      errorText || `继续研究请求失败，状态码：${response.status}`
-    );
+    await throwApiError(response, `继续研究请求失败，状态码：${response.status}`);
   }
 
   return consumeSSE(response, onEvent);
@@ -340,8 +404,7 @@ export async function runRecoveryStream(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || `Recovery request failed (${response.status})`);
+    await throwApiError(response, `Recovery request failed (${response.status})`);
   }
 
   return consumeSSE(response, onEvent);
@@ -357,8 +420,7 @@ export async function listHistory(
     headers: apiHeaders({ Accept: "application/json" }),
   });
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || "无法加载研究历史");
+    await throwApiError(response, "无法加载研究历史");
   }
   return (await response.json()) as HistoryPage;
 }
@@ -369,8 +431,7 @@ export async function getRunRecord(runId: string): Promise<RunRecord> {
     { headers: apiHeaders({ Accept: "application/json" }) },
   );
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || "无法加载研究记录");
+    await throwApiError(response, "无法加载研究记录");
   }
   return (await response.json()) as RunRecord;
 }
@@ -398,8 +459,7 @@ export async function fetchArtifact(
     { headers: apiHeaders({ Accept: "*/*" }) },
   );
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || "无法下载研究产物");
+    await throwApiError(response, "无法下载研究产物");
   }
   return {
     blob: await response.blob(),
@@ -423,8 +483,7 @@ export async function listMemories(
     headers: apiHeaders({ Accept: "application/json" }),
   });
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || "无法加载用户记忆");
+    await throwApiError(response, "无法加载用户记忆");
   }
   return (await response.json()) as UserMemoryPage;
 }
@@ -443,8 +502,7 @@ export async function createMemoryCandidate(
     body: JSON.stringify({ text, kind, scope }),
   });
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || "无法保存记忆候选");
+    await throwApiError(response, "无法保存记忆候选");
   }
   return (await response.json()) as UserMemory;
 }
@@ -462,8 +520,7 @@ export async function confirmMemory(
     },
   );
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || "无法确认记忆");
+    await throwApiError(response, "无法确认记忆");
   }
   return (await response.json()) as UserMemory;
 }
@@ -481,7 +538,6 @@ export async function deleteMemory(
     },
   );
   if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(errorText || "无法删除记忆");
+    await throwApiError(response, "无法删除记忆");
   }
 }

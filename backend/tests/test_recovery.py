@@ -330,7 +330,10 @@ def test_recovery_http_endpoint_uses_same_run_id() -> None:
         failed = runner.run(request)
         assert failed.status == "failed"
 
-        with TestClient(create_app(harness_runner=runner)) as client:
+        with TestClient(
+            create_app(harness_runner=runner),
+            headers={"Authorization": "Bearer test-app-key"},
+        ) as client:
             response = client.post("/research/recover", json={"run_id": request.run_id})
         assert response.status_code == 200, response.text
         payload = response.json()
@@ -351,7 +354,10 @@ def test_recovery_sse_emits_recovery_boundary_and_terminal_event() -> None:
         )
         assert runner.run(request).status == "failed"
 
-        with TestClient(create_app(harness_runner=runner)) as client:
+        with TestClient(
+            create_app(harness_runner=runner),
+            headers={"Authorization": "Bearer test-app-key"},
+        ) as client:
             with client.stream(
                 "POST",
                 "/research/recover/stream",

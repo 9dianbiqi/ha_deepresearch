@@ -185,16 +185,70 @@ class HelloAgentsSearchAdapter:
         self,
         *,
         tool_factory: Callable[..., object] = SearchTool,
+        duckduckgo_factory: Callable[..., Any] | None = None,
     ) -> None:
         """Initialize thread-local search tool storage."""
         self._tool_factory = tool_factory
+        self._duckduckgo_factory = duckduckgo_factory
         self._local = local()
 
     def run(self, parameters: dict[str, Any]) -> str | dict[str, Any]:
         """Run one structured search after its caller has authorized the attempt."""
+        if str(parameters.get("backend") or "").lower() == "duckduckgo":
+            return self._run_duckduckgo_compat(parameters)
         tool = self._tool()
         run = getattr(tool, "run")
         return run(dict(parameters))
+
+    def _run_duckduckgo_compat(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        """Use ddgs auto routing when its explicit DuckDuckGo backend is empty.
+
+        ddgs 9.6.x can return no results for ``backend="duckduckgo"`` even when
+        its auto router is healthy.  Keep this compatibility path behind the
+        governed adapter so the public backend contract and operation audit stay
+        unchanged while avoiding a dependency-version-specific empty fallback.
+        """
+        query = str(parameters.get("input") or parameters.get("query") or "").strip()
+        if not query:
+            return {"results": [], "backend": "duckduckgo", "answer": None}
+
+        factory = self._duckduckgo_factory
+        if factory is None:
+            from ddgs import DDGS
+
+            factory = DDGS
+
+        try:
+            with factory(timeout=10) as client:
+                search = getattr(client, "text")
+                raw_results = search(
+                    query,
+                    max_results=int(parameters.get("max_results", 5)),
+                    backend="auto",
+                )
+        except Exception as exc:
+            raise RuntimeError("DuckDuckGo-compatible search failed.") from exc
+
+        results: list[dict[str, str]] = []
+        for raw_result in raw_results or []:
+            if not isinstance(raw_result, dict):
+                continue
+            url = raw_result.get("href") or raw_result.get("url")
+            title = raw_result.get("title") or url
+            content = raw_result.get("body") or raw_result.get("content") or ""
+            if not isinstance(url, str) or not url.strip():
+                continue
+            if not isinstance(title, str) or not title.strip():
+                continue
+            results.append(
+                {
+                    "title": title.strip(),
+                    "url": url.strip(),
+                    "content": content.strip() if isinstance(content, str) else "",
+                }
+            )
+
+        return {"results": results, "backend": "duckduckgo", "answer": None}
 
     def _tool(self) -> object:
         tool = getattr(self._local, "tool", None)

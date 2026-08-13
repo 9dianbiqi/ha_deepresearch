@@ -139,7 +139,10 @@ class MemoryApiRunner:
 
 def test_memory_api_enforces_candidate_confirm_delete_gate(tmp_path: Path) -> None:
     """The public API exposes explicit candidate, confirm, list, and delete actions."""
-    client = TestClient(create_app(harness_runner=MemoryApiRunner(tmp_path)))
+    client = TestClient(
+        create_app(harness_runner=MemoryApiRunner(tmp_path)),
+        headers={"Authorization": "Bearer test-app-key"},
+    )
     created = client.post(
         "/memories/candidates",
         json={"text": "Prefer short reports", "kind": "preference"},
