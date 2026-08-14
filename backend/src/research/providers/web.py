@@ -200,8 +200,8 @@ class WebSourceProvider:
             "",
         )
         raw_content = result.get("raw_content")
-        if isinstance(raw_content, str) and raw_content.strip():
-            prefix = raw_content.lstrip()[:512].casefold()
+        if isinstance(raw_content, str) and raw_content:
+            prefix = raw_content[:512].lstrip().casefold()
             content_type = (
                 "text/html"
                 if prefix.startswith("<!doctype html")
@@ -215,6 +215,8 @@ class WebSourceProvider:
                 content_type=content_type,
                 fallback_title=title,
                 fallback_snippet=snippet,
+                content_origin="upstream_provider",
+                validate_public_url=True,
             )
         else:
             context.budget.reserve(requests=1)
@@ -251,6 +253,7 @@ class WebSourceProvider:
             metadata={
                 "title": capture.page_title,
                 "evidence_level": capture.evidence_level,
+                "content_origin": capture.content_origin,
             },
         )
         return SourceCollection(

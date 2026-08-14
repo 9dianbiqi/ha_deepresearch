@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import socket
-from collections.abc import Callable, Mapping
+from codecs import getincrementalencoder
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Final, Protocol
+from typing import Final, Protocol, cast
 from urllib.parse import (
     parse_qsl,
     quote,
@@ -20,7 +21,10 @@ from urllib.parse import (
     urlunsplit,
 )
 
-import requests
+import certifi
+from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.response import BaseHTTPResponse
+from urllib3.util import Timeout
 
 from .paragraphs import (
     ExtractedWebDocument,
@@ -32,6 +36,7 @@ from .paragraphs import (
 )
 
 MAX_PAGE_BYTES: Final = 2 * 1024 * 1024
+MAX_PAGE_CHARS: Final = 2 * 1024 * 1024
 MAX_PARAGRAPH_CHARS: Final = 2_000
 MAX_PARAGRAPHS: Final = 80
 _REDIRECT_STATUSES: Final = frozenset({301, 302, 303, 307, 308})
@@ -48,6 +53,9 @@ _TRACKING_QUERY_KEYS: Final = frozenset(
         "mc_eid",
         "vero_id",
     }
+)
+_CONTENT_ORIGINS: Final = frozenset(
+    {"provided_content", "system_fetch", "upstream_provider", "search_metadata"}
 )
 _NOTICE_MESSAGES: Final = {
     "web_capture_invalid_url": "Web page URL is invalid.",
@@ -88,6 +96,43 @@ class WebPageFetcher(Protocol):
 
     def fetch(self, url: str, *, max_bytes: int) -> FetchedWebPage:
         """Fetch one bounded public page or raise ``WebCaptureError``."""
+        raise NotImplementedError
+
+
+class HostResolver(Protocol):
+    """Resolve one logical host without making an HTTP connection."""
+
+    def __call__(self, hostname: str, port: int) -> Sequence[str]:
+        """Return every A/AAAA address visible for the host."""
+        raise NotImplementedError
+
+
+class PinnedWebResponse(Protocol):
+    """Streaming HTTP response created from an IP-pinned connection."""
+
+    status_code: int
+    headers: Mapping[str, str]
+
+    def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:
+        """Yield decoded response bytes without buffering the full response."""
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """Release the response and its connection pool."""
+        raise NotImplementedError
+
+
+class PinnedWebTransport(Protocol):
+    """Connect to an already-validated IP for one logical HTTP(S) URL."""
+
+    def request(
+        self,
+        url: str,
+        *,
+        connect_ip: str,
+        timeout: tuple[float, float],
+    ) -> PinnedWebResponse:
+        """Return one response without resolving the logical hostname again."""
         raise NotImplementedError
 
 
@@ -135,108 +180,251 @@ def stable_web_source_id(canonical_url: str) -> str:
     return f"web:{digest}"
 
 
-def _require_public_hostname(url: str) -> None:
-    """Reject local, private, reserved, and unresolved network destinations."""
-    hostname = urlsplit(url).hostname
+def _socket_resolve(hostname: str, port: int) -> tuple[str, ...]:
+    """Return socket addresses without applying the public-address policy."""
+    try:
+        return tuple(
+            cast(str, item[4][0])
+            for item in socket.getaddrinfo(
+                hostname,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+        )
+    except OSError as exc:
+        raise WebCaptureError("web_capture_fetch_failed") from exc
+
+
+def _resolve_public_addresses(
+    url: str,
+    resolver: HostResolver,
+) -> tuple[str, ...]:
+    """Resolve and reject the whole destination when any address is unsafe."""
+    parsed = urlsplit(url)
+    hostname = parsed.hostname
     if not hostname:
         raise WebCaptureError("web_capture_invalid_url")
     lowered = hostname.casefold().rstrip(".")
     if lowered == "localhost" or lowered.endswith((".localhost", ".local", ".internal")):
         raise WebCaptureError("web_capture_unsafe_url")
-    addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]
+    port = parsed.port or (443 if parsed.scheme.casefold() == "https" else 80)
+    raw_addresses: Sequence[str]
     try:
         literal = ipaddress.ip_address(lowered)
-        addresses = (literal,)
+        raw_addresses = (str(literal),)
     except ValueError:
         try:
-            addresses = tuple(
-                {
-                    ipaddress.ip_address(item[4][0])
-                    for item in socket.getaddrinfo(lowered, None, type=socket.SOCK_STREAM)
-                }
-            )
-        except (OSError, ValueError) as exc:
+            raw_addresses = resolver(lowered, port)
+        except WebCaptureError:
+            raise
+        except Exception as exc:
             raise WebCaptureError("web_capture_fetch_failed") from exc
+    try:
+        addresses = tuple({ipaddress.ip_address(item) for item in raw_addresses})
+    except ValueError as exc:
+        raise WebCaptureError("web_capture_fetch_failed") from exc
     if not addresses or any(not address.is_global for address in addresses):
         raise WebCaptureError("web_capture_unsafe_url")
+    ordered = sorted(addresses, key=lambda item: (item.version, int(item)))
+    return tuple(str(item) for item in ordered)
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    """Read a header from arbitrary case-sensitive or insensitive mappings."""
+    target = name.casefold()
+    return next(
+        (
+            value
+            for key, value in headers.items()
+            if isinstance(key, str)
+            and key.casefold() == target
+            and isinstance(value, str)
+        ),
+        None,
+    )
+
+
+def _response_encoding(content_type: str) -> str | None:
+    """Extract a bounded charset token from a Content-Type header."""
+    for parameter in content_type.split(";")[1:]:
+        key, separator, value = parameter.partition("=")
+        if separator and key.strip().casefold() == "charset":
+            charset = value.strip().strip('"\'')[:128]
+            return charset or None
+    return None
+
+
+class _Urllib3PinnedResponse:
+    """Adapt an urllib3 response while owning its one-shot connection pool."""
+
+    status_code: int
+    headers: Mapping[str, str]
+
+    def __init__(
+        self,
+        response: BaseHTTPResponse,
+        pool: HTTPConnectionPool,
+    ) -> None:
+        self.status_code = response.status
+        self.headers = dict(response.headers.items())
+        self._response = response
+        self._pool = pool
+
+    def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:
+        """Yield decompressed bytes under the caller's decoded-size bound."""
+        yield from self._response.stream(chunk_size, decode_content=True)
+
+    def close(self) -> None:
+        """Release both response and pool even after a bounded-read failure."""
+        self._response.release_conn()
+        self._response.close()
+        self._pool.close()
+
+
+class Urllib3PinnedWebTransport:
+    """Connect directly to verified IPs while preserving Host and TLS identity."""
+
+    def request(
+        self,
+        url: str,
+        *,
+        connect_ip: str,
+        timeout: tuple[float, float],
+    ) -> PinnedWebResponse:
+        """Make one IP-pinned request with certificate verification enabled."""
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
+        if not hostname:
+            raise WebCaptureError("web_capture_invalid_url")
+        scheme = parsed.scheme.casefold()
+        port = parsed.port or (443 if scheme == "https" else 80)
+        host_display = f"[{hostname}]" if ":" in hostname else hostname
+        default_port = (scheme == "http" and port == 80) or (
+            scheme == "https" and port == 443
+        )
+        host_header = host_display if default_port else f"{host_display}:{port}"
+        request_target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        pool_timeout = Timeout(connect=timeout[0], read=timeout[1])
+        if scheme == "https":
+            pool: HTTPConnectionPool = HTTPSConnectionPool(
+                host=connect_ip,
+                port=port,
+                timeout=pool_timeout,
+                retries=False,
+                cert_reqs="CERT_REQUIRED",
+                ca_certs=certifi.where(),
+                assert_hostname=hostname,
+                server_hostname=hostname,
+            )
+        elif scheme == "http":
+            pool = HTTPConnectionPool(
+                host=connect_ip,
+                port=port,
+                timeout=pool_timeout,
+                retries=False,
+            )
+        else:
+            raise WebCaptureError("web_capture_invalid_url")
+        try:
+            response = pool.request(
+                "GET",
+                request_target,
+                preload_content=False,
+                decode_content=False,
+                redirect=False,
+                retries=False,
+                headers={
+                    "Host": host_header,
+                    "Accept": "text/html,application/xhtml+xml,text/plain;q=0.8",
+                    "Accept-Encoding": "gzip, deflate",
+                    "User-Agent": (
+                        "helloagents-deepresearch/1.1 web-evidence-capture"
+                    ),
+                },
+            )
+        except Exception:
+            pool.close()
+            raise
+        return _Urllib3PinnedResponse(response, pool)
 
 
 class RequestsWebPageFetcher:
-    """Fetch public pages with explicit redirect and byte limits."""
+    """Fetch public pages through DNS-validated, IP-pinned connections."""
 
     def __init__(
         self,
         *,
-        session: requests.Session | None = None,
+        resolver: HostResolver = _socket_resolve,
+        transport: PinnedWebTransport | None = None,
         timeout: tuple[float, float] = (5.0, 15.0),
         max_redirects: int = 5,
     ) -> None:
-        """Store the injected session and bounded request policy."""
-        self._session = session
+        """Store injectable DNS and pinned-transport boundaries."""
+        self._resolver = resolver
+        self._transport = transport or Urllib3PinnedWebTransport()
         self._timeout = timeout
         self._max_redirects = max_redirects
 
     def fetch(self, url: str, *, max_bytes: int) -> FetchedWebPage:
         """Fetch one page while validating every redirect destination."""
         current = canonicalize_web_url(url)
-        session = self._session or requests.Session()
-        try:
-            for redirect_index in range(self._max_redirects + 1):
-                _require_public_hostname(current)
+        for redirect_index in range(self._max_redirects + 1):
+            addresses = _resolve_public_addresses(current, self._resolver)
+            response: PinnedWebResponse | None = None
+            last_error: Exception | None = None
+            for connect_ip in addresses:
                 try:
-                    response = session.get(
+                    response = self._transport.request(
                         current,
-                        allow_redirects=False,
-                        stream=True,
+                        connect_ip=connect_ip,
                         timeout=self._timeout,
-                        headers={
-                            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.8",
-                            "Accept-Encoding": "gzip, deflate",
-                            "User-Agent": "helloagents-deepresearch/1.1 web-evidence-capture",
-                        },
                     )
-                except requests.RequestException as exc:
-                    raise WebCaptureError("web_capture_fetch_failed") from exc
-                try:
-                    if response.status_code in _REDIRECT_STATUSES:
-                        location = response.headers.get("Location")
-                        if not location or redirect_index >= self._max_redirects:
-                            raise WebCaptureError("web_capture_http_error")
-                        current = canonicalize_web_url(urljoin(current, location))
-                        continue
-                    if response.status_code < 200 or response.status_code >= 300:
+                    break
+                except WebCaptureError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+            if response is None:
+                raise WebCaptureError("web_capture_fetch_failed") from last_error
+            try:
+                if response.status_code in _REDIRECT_STATUSES:
+                    location = _header_value(response.headers, "Location")
+                    if not location or redirect_index >= self._max_redirects:
                         raise WebCaptureError("web_capture_http_error")
-                    raw_content_type = response.headers.get("Content-Type", "text/html")
-                    content_type = raw_content_type.partition(";")[0].strip().casefold()
-                    if content_type not in _SUPPORTED_CONTENT_TYPES:
-                        raise WebCaptureError("web_capture_unsupported_content_type")
-                    content_length = response.headers.get("Content-Length")
-                    if content_length:
-                        try:
-                            if int(content_length) > max_bytes:
-                                raise WebCaptureError("web_capture_too_large")
-                        except ValueError:
-                            pass
-                    collected = bytearray()
-                    for chunk in response.iter_content(chunk_size=64 * 1024):
-                        if not chunk:
-                            continue
-                        collected.extend(chunk)
-                        if len(collected) > max_bytes:
+                    current = canonicalize_web_url(urljoin(current, location))
+                    continue
+                if response.status_code < 200 or response.status_code >= 300:
+                    raise WebCaptureError("web_capture_http_error")
+                raw_content_type = _header_value(
+                    response.headers, "Content-Type"
+                ) or "text/html"
+                content_type = raw_content_type.partition(";")[0].strip().casefold()
+                if content_type not in _SUPPORTED_CONTENT_TYPES:
+                    raise WebCaptureError("web_capture_unsupported_content_type")
+                content_length = _header_value(response.headers, "Content-Length")
+                if content_length:
+                    try:
+                        if int(content_length) > max_bytes:
                             raise WebCaptureError("web_capture_too_large")
-                    if not collected:
-                        raise WebCaptureError("web_capture_empty_content")
-                    return FetchedWebPage(
-                        final_url=canonicalize_web_url(response.url or current),
-                        body=bytes(collected),
-                        content_type=content_type,
-                        encoding=response.encoding,
-                    )
-                finally:
-                    response.close()
-        finally:
-            if self._session is None:
-                session.close()
+                    except ValueError:
+                        pass
+                collected = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    collected.extend(chunk)
+                    if len(collected) > max_bytes:
+                        raise WebCaptureError("web_capture_too_large")
+                if not collected:
+                    raise WebCaptureError("web_capture_empty_content")
+                return FetchedWebPage(
+                    final_url=current,
+                    body=bytes(collected),
+                    content_type=content_type,
+                    encoding=_response_encoding(raw_content_type),
+                )
+            finally:
+                response.close()
         raise WebCaptureError("web_capture_http_error")
 
 
@@ -253,6 +441,7 @@ class WebParagraph:
     exact_excerpt: str
     captured_at: str
     content_hash: str
+    content_origin: str = "provided_content"
     evidence_level: str = "full_text"
 
     def as_record(self, *, dimension: str = "overview") -> Mapping[str, object]:
@@ -282,6 +471,7 @@ class WebParagraph:
             "paragraph_index": self.paragraph_index,
             "captured_at": self.captured_at,
             "content_hash": self.content_hash,
+            "content_origin": self.content_origin,
         }
 
 
@@ -296,6 +486,7 @@ class WebSnapshotPayload:
     content: str
     content_hash: str
     suggested_filename: str
+    content_origin: str = "provided_content"
     mime_type: str = "text/plain; charset=utf-8"
 
     def descriptor(self) -> Mapping[str, object]:
@@ -311,6 +502,7 @@ class WebSnapshotPayload:
             "captured_at": self.captured_at,
             "size_bytes": len(encoded),
             "checksum": self.content_hash,
+            "content_origin": self.content_origin,
         }
 
 
@@ -328,6 +520,7 @@ class WebCaptureResult:
     metadata_excerpt: str = ""
     notices: tuple[str, ...] = ()
     notice_codes: tuple[str, ...] = ()
+    content_origin: str = "search_metadata"
 
     @property
     def evidence_level(self) -> str:
@@ -359,9 +552,34 @@ class WebCaptureResult:
                 },
                 "captured_at": self.captured_at,
                 "content_hash": content_hash,
+                "content_origin": "search_metadata",
                 "capture_notice_codes": list(self.notice_codes),
             },
         )
+
+
+def _require_bounded_text_encoding(
+    value: str,
+    *,
+    encoding: str,
+    max_chars: int,
+    max_bytes: int,
+) -> None:
+    """Enforce character and encoded-byte limits without one large allocation."""
+    if len(value) > max_chars:
+        raise WebCaptureError("web_capture_too_large")
+    try:
+        encoder = getincrementalencoder(encoding)(errors="strict")
+    except LookupError as exc:
+        raise WebCaptureError("web_capture_empty_content") from exc
+    encoded_size = 0
+    for start in range(0, len(value), 16 * 1024):
+        encoded_size += len(encoder.encode(value[start : start + 16 * 1024]))
+        if encoded_size > max_bytes:
+            raise WebCaptureError("web_capture_too_large")
+    encoded_size += len(encoder.encode("", final=True))
+    if encoded_size > max_bytes:
+        raise WebCaptureError("web_capture_too_large")
 
 
 def _same_canonical_site(requested_url: str, hinted_url: str) -> bool:
@@ -395,7 +613,9 @@ class WebCaptureService:
         self,
         *,
         fetcher: WebPageFetcher | None = None,
+        resolver: HostResolver = _socket_resolve,
         max_page_bytes: int = MAX_PAGE_BYTES,
+        max_page_chars: int = MAX_PAGE_CHARS,
         max_paragraph_chars: int = MAX_PARAGRAPH_CHARS,
         max_paragraphs: int = MAX_PARAGRAPHS,
         min_paragraph_chars: int = 20,
@@ -404,6 +624,7 @@ class WebCaptureService:
         """Store bounded extraction limits and injectable side-effect seams."""
         limits = {
             "max_page_bytes": max_page_bytes,
+            "max_page_chars": max_page_chars,
             "max_paragraph_chars": max_paragraph_chars,
             "max_paragraphs": max_paragraphs,
             "min_paragraph_chars": min_paragraph_chars,
@@ -415,8 +636,10 @@ class WebCaptureService:
             raise ValueError("Web capture limits must be positive integers.")
         if min_paragraph_chars > max_paragraph_chars:
             raise ValueError("Minimum paragraph length cannot exceed its maximum.")
-        self._fetcher = fetcher or RequestsWebPageFetcher()
+        self._resolver = resolver
+        self._fetcher = fetcher or RequestsWebPageFetcher(resolver=resolver)
         self._max_page_bytes = max_page_bytes
+        self._max_page_chars = max_page_chars
         self._max_paragraph_chars = max_paragraph_chars
         self._max_paragraphs = max_paragraphs
         self._min_paragraph_chars = min_paragraph_chars
@@ -441,6 +664,7 @@ class WebCaptureService:
                 encoding=fetched.encoding,
                 fallback_title=fallback_title,
                 fallback_snippet=fallback_snippet,
+                content_origin="system_fetch",
             )
         except WebCaptureError as exc:
             return self._fallback(
@@ -467,16 +691,33 @@ class WebCaptureService:
         encoding: str | None = None,
         fallback_title: str = "",
         fallback_snippet: str = "",
+        content_origin: str = "provided_content",
+        validate_public_url: bool = False,
     ) -> WebCaptureResult:
         """Normalize already-fetched content without performing network I/O."""
         try:
+            if content_origin not in _CONTENT_ORIGINS - {"search_metadata"}:
+                raise ValueError("Web content origin is unsupported.")
             requested_url = canonicalize_web_url(url)
             canonical_url = canonicalize_web_url(final_url or requested_url)
-            raw_bytes = content.encode(encoding or "utf-8") if isinstance(content, str) else content
-            if not raw_bytes:
-                raise WebCaptureError("web_capture_empty_content")
-            if len(raw_bytes) > self._max_page_bytes:
-                raise WebCaptureError("web_capture_too_large")
+            if validate_public_url:
+                _resolve_public_addresses(requested_url, self._resolver)
+                if canonical_url != requested_url:
+                    _resolve_public_addresses(canonical_url, self._resolver)
+            if isinstance(content, str):
+                if not content:
+                    raise WebCaptureError("web_capture_empty_content")
+                _require_bounded_text_encoding(
+                    content,
+                    encoding=encoding or "utf-8",
+                    max_chars=self._max_page_chars,
+                    max_bytes=self._max_page_bytes,
+                )
+            else:
+                if not content:
+                    raise WebCaptureError("web_capture_empty_content")
+                if len(content) > self._max_page_bytes:
+                    raise WebCaptureError("web_capture_too_large")
             normalized_type = content_type.partition(";")[0].strip().casefold()
             if normalized_type not in _SUPPORTED_CONTENT_TYPES:
                 raise WebCaptureError("web_capture_unsupported_content_type")
@@ -527,6 +768,7 @@ class WebCaptureService:
                     exact_excerpt=block.text,
                     captured_at=captured_at,
                     content_hash=paragraph_content_hash(block.text),
+                    content_origin=content_origin,
                 )
                 for index, block in enumerate(document.blocks, start=1)
             )
@@ -540,6 +782,7 @@ class WebCaptureService:
                 content=snapshot_content,
                 content_hash=snapshot_hash,
                 suggested_filename=f"web-{source_id.partition(':')[2]}-{snapshot_hash[:12]}.txt",
+                content_origin=content_origin,
             )
             return WebCaptureResult(
                 status="complete",
@@ -549,6 +792,7 @@ class WebCaptureService:
                 captured_at=captured_at,
                 paragraphs=paragraphs,
                 snapshot=snapshot,
+                content_origin=content_origin,
             )
         except WebCaptureError as exc:
             return self._fallback(
@@ -594,15 +838,21 @@ class WebCaptureService:
             metadata_excerpt=normalized_snippet,
             notices=tuple(_NOTICE_MESSAGES[item] for item in codes),
             notice_codes=codes,
+            content_origin="search_metadata",
         )
 
 
 __all__ = [
     "MAX_PAGE_BYTES",
+    "MAX_PAGE_CHARS",
     "MAX_PARAGRAPH_CHARS",
     "MAX_PARAGRAPHS",
     "FetchedWebPage",
+    "HostResolver",
+    "PinnedWebResponse",
+    "PinnedWebTransport",
     "RequestsWebPageFetcher",
+    "Urllib3PinnedWebTransport",
     "WebCaptureError",
     "WebCaptureResult",
     "WebCaptureService",
