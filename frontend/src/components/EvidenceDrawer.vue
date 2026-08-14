@@ -18,6 +18,12 @@
       :level="selectedParagraphAssessment.level"
       :confidence="selectedParagraphAssessment.support_confidence"
     />
+    <div v-if="selectedDiagnostics.length" class="diagnostic-list" role="status">
+      <p class="eyebrow">本段扣分原因</p>
+      <ul>
+        <li v-for="reason in selectedDiagnostics" :key="reason">{{ reason }}</li>
+      </ul>
+    </div>
 
     <fieldset class="evidence-filters">
       <legend>筛选证据</legend>
@@ -109,6 +115,17 @@
             <span>事实 {{ percent(assessmentForClaim(claim.claim_id)?.factual_score) }}</span>
             <span>引用 {{ percent(assessmentForClaim(claim.claim_id)?.citation_score) }}</span>
           </div>
+          <ul
+            v-if="assessmentForClaim(claim.claim_id)?.reasons.length"
+            class="claim-reasons"
+          >
+            <li
+              v-for="reason in assessmentForClaim(claim.claim_id)?.reasons"
+              :key="reason"
+            >
+              {{ reason }}
+            </li>
+          </ul>
         </article>
       </div>
     </article>
@@ -170,6 +187,11 @@ const selectedParagraphAssessment = computed(() =>
     (item) => item.paragraph_id === props.selectedParagraphId,
   ),
 );
+
+const selectedDiagnostics = computed(() => [
+  ...(selectedParagraphAssessment.value?.blockers ?? []),
+  ...(selectedParagraphAssessment.value?.warnings ?? []),
+]);
 
 const lowConfidenceEvidenceIds = computed(() => {
   const weakParagraphIds = new Set(
@@ -368,6 +390,22 @@ function locationLabel(item: ResearchEvidence): string {
   font-weight: 700;
 }
 
+.diagnostic-list {
+  border: 1px solid #e1c983;
+  border-radius: 7px;
+  background: #fff9e7;
+  color: #6f5215;
+  padding: 8px 10px;
+}
+
+.diagnostic-list ul,
+.claim-reasons {
+  margin: 5px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .evidence-list {
   display: grid;
   gap: 6px;
@@ -487,6 +525,10 @@ function locationLabel(item: ResearchEvidence): string {
   padding: 5px;
   font-size: 10px;
   text-align: center;
+}
+
+.claim-reasons {
+  color: #6f5215;
 }
 
 @media (max-width: 640px) {
