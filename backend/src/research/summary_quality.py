@@ -77,10 +77,10 @@ class SummaryQualityThresholds:
     def as_dict(self) -> dict[str, float]:
         """Return the contract-compatible threshold mapping."""
         return {
-            "semantic": float(self.semantic),
-            "factual": float(self.factual),
-            "citation": float(self.citation),
-            "overall": float(self.overall),
+            "semantic_score": float(self.semantic),
+            "factual_score": float(self.factual),
+            "citation_score": float(self.citation),
+            "overall_score": float(self.overall),
         }
 
 

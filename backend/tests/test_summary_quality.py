@@ -189,6 +189,12 @@ def test_complete_two_source_summary_passes() -> None:
 
     assert result.passed is True
     assert result.overall_score == pytest.approx(1.0)
+    assert dict(result.thresholds) == {
+        "semantic_score": 0.72,
+        "factual_score": 0.75,
+        "citation_score": 0.85,
+        "overall_score": 0.78,
+    }
     assert result.paragraph_assessments[0].level == "high"
     assert result.claim_assessments[0].verdict == "supported"
 
