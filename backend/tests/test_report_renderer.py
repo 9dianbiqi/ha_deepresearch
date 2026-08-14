@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -97,6 +98,38 @@ def _records() -> tuple[
         ),
     )
     return claims, (architecture, streaming)
+
+
+def _records_with_conflict() -> tuple[
+    tuple[ClaimRecord, ...],
+    tuple[EvidenceRecord, ...],
+]:
+    """Extend the base ledger with evidence that contradicts one claim."""
+    claims, evidence = _records()
+    conflicting = EvidenceRecord(
+        evidence_id="ev_conflicting",
+        source=evidence[0].source,
+        evidence_type="source_excerpt",
+        evidence_level="full_text",
+        title="Conflicting initialization path",
+        excerpt="A separate factory initializes the application instead.",
+        locator=EvidenceLocator(
+            locator_type="line",
+            url=(
+                "https://github.com/owner/repo/blob/"
+                "0123456789abcdef0123456789abcdef01234567/"
+                "src/main.py#L30-L36"
+            ),
+            file_path="src/main.py",
+            line_start=30,
+            line_end=36,
+        ),
+    )
+    architecture = replace(
+        claims[0],
+        conflicting_evidence_ids=(conflicting.evidence_id,),
+    )
+    return (architecture, claims[1]), (*evidence, conflicting)
 
 
 def _document() -> StructuredSummaryDocument:
@@ -284,6 +317,78 @@ def test_limitation_without_claim_or_citation_is_valid() -> None:
     assert result.citation_gate.valid
     assert "The deployed service was not exercised." in result.markdown
     assert result.paragraph_traces[0].citations == ()
+
+
+def test_conflicting_evidence_is_bound_rendered_and_traced() -> None:
+    """Explicit conflict paragraphs retain their Claim relationship."""
+    claims, evidence = _records_with_conflict()
+    document = StructuredSummaryDocument(
+        task_id="report",
+        paragraphs=(
+            SummaryParagraph(
+                section_id="conflicts",
+                paragraph_type="analysis",
+                text="The captured sources disagree about initialization.",
+                claim_ids=("claim_architecture",),
+                citation_ids=("ev_conflicting",),
+            ),
+        ),
+        claim_ids=("claim_architecture",),
+    )
+
+    result = render_structured_report(
+        document,
+        title="Conflict report",
+        claims=claims,
+        evidence=evidence,
+    )
+
+    citation = result.paragraph_traces[0].citations[0]
+    assert citation.evidence_id == "ev_conflicting"
+    assert citation.claim_ids == ("claim_architecture",)
+    assert "Conflicting evidence: [E2]" in result.markdown
+    assert "disagree about initialization. [E2]" in result.markdown
+
+
+def test_paragraph_url_allowlist_uses_only_actual_citation_ids() -> None:
+    """An uncited locator from the same Claim cannot enter paragraph prose."""
+    claims, evidence = _records_with_conflict()
+    cited_url = evidence[0].locator.url
+    uncited_url = evidence[2].locator.url
+    cited_document = StructuredSummaryDocument(
+        task_id="report",
+        paragraphs=(
+            SummaryParagraph(
+                section_id="overview",
+                paragraph_type="factual",
+                text=f"The cited locator is {cited_url}",
+                claim_ids=("claim_architecture",),
+                citation_ids=("ev_architecture",),
+            ),
+        ),
+        claim_ids=("claim_architecture",),
+    )
+    uncited_document = StructuredSummaryDocument(
+        task_id="report",
+        paragraphs=(
+            SummaryParagraph(
+                section_id="overview",
+                paragraph_type="factual",
+                text=f"The uncited locator is {uncited_url}",
+                claim_ids=("claim_architecture",),
+                citation_ids=("ev_architecture",),
+            ),
+        ),
+        claim_ids=("claim_architecture",),
+    )
+
+    cited_gate = validate_structured_citations(cited_document, claims, evidence)
+    uncited_gate = validate_structured_citations(uncited_document, claims, evidence)
+
+    assert cited_gate.valid
+    assert not uncited_gate.valid
+    assert uncited_url in uncited_gate.illegal_urls
+    assert "illegal_locator_url" in uncited_gate.failure_reasons
 
 
 def test_unknown_claim_and_unfrozen_evidence_are_rejected() -> None:

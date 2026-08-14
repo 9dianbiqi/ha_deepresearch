@@ -219,7 +219,10 @@ def validate_structured_citations(
             dict.fromkeys(
                 evidence_id
                 for claim in known_claims
-                for evidence_id in claim.evidence_ids
+                for evidence_id in (
+                    *claim.evidence_ids,
+                    *claim.conflicting_evidence_ids,
+                )
                 if evidence_id in evidence_by_id
             )
         )
@@ -230,7 +233,8 @@ def validate_structured_citations(
         )
         allowed_urls = {
             evidence_by_id[item].locator.url
-            for item in allowed_ids
+            for item in paragraph.citation_ids
+            if item in allowed_ids
             if evidence_by_id[item].locator.url
         }
         raw_urls = tuple(

@@ -134,7 +134,8 @@ def _citation_trace(
     claim_ids = tuple(
         claim.claim_id
         for claim in paragraph_claims
-        if evidence.evidence_id in claim.evidence_ids
+        if evidence.evidence_id
+        in (*claim.evidence_ids, *claim.conflicting_evidence_ids)
     )
     return EvidenceCitationTrace(
         marker=marker,
@@ -182,7 +183,10 @@ def render_structured_report(
             evidence_id
             for claim_id in document.claim_ids
             if claim_id in claim_by_id
-            for evidence_id in claim_by_id[claim_id].evidence_ids
+            for evidence_id in (
+                *claim_by_id[claim_id].evidence_ids,
+                *claim_by_id[claim_id].conflicting_evidence_ids,
+            )
             if evidence_id in evidence_by_id
         }
     )
@@ -244,15 +248,23 @@ def render_structured_report(
     lines.extend(["", "## Claim–Evidence Index"])
     for claim_id in document.claim_ids:
         claim = claim_by_id[claim_id]
-        markers = "".join(
+        supporting_markers = "".join(
             f"[{marker_by_id[item]}]"
             for item in claim.evidence_ids
             if item in marker_by_id
         )
-        evidence_label = markers or "none"
-        lines.append(
-            f"- {_plain_markdown(claim.statement)} — Evidence: {evidence_label}"
+        conflicting_markers = "".join(
+            f"[{marker_by_id[item]}]"
+            for item in claim.conflicting_evidence_ids
+            if item in marker_by_id
         )
+        claim_line = (
+            f"- {_plain_markdown(claim.statement)} — Evidence: "
+            f"{supporting_markers or 'none'}"
+        )
+        if conflicting_markers:
+            claim_line += f" — Conflicting evidence: {conflicting_markers}"
+        lines.append(claim_line)
     if not document.claim_ids:
         lines.append("- No reportable claims.")
 
