@@ -27,6 +27,7 @@ from ..sources import (
     SourceSearchResult,
     SourceTarget,
 )
+from ..web_capture import WebCaptureResult, WebCaptureService
 
 _NOTICE_CODE = "web_provider_unavailable"
 _NOTICE_MESSAGE = "Web source provider unavailable."
@@ -71,10 +72,12 @@ class WebSourceProvider:
         *,
         dispatcher: Callable[..., Any] = dispatch_search,
         search_adapter: object | None = None,
+        capture_service: WebCaptureService | None = None,
     ) -> None:
-        """Store the dispatcher and optional existing SearchTool adapter."""
+        """Store search and page-capture adapters behind injectable boundaries."""
         self._dispatcher = dispatcher
         self._search_adapter = search_adapter
+        self._capture_service = capture_service or WebCaptureService()
 
     def detect_target(
         self,
@@ -163,6 +166,103 @@ class WebSourceProvider:
             backend=backend if isinstance(backend, str) else "none",
             notices=safe_notices,
             notice_codes=codes,
+        )
+
+    def collect_search_result(
+        self,
+        result: Mapping[str, object],
+        context: ProviderContext,
+        *,
+        dimension: str = "overview",
+    ) -> SourceCollection:
+        """Capture one search result as full-text paragraph or metadata records.
+
+        Existing search backends may already return bounded ``raw_content``. That
+        path is parsed locally. Otherwise the page fetch is run through the
+        existing governed ``search:web`` operation boundary.
+        """
+        context.cancellation.raise_if_cancelled()
+        raw_url = result.get("url")
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            raise ValueError("Web search result URL must not be empty.")
+        raw_title = result.get("title")
+        title = raw_title if isinstance(raw_title, str) else ""
+        snippet = next(
+            (
+                value
+                for value in (
+                    result.get("content"),
+                    result.get("snippet"),
+                    result.get("summary"),
+                )
+                if isinstance(value, str) and value.strip()
+            ),
+            "",
+        )
+        raw_content = result.get("raw_content")
+        if isinstance(raw_content, str) and raw_content.strip():
+            prefix = raw_content.lstrip()[:512].casefold()
+            content_type = (
+                "text/html"
+                if prefix.startswith("<!doctype html")
+                or "<html" in prefix
+                or "<article" in prefix
+                else "text/plain"
+            )
+            capture = self._capture_service.capture_content(
+                raw_url,
+                raw_content,
+                content_type=content_type,
+                fallback_title=title,
+                fallback_snippet=snippet,
+            )
+        else:
+            context.budget.reserve(requests=1)
+            operation_scope = context.operation_scope
+            if operation_scope is None:
+                raise ValueError("Web page capture requires an operation scope.")
+            url_hash = hashlib.sha256(raw_url.strip().encode("utf-8")).hexdigest()
+            spec = operation_scope.spec(
+                operation_name="search.fetch_page",
+                capabilities=("search:web",),
+                resource={"query_hash": url_hash, "backend": "web_capture"},
+            )
+            capture = operation_scope.operations.call(
+                spec,
+                lambda: self._capture_service.capture(
+                    raw_url,
+                    fallback_title=title,
+                    fallback_snippet=snippet,
+                ),
+            )
+        if not isinstance(capture, WebCaptureResult):
+            raise TypeError("Web capture service returned an invalid result.")
+        records = capture.as_records(dimension=dimension)
+        remaining = context.budget.remaining()["evidence"]
+        if records and remaining < 1:
+            context.budget.reserve(evidence=1)
+        bounded_records = records[:remaining]
+        context.budget.reserve(evidence=len(bounded_records))
+        target = SourceTarget(
+            provider_id=self.provider_id,
+            source_kind="web_page",
+            source_id=capture.source_id,
+            canonical_url=capture.canonical_url,
+            metadata={
+                "title": capture.page_title,
+                "evidence_level": capture.evidence_level,
+            },
+        )
+        return SourceCollection(
+            provider_id=self.provider_id,
+            source_kind=target.source_kind,
+            target=target,
+            collection_status=capture.status,
+            provider_payload=capture,
+            records=bounded_records,
+            captured_at=capture.captured_at,
+            notices=capture.notices,
+            notice_codes=capture.notice_codes,
         )
 
     def collect(
