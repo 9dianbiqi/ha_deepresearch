@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+import research.web_capture as web_capture
 from research.paragraphs import extract_text_document
 from research.profiles import ResearchMode, RetrievalBudget
 from research.providers.web import WebSourceProvider
 from research.sources import ProviderContext, RetrievalBudgetTracker
 from research.web_capture import (
     FetchedWebPage,
+    RequestsWebPageFetcher,
+    Urllib3PinnedWebTransport,
     WebCaptureError,
     WebCaptureService,
     canonicalize_web_url,
@@ -44,6 +50,59 @@ class BrokenFetcher:
     def fetch(self, url: str, *, max_bytes: int) -> FetchedWebPage:
         del url, max_bytes
         raise WebCaptureError("web_capture_fetch_failed")
+
+
+class StaticResolver:
+    """Return configured DNS answers while recording every resolution."""
+
+    def __init__(self, answers: dict[str, tuple[str, ...]]) -> None:
+        self.answers = answers
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, hostname: str, port: int) -> tuple[str, ...]:
+        self.calls.append((hostname, port))
+        return self.answers[hostname]
+
+
+class FakePinnedResponse:
+    """Minimal streaming response for pinned-transport boundary tests."""
+
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        chunks: tuple[bytes, ...] = (b"bounded public page content",),
+    ) -> None:
+        self.status_code = status_code
+        self.headers = headers or {"Content-Type": "text/plain; charset=utf-8"}
+        self.chunks = chunks
+        self.closed = False
+
+    def iter_content(self, *, chunk_size: int):
+        del chunk_size
+        yield from self.chunks
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class RecordingPinnedTransport:
+    """Return queued responses and expose the exact IP connection targets."""
+
+    def __init__(self, responses: list[FakePinnedResponse]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, str, tuple[float, float]]] = []
+
+    def request(
+        self,
+        url: str,
+        *,
+        connect_ip: str,
+        timeout: tuple[float, float],
+    ) -> FakePinnedResponse:
+        self.calls.append((url, connect_ip, timeout))
+        return self.responses.pop(0)
 
 
 def capture_service(**kwargs: object) -> WebCaptureService:
@@ -207,11 +266,14 @@ def test_injected_fetched_page_uses_final_url_and_content_type() -> None:
 
 
 def test_provider_converts_existing_raw_content_without_extra_request() -> None:
-    provider = WebSourceProvider(capture_service=capture_service())
+    resolver = StaticResolver({"public.example": ("93.184.216.34",)})
+    provider = WebSourceProvider(
+        capture_service=capture_service(resolver=resolver)
+    )
     context = provider_context()
     collection = provider.collect_search_result(
         {
-            "url": "https://example.test/article",
+            "url": "https://public.example/article",
             "title": "Article",
             "content": "Search-only summary.",
             "raw_content": (
@@ -226,8 +288,11 @@ def test_provider_converts_existing_raw_content_without_extra_request() -> None:
     assert collection.records[0]["evidence_level"] == "full_text"
     assert collection.records[0]["dimension"] == "architecture"
     assert collection.records[0]["locator"]["paragraph"].startswith("webp_")
+    assert collection.records[0]["content_origin"] == "upstream_provider"
+    assert collection.target.metadata["content_origin"] == "upstream_provider"
     assert context.budget.snapshot()["requests"] == 0
     assert context.budget.snapshot()["evidence"] == 1
+    assert resolver.calls == [("public.example", 443)]
 
 
 def test_canonical_link_cannot_replace_source_with_another_site() -> None:
@@ -241,3 +306,201 @@ def test_canonical_link_cannot_replace_source_with_another_site() -> None:
     )
 
     assert result.canonical_url == "https://example.test/source"
+
+
+def test_fetcher_pins_verified_ip_without_second_dns_resolution() -> None:
+    class RebindingResolver:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, hostname: str, port: int) -> tuple[str, ...]:
+            del hostname, port
+            self.calls += 1
+            return ("93.184.216.34",) if self.calls == 1 else ("127.0.0.1",)
+
+    resolver = RebindingResolver()
+    response = FakePinnedResponse()
+    transport = RecordingPinnedTransport([response])
+    page = RequestsWebPageFetcher(
+        resolver=resolver,
+        transport=transport,
+    ).fetch("https://public.example/article", max_bytes=128)
+
+    assert page.body == b"bounded public page content"
+    assert resolver.calls == 1
+    assert transport.calls[0][:2] == (
+        "https://public.example/article",
+        "93.184.216.34",
+    )
+    assert response.closed is True
+
+
+def test_mixed_public_and_private_dns_answers_fail_closed() -> None:
+    resolver = StaticResolver(
+        {"mixed.example": ("93.184.216.34", "::1")}
+    )
+    transport = RecordingPinnedTransport([])
+
+    with pytest.raises(WebCaptureError) as raised:
+        RequestsWebPageFetcher(
+            resolver=resolver,
+            transport=transport,
+        ).fetch("https://mixed.example/", max_bytes=128)
+
+    assert raised.value.code == "web_capture_unsafe_url"
+    assert transport.calls == []
+
+
+def test_each_redirect_is_resolved_and_pinned_independently() -> None:
+    resolver = StaticResolver(
+        {
+            "first.example": ("93.184.216.34",),
+            "second.example": ("1.1.1.1",),
+        }
+    )
+    redirect = FakePinnedResponse(
+        status_code=302,
+        headers={"Location": "https://second.example/final"},
+        chunks=(),
+    )
+    final = FakePinnedResponse(chunks=(b"final public response",))
+    transport = RecordingPinnedTransport([redirect, final])
+
+    page = RequestsWebPageFetcher(
+        resolver=resolver,
+        transport=transport,
+    ).fetch("https://first.example/start", max_bytes=128)
+
+    assert page.final_url == "https://second.example/final"
+    assert resolver.calls == [("first.example", 443), ("second.example", 443)]
+    assert [item[1] for item in transport.calls] == ["93.184.216.34", "1.1.1.1"]
+    assert redirect.closed is True
+    assert final.closed is True
+
+
+def test_redirect_to_private_literal_is_rejected_before_connection() -> None:
+    resolver = StaticResolver({"public.example": ("93.184.216.34",)})
+    redirect = FakePinnedResponse(
+        status_code=302,
+        headers={"Location": "http://127.0.0.1/admin"},
+        chunks=(),
+    )
+    transport = RecordingPinnedTransport([redirect])
+
+    with pytest.raises(WebCaptureError) as raised:
+        RequestsWebPageFetcher(
+            resolver=resolver,
+            transport=transport,
+        ).fetch("https://public.example/start", max_bytes=128)
+
+    assert raised.value.code == "web_capture_unsafe_url"
+    assert len(transport.calls) == 1
+    assert redirect.closed is True
+
+
+def test_streaming_decoded_body_is_bounded() -> None:
+    resolver = StaticResolver({"public.example": ("93.184.216.34",)})
+    response = FakePinnedResponse(chunks=(b"1234", b"56"))
+    transport = RecordingPinnedTransport([response])
+
+    with pytest.raises(WebCaptureError) as raised:
+        RequestsWebPageFetcher(
+            resolver=resolver,
+            transport=transport,
+        ).fetch("https://public.example/large", max_bytes=5)
+
+    assert raised.value.code == "web_capture_too_large"
+    assert response.closed is True
+
+
+def test_default_https_transport_pins_ip_and_preserves_tls_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeUrllibResponse:
+        status = 200
+        headers = {"Content-Type": "text/plain"}
+
+        def stream(self, amount: int, decode_content: bool):
+            del amount, decode_content
+            yield b"ok"
+
+        def release_conn(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeHttpsPool:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["pool"] = kwargs
+
+        def request(self, method: str, target: str, **kwargs: Any):
+            captured["request"] = (method, target, kwargs)
+            return FakeUrllibResponse()
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(web_capture, "HTTPSConnectionPool", FakeHttpsPool)
+
+    response = Urllib3PinnedWebTransport().request(
+        "https://public.example:8443/path?q=1",
+        connect_ip="93.184.216.34",
+        timeout=(1.0, 2.0),
+    )
+    tuple(response.iter_content(chunk_size=16))
+    response.close()
+
+    pool = captured["pool"]
+    assert pool["host"] == "93.184.216.34"
+    assert pool["port"] == 8443
+    assert pool["cert_reqs"] == "CERT_REQUIRED"
+    assert pool["assert_hostname"] == "public.example"
+    assert pool["server_hostname"] == "public.example"
+    method, target, request_kwargs = captured["request"]
+    assert (method, target) == ("GET", "/path?q=1")
+    assert request_kwargs["headers"]["Host"] == "public.example:8443"
+    assert captured["closed"] is True
+
+
+def test_upstream_content_enforces_character_and_encoded_byte_limits() -> None:
+    char_limited = capture_service(
+        max_page_bytes=100,
+        max_page_chars=4,
+    ).capture_content(
+        "https://example.test/characters",
+        "12345",
+        fallback_snippet="safe metadata remains",
+    )
+    byte_limited = capture_service(
+        max_page_bytes=4,
+        max_page_chars=10,
+    ).capture_content(
+        "https://example.test/bytes",
+        "你好",
+        fallback_snippet="safe metadata remains",
+    )
+
+    assert char_limited.notice_codes[0] == "web_capture_too_large"
+    assert byte_limited.notice_codes[0] == "web_capture_too_large"
+    assert char_limited.evidence_level == byte_limited.evidence_level == "metadata"
+
+
+def test_upstream_raw_content_rejects_private_source_url() -> None:
+    provider = WebSourceProvider(capture_service=capture_service())
+    collection = provider.collect_search_result(
+        {
+            "url": "http://127.0.0.1/private",
+            "title": "Untrusted",
+            "content": "Only this bounded search metadata may remain.",
+            "raw_content": "This provider body must not become paragraph evidence.",
+        },
+        provider_context(),
+    )
+
+    assert collection.collection_status == "partial"
+    assert collection.records[0]["evidence_level"] == "metadata"
+    assert collection.records[0]["content_origin"] == "search_metadata"
+    assert collection.notice_codes[0] == "web_capture_unsafe_url"
