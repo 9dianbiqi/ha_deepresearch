@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -28,7 +31,15 @@ from research.adapters import (
     GovernedHelloAgentsLLM,
     HelloAgentsSearchAdapter,
 )
-from research.artifacts import ArtifactStore, persist_research_artifacts
+from research.artifacts import (
+    ArtifactPayload,
+    ArtifactStore,
+    persist_research_artifacts,
+)
+from research.claim_verifier import (
+    StructuredFactualSupportVerifier,
+    StructuredSemanticSupportScorer,
+)
 from research.context import FollowupContext, ResearchContextAssembler
 from research.contracts import EventKind, ResearchCommand, ResearchEvent, RunStatus
 from research.evidence import (
@@ -39,7 +50,12 @@ from research.evidence import (
     render_github_artifacts,
     supplement_github_evidence,
 )
-from research.intelligence import ResearchIntelligenceBundle
+from research.intelligence import (
+    ArtifactManifestV2,
+    ClaimRecord,
+    EvidenceRecord,
+    ResearchIntelligenceBundle,
+)
 from research.legacy_sse import project_legacy_event as _project_legacy_event
 from research.operations import (
     GovernedOperations,
@@ -50,6 +66,13 @@ from research.pipeline import PreparedResearch, ResearchKernel
 from research.profiles import ResearchMode, built_in_profile_registry
 from research.providers.github import GitHubSourceProvider
 from research.providers.web import WebSourceProvider
+from research.quality import EvidenceGateBlockedError
+from research.report_document import (
+    ParagraphQualityAssessment,
+    StructuredSummaryDocument,
+    SummaryParagraph,
+    SummaryQualityAssessment,
+)
 from research.report_validation import validate_citations
 from research.session import (
     CancellationRequestedError,
@@ -59,10 +82,16 @@ from research.session import (
     RunSession,
 )
 from research.sources import (
+    SourceCollection,
     SourceProviderRegistry,
     SourceSearchResult,
 )
+from research.summary_quality import (
+    SummaryQualityGateV1,
+    SummaryQualityThresholds,
+)
 from research.telemetry import TelemetryHelloAgentsLLM, llm_telemetry_scope
+from research.web_capture import WebCaptureResult
 from services.github_research import (
     GitHubRepositoryContext,
     GitHubRepositoryTarget,
@@ -71,7 +100,7 @@ from services.github_research import (
 )
 from services.note_agent import NoteSubAgent
 from services.planner import PlanningService
-from services.reporter import ReportingService
+from services.reporter import ReportingService, StructuredReportGenerationError
 from services.search import (
     SEARCH_NOTICE_CODE,
     SEARCH_NOTICE_MESSAGE,
@@ -180,6 +209,7 @@ class _TaskWorkItem:
     note_content: str
     source_strategy: str | None
     repository: str | None
+    dimension: str
     github_markdown: str
     loop_offset: int
     config: Configuration
@@ -256,6 +286,7 @@ class DeepResearchAgent:
         source_provider_registry: SourceProviderRegistry | None = None,
         research_kernel: ResearchKernel | None = None,
         artifact_store: ArtifactStore | None = None,
+        summary_quality_gate: SummaryQualityGateV1 | None = None,
         operation_authorizer: Any | None = None,
         legacy_event_queue_capacity: int = 64,
     ) -> None:
@@ -285,6 +316,8 @@ class DeepResearchAgent:
             self.todo_agent: SimpleAgent | None = None
             self.report_agent: SimpleAgent | None = None
             self._summarizer_factory: Callable[[], SimpleAgent] | None = None
+            self._quality_semantic_agent: SimpleAgent | None = None
+            self._quality_factual_agent: SimpleAgent | None = None
         else:
             self.llm = self._init_llm()
             if self.config.llm_reporter_model_id:
@@ -310,6 +343,22 @@ class DeepResearchAgent:
                 name="任务总结专家",
                 system_prompt=task_summarizer_instructions.strip(),
                 role="summarizer",
+            )
+            self._quality_semantic_agent = self._create_role_agent(
+                name="Evidence semantic scorer",
+                system_prompt=(
+                    "Score whether the supplied evidence is semantically relevant to "
+                    "the supplied claim. Return strict JSON only."
+                ),
+                role="quality_semantic",
+            )
+            self._quality_factual_agent = self._create_role_agent(
+                name="Evidence factual verifier",
+                system_prompt=(
+                    "Verify a claim only against supplied evidence. Return strict JSON "
+                    "only and copy support spans exactly from evidence excerpts."
+                ),
+                role="quality_factual",
             )
 
         if planner is not None:
@@ -380,6 +429,7 @@ class DeepResearchAgent:
                 provider_registry=effective_registry,
             )
         self._artifact_store = artifact_store
+        self._summary_quality_gate = summary_quality_gate
 
     @property
     def last_session(self) -> RunSession | None:
@@ -631,6 +681,7 @@ class DeepResearchAgent:
         phase = session.checkpoint_phase
         if phase in {
             "evidence_completed",
+            "summary_quality_completed",
             "report_before_generation",
             "report_retry",
             "report_retry_completed",
@@ -675,6 +726,14 @@ class DeepResearchAgent:
         session.raise_if_run_controlled()
         operations = GovernedOperations(session, self._operation_authorizer)
         root_scope = OperationScope(operations=operations)
+        if self._structured_reporting_enabled(session):
+            session.persist_checkpoint("report_retry")
+            self._generate_report(
+                session,
+                operations=operations,
+                root_scope=root_scope,
+            )
+            return
         session.persist_checkpoint("report_retry")
         notes_context = self._read_all_task_notes(
             session.state,
@@ -717,18 +776,30 @@ class DeepResearchAgent:
         root_scope: OperationScope,
     ) -> None:
         """Generate only the report after research evidence is durable."""
-        session.persist_checkpoint("report_before_generation")
+        quality_already_completed = (
+            session.checkpoint_phase == "summary_quality_completed"
+        )
+        if not quality_already_completed:
+            session.persist_checkpoint("report_before_generation")
         notes_context = self._read_all_task_notes(
             session.state,
             operation_scope=root_scope,
         )
         session.raise_if_run_controlled()
-        report = _call_with_operation_scope(
-            self.reporting.generate_report,
-            session.state,
-            notes_context,
-            operation_scope=root_scope,
-        )
+        if self._structured_reporting_enabled(session):
+            report = self._generate_quality_gated_report(
+                session,
+                notes_context=notes_context,
+                operation_scope=root_scope,
+                quality_already_completed=quality_already_completed,
+            )
+        else:
+            report = _call_with_operation_scope(
+                self.reporting.generate_report,
+                session.state,
+                notes_context,
+                operation_scope=root_scope,
+            )
         report = self._canonicalize_github_report(session, report)
         session.raise_if_run_controlled()
         note_metadata = self._save_conclusion_note(
@@ -750,6 +821,645 @@ class DeepResearchAgent:
         session.set_report(report, note_id=note_id, note_path=note_path)
         self._refresh_github_artifacts(session, report)
         session.persist_checkpoint("report_generated")
+
+    def _structured_reporting_enabled(self, session: RunSession) -> bool:
+        """Return whether this run can use the gated structured boundary."""
+        if not callable(getattr(self.reporting, "generate_structured_document", None)):
+            return False
+        if not callable(getattr(self.reporting, "render_structured_document", None)):
+            return False
+        raw_bundle = session.state.research_intelligence
+        if not isinstance(raw_bundle, Mapping) or raw_bundle.get("schema_version") != 2:
+            return False
+        profile_id = session.state.research_profile_id
+        if profile_id == "web.evidence.v1":
+            return session.command.config.enable_evidence_web
+        return session.state.research_mode == ResearchMode.GITHUB.value
+
+    def _generate_quality_gated_report(
+        self,
+        session: RunSession,
+        *,
+        notes_context: dict[str, Any],
+        operation_scope: OperationScope,
+        quality_already_completed: bool,
+    ) -> str:
+        """Generate, verify, persist, and deterministically render one report."""
+        bundle = ResearchIntelligenceBundle.from_dict(
+            session.state.research_intelligence
+        )
+        if not bundle.evidence_frozen:
+            raise EvidenceGateBlockedError(
+                replace(
+                    bundle.coverage,
+                    allow_report=False,
+                    blockers=tuple(
+                        dict.fromkeys((*bundle.coverage.blockers, "evidence_not_frozen"))
+                    ),
+                )
+            )
+
+        document: StructuredSummaryDocument | None = None
+        assessment: SummaryQualityAssessment | None = None
+        if quality_already_completed:
+            document = StructuredSummaryDocument.from_dict(
+                session.state.structured_summary
+            )
+            assessment = SummaryQualityAssessment.from_dict(
+                session.state.quality_assessment
+            )
+            if not self._quality_binding_is_valid(
+                session,
+                bundle=bundle,
+                document=document,
+                assessment=assessment,
+            ):
+                raise EvidenceGateBlockedError(
+                    replace(
+                        bundle.coverage,
+                        allow_report=False,
+                        blockers=tuple(
+                            dict.fromkeys(
+                                (
+                                    *bundle.coverage.blockers,
+                                    "summary_quality_binding_invalid",
+                                )
+                            )
+                        ),
+                    )
+                )
+            if self._strict_summary_quality(session) and not assessment.passed:
+                raise EvidenceGateBlockedError(
+                    replace(
+                        bundle.coverage,
+                        allow_report=False,
+                        blockers=tuple(
+                            dict.fromkeys(
+                                (
+                                    *bundle.coverage.blockers,
+                                    "summary_quality_failed",
+                                )
+                            )
+                        ),
+                    )
+                )
+        else:
+            gate = self._summary_quality_gate_for_scope(operation_scope)
+            feedback: tuple[str, ...] = ()
+            for attempt in range(2):
+                try:
+                    with llm_telemetry_scope(
+                        session,
+                        role="structured_reporter",
+                        retry_count=attempt,
+                    ):
+                        generated = _call_with_operation_scope(
+                            self.reporting.generate_structured_document,
+                            session.state,
+                            notes_context,
+                            quality_feedback=feedback,
+                            operation_scope=operation_scope,
+                        )
+                    if not isinstance(generated, StructuredSummaryDocument):
+                        raise StructuredReportGenerationError(
+                            "Structured reporter returned an invalid document."
+                        )
+                    document = generated
+                except StructuredReportGenerationError:
+                    if attempt == 0:
+                        feedback = ("structured_generation_failed",)
+                        continue
+                    document = self._deterministic_summary_document(bundle)
+                assessment = gate.evaluate(document, bundle)
+                if assessment.passed:
+                    break
+                feedback = self._quality_feedback(assessment)
+
+            if document is None or assessment is None:  # pragma: no cover - loop invariant
+                raise RuntimeError("Structured quality generation did not produce output.")
+
+            if not assessment.passed:
+                document = self._align_verified_citations(document, assessment)
+                assessment = gate.evaluate(document, bundle)
+
+            if not assessment.passed and self._strict_summary_quality(session):
+                self._record_structured_quality(
+                    session,
+                    bundle=bundle,
+                    document=document,
+                    assessment=assessment,
+                )
+                session.persist_checkpoint("summary_quality_completed")
+                raise EvidenceGateBlockedError(
+                    replace(
+                        bundle.coverage,
+                        allow_report=False,
+                        blockers=tuple(
+                            dict.fromkeys(
+                                (
+                                    *bundle.coverage.blockers,
+                                    "summary_quality_failed",
+                                )
+                            )
+                        ),
+                    )
+                )
+            if not assessment.passed:
+                document, assessment = self._degrade_structured_document(
+                    document,
+                    assessment,
+                )
+
+            self._record_structured_quality(
+                session,
+                bundle=bundle,
+                document=document,
+                assessment=assessment,
+            )
+            session.persist_checkpoint("summary_quality_completed")
+
+        rendered = self.reporting.render_structured_document(
+            session.state,
+            document,
+            notes_context,
+        )
+        markdown = getattr(rendered, "markdown", None)
+        if not isinstance(markdown, str) or not markdown.strip():
+            raise StructuredReportGenerationError(
+                "Structured renderer returned no Markdown."
+            )
+        return markdown
+
+    def _summary_quality_gate_for_scope(
+        self,
+        operation_scope: OperationScope,
+    ) -> SummaryQualityGateV1:
+        """Build one run-scoped, cached production verifier boundary."""
+        if self._summary_quality_gate is not None:
+            return self._summary_quality_gate
+        run_config = operation_scope.operations.session.command.config
+        thresholds = SummaryQualityThresholds(
+            semantic=run_config.summary_semantic_threshold,
+            factual=run_config.summary_factual_threshold,
+            citation=run_config.summary_citation_threshold,
+            overall=run_config.summary_overall_threshold,
+        )
+        semantic_agent = self._quality_semantic_agent
+        factual_agent = self._quality_factual_agent
+        if semantic_agent is None or factual_agent is None:
+            return SummaryQualityGateV1(thresholds=thresholds)
+        semantic_cache: dict[str, str] = {}
+        factual_cache: dict[str, str] = {}
+
+        def cache_key(
+            claim: ClaimRecord,
+            evidence: tuple[EvidenceRecord, ...],
+        ) -> str:
+            return "|".join((claim.claim_id, *(item.evidence_id for item in evidence)))
+
+        def run_agent(agent: SimpleAgent, prompt: str, *, role: str) -> str:
+            quality_session = operation_scope.operations.session
+            try:
+                with llm_telemetry_scope(quality_session, role=role):
+                    response = agent.run(
+                        prompt,
+                        _research_operation_scope=operation_scope,
+                    )
+            finally:
+                agent.clear_history()
+            return response if isinstance(response, str) else ""
+
+        def semantic_invoker(
+            claim: ClaimRecord,
+            evidence: tuple[EvidenceRecord, ...],
+        ) -> str:
+            key = cache_key(claim, evidence)
+            if key not in semantic_cache:
+                semantic_cache[key] = run_agent(
+                    semantic_agent,
+                    self._semantic_quality_prompt(claim, evidence),
+                    role="quality_semantic",
+                )
+            return semantic_cache[key]
+
+        def factual_invoker(
+            claim: ClaimRecord,
+            evidence: tuple[EvidenceRecord, ...],
+        ) -> str:
+            key = cache_key(claim, evidence)
+            if key not in factual_cache:
+                factual_cache[key] = run_agent(
+                    factual_agent,
+                    self._factual_quality_prompt(claim, evidence),
+                    role="quality_factual",
+                )
+            return factual_cache[key]
+
+        model_name = self.config.resolved_model() or "configured-llm"
+        return SummaryQualityGateV1(
+            semantic_scorer=StructuredSemanticSupportScorer(
+                semantic_invoker,
+                name=model_name,
+                version="semantic-support-v1",
+            ),
+            factual_verifier=StructuredFactualSupportVerifier(
+                factual_invoker,
+                name=model_name,
+                version="factual-support-v1",
+                prompt_version="claim-evidence-v1",
+            ),
+            thresholds=thresholds,
+        )
+
+    @staticmethod
+    def _semantic_quality_prompt(
+        claim: ClaimRecord,
+        evidence: tuple[EvidenceRecord, ...],
+    ) -> str:
+        """Build a strict bounded semantic scorer prompt."""
+        payload = {
+            "claim": claim.statement,
+            "evidence": [
+                {"evidence_id": item.evidence_id, "excerpt": item.excerpt}
+                for item in evidence
+            ],
+        }
+        return (
+            "Return exactly one JSON object with only semantic_score (0.0 to 1.0). "
+            "Score whether the evidence discusses the same factual proposition.\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+
+    @staticmethod
+    def _factual_quality_prompt(
+        claim: ClaimRecord,
+        evidence: tuple[EvidenceRecord, ...],
+    ) -> str:
+        """Build a strict bounded factual verifier prompt."""
+        payload = {
+            "claim_id": claim.claim_id,
+            "claim": claim.statement,
+            "supporting_candidates": list(claim.evidence_ids),
+            "conflicting_candidates": list(claim.conflicting_evidence_ids),
+            "evidence": [
+                {"evidence_id": item.evidence_id, "excerpt": item.excerpt}
+                for item in evidence
+            ],
+        }
+        return (
+            "Return exactly one JSON object with only these fields: verdict, "
+            "factual_score, supporting_evidence_ids, conflicting_evidence_ids, "
+            "support_spans, reasons. verdict must be supported, partial, "
+            "unsupported, contradicted, or unverified. Every support_spans item "
+            "must contain only evidence_id and exact_text copied verbatim from its "
+            "excerpt. Never cite an ID outside its candidate list.\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+
+    @staticmethod
+    def _quality_feedback(
+        assessment: SummaryQualityAssessment,
+    ) -> tuple[str, ...]:
+        """Return bounded internal feedback for the single structured rewrite."""
+        feedback = [
+            blocker
+            for item in assessment.paragraph_assessments
+            for blocker in item.blockers
+        ]
+        feedback.extend(
+            f"{item.claim_id}:verified_support={','.join(item.supporting_evidence_ids)}"
+            for item in assessment.claim_assessments
+            if item.supporting_evidence_ids
+        )
+        return tuple(dict.fromkeys(feedback))[:32]
+
+    @staticmethod
+    def _align_verified_citations(
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> StructuredSummaryDocument:
+        """Replace model-selected citations with verifier-selected positive support."""
+        support_by_claim = {
+            item.claim_id: item.supporting_evidence_ids
+            for item in assessment.claim_assessments
+        }
+        paragraphs: list[SummaryParagraph] = []
+        for paragraph in document.paragraphs:
+            if paragraph.paragraph_type == "limitation":
+                paragraphs.append(paragraph)
+                continue
+            citations = tuple(
+                dict.fromkeys(
+                    evidence_id
+                    for claim_id in paragraph.claim_ids
+                    for evidence_id in support_by_claim.get(claim_id, ())
+                )
+            )
+            paragraphs.append(
+                SummaryParagraph(
+                    section_id=paragraph.section_id,
+                    paragraph_type=paragraph.paragraph_type,
+                    text=paragraph.text,
+                    claim_ids=paragraph.claim_ids,
+                    citation_ids=citations,
+                )
+            )
+        return StructuredSummaryDocument(
+            task_id=document.task_id,
+            paragraphs=tuple(paragraphs),
+            claim_ids=document.claim_ids,
+        )
+
+    @staticmethod
+    def _deterministic_summary_document(
+        bundle: ResearchIntelligenceBundle,
+    ) -> StructuredSummaryDocument:
+        """Create a safe fallback document from bounded atomic claims only."""
+        paragraphs = tuple(
+            SummaryParagraph(
+                section_id=claim.dimension,
+                paragraph_type="factual",
+                text=claim.statement,
+                claim_ids=(claim.claim_id,),
+                citation_ids=claim.evidence_ids,
+            )
+            for claim in bundle.claims[:12]
+            if claim.reportable and claim.evidence_ids
+        )
+        return StructuredSummaryDocument(
+            task_id="report",
+            paragraphs=paragraphs,
+            claim_ids=tuple(
+                claim_id
+                for paragraph in paragraphs
+                for claim_id in paragraph.claim_ids
+            ),
+        )
+
+    @staticmethod
+    def _degrade_structured_document(
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> tuple[StructuredSummaryDocument, SummaryQualityAssessment]:
+        """Remove blocked paragraphs and append one explicit limitation."""
+        assessment_by_id = {
+            item.paragraph_id: item for item in assessment.paragraph_assessments
+        }
+        kept = tuple(
+            paragraph
+            for paragraph in document.paragraphs
+            if not assessment_by_id.get(paragraph.paragraph_id)
+            or not assessment_by_id[paragraph.paragraph_id].blockers
+        )
+        limitation = SummaryParagraph(
+            section_id="limitations",
+            paragraph_type="limitation",
+            text=(
+                "Some factual paragraphs were omitted because their evidence did "
+                "not pass the configured semantic, factual, and citation gates."
+            ),
+        )
+        final_paragraphs = (*kept, limitation)
+        claim_ids = tuple(
+            dict.fromkeys(
+                claim_id
+                for paragraph in kept
+                for claim_id in paragraph.claim_ids
+            )
+        )
+        final_document = StructuredSummaryDocument(
+            task_id=document.task_id,
+            paragraphs=final_paragraphs,
+            claim_ids=claim_ids,
+        )
+        retained_assessments = tuple(
+            assessment_by_id[item.paragraph_id]
+            for item in kept
+            if item.paragraph_id in assessment_by_id
+        )
+        limitation_assessment = ParagraphQualityAssessment(
+            paragraph_id=limitation.paragraph_id,
+            semantic_score=0.0,
+            factual_score=0.0,
+            citation_score=0.0,
+            support_confidence=0.0,
+            level="unverified",
+            warnings=("quality_gate_degraded",),
+        )
+        claim_assessments = tuple(
+            item
+            for item in assessment.claim_assessments
+            if item.claim_id in claim_ids
+        )
+        overall_score = (
+            sum(item.support_confidence for item in retained_assessments)
+            / len(retained_assessments)
+            if retained_assessments
+            else 0.0
+        )
+        return (
+            final_document,
+            SummaryQualityAssessment(
+                passed=False,
+                overall_score=overall_score,
+                thresholds=assessment.thresholds,
+                paragraph_assessments=(
+                    *retained_assessments,
+                    limitation_assessment,
+                ),
+                claim_assessments=claim_assessments,
+                verifier=assessment.verifier,
+                verifier_version=assessment.verifier_version,
+                prompt_version=assessment.prompt_version,
+            ),
+        )
+
+    @staticmethod
+    def _strict_summary_quality(session: RunSession) -> bool:
+        """Use fail-closed reporting for GitHub and explicitly strict runs."""
+        return (
+            session.state.research_mode == ResearchMode.GITHUB.value
+            or session.command.permission_mode == "strict"
+        )
+
+    def _record_structured_quality(
+        self,
+        session: RunSession,
+        *,
+        bundle: ResearchIntelligenceBundle,
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> None:
+        """Persist quality output, binding hashes, and external JSON artifacts."""
+        document_payload = document.as_dict()
+        assessment_payload = assessment.as_dict()
+        document_hash = self._json_hash(document_payload)
+        evidence_hash = self._json_hash(
+            [item.as_dict() for item in bundle.evidence]
+        )
+        session.metrics["summary_quality_binding"] = {
+            "task_id": document.task_id,
+            "document_hash": document_hash,
+            "evidence_hash": evidence_hash,
+            "claims_hash": self._json_hash(
+                [item.as_dict() for item in bundle.claims]
+            ),
+            "assessment_hash": self._json_hash(assessment_payload),
+            "passed": assessment.passed,
+            "threshold_keys": sorted(assessment.thresholds),
+        }
+        descriptors = []
+        if self._artifact_store is not None:
+            payloads = (
+                ArtifactPayload(
+                    artifact_id="artifact_structured_summary_json",
+                    artifact_type="structured_summary",
+                    mime_type="application/json",
+                    title="Structured research summary",
+                    content=json.dumps(
+                        document_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    source_ids=tuple(item.source_id for item in bundle.sources),
+                ),
+                ArtifactPayload(
+                    artifact_id="artifact_quality_assessment_json",
+                    artifact_type="quality_assessment",
+                    mime_type="application/json",
+                    title="Summary quality assessment",
+                    content=json.dumps(
+                        assessment_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    source_ids=tuple(item.source_id for item in bundle.sources),
+                ),
+            )
+            descriptors = [
+                self._artifact_store.put(session.run_id, payload)
+                for payload in payloads
+            ]
+            merged = {
+                item.artifact_id: item
+                for item in (*bundle.artifact_manifest.artifacts, *descriptors)
+            }
+            bundle = replace(
+                bundle,
+                artifact_manifest=ArtifactManifestV2(
+                    artifacts=tuple(merged.values())
+                ),
+            )
+            session.replace_research_intelligence(bundle.as_dict())
+        session.record_summary_quality(document_payload, assessment_payload)
+        recorded = {
+            event.payload.get("artifact_id")
+            for event in session.events
+            if event.kind is EventKind.ARTIFACT_READY
+        }
+        for descriptor in descriptors:
+            if descriptor.artifact_id not in recorded:
+                session.record_artifact(descriptor.as_dict())
+                recorded.add(descriptor.artifact_id)
+
+    def _quality_binding_is_valid(
+        self,
+        session: RunSession,
+        *,
+        bundle: ResearchIntelligenceBundle,
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> bool:
+        """Fail closed when restored quality output is stale or inconsistent."""
+        expected_thresholds = {
+            "semantic_score": session.command.config.summary_semantic_threshold,
+            "factual_score": session.command.config.summary_factual_threshold,
+            "citation_score": session.command.config.summary_citation_threshold,
+            "overall_score": session.command.config.summary_overall_threshold,
+        }
+        if dict(assessment.thresholds) != expected_thresholds:
+            return False
+        paragraph_ids = {item.paragraph_id for item in document.paragraphs}
+        assessed_paragraph_ids = {
+            item.paragraph_id for item in assessment.paragraph_assessments
+        }
+        if paragraph_ids != assessed_paragraph_ids:
+            return False
+        if {item.claim_id for item in assessment.claim_assessments} != set(
+            document.claim_ids
+        ):
+            return False
+        claim_by_id = {item.claim_id: item for item in bundle.claims}
+        for item in assessment.claim_assessments:
+            claim = claim_by_id.get(item.claim_id)
+            if claim is None:
+                return False
+            if item.verdict == "unverified" and (
+                item.factual_score != 0.0 or item.support_confidence != 0.0
+            ):
+                return False
+            if item.verdict in {"supported", "partial"} and not item.supporting_evidence_ids:
+                return False
+            if item.verdict == "contradicted" and not item.conflicting_evidence_ids:
+                return False
+            if not set(item.supporting_evidence_ids).issubset(claim.evidence_ids):
+                return False
+            if not set(item.conflicting_evidence_ids).issubset(
+                claim.conflicting_evidence_ids
+            ):
+                return False
+        paragraph_by_id = {
+            item.paragraph_id: item for item in document.paragraphs
+        }
+        scorable = tuple(
+            item
+            for item in assessment.paragraph_assessments
+            if paragraph_by_id[item.paragraph_id].paragraph_type != "limitation"
+            and paragraph_by_id[item.paragraph_id].claim_ids
+        )
+        recomputed_overall = (
+            sum(item.support_confidence for item in scorable) / len(scorable)
+            if scorable
+            else 0.0
+        )
+        if not math.isclose(
+            assessment.overall_score,
+            recomputed_overall,
+            abs_tol=1e-9,
+        ):
+            return False
+        if assessment.passed and (
+            not scorable
+            or assessment.overall_score < expected_thresholds["overall_score"]
+            or any(item.blockers for item in assessment.paragraph_assessments)
+        ):
+            return False
+        binding = session.metrics.get("summary_quality_binding")
+        if not isinstance(binding, Mapping):
+            return False
+        return bool(
+            binding.get("task_id") == document.task_id
+            and binding.get("document_hash") == self._json_hash(document.as_dict())
+            and binding.get("evidence_hash")
+            == self._json_hash([item.as_dict() for item in bundle.evidence])
+            and binding.get("claims_hash")
+            == self._json_hash([item.as_dict() for item in bundle.claims])
+            and binding.get("assessment_hash")
+            == self._json_hash(assessment.as_dict())
+            and binding.get("passed") is assessment.passed
+            and binding.get("threshold_keys") == sorted(expected_thresholds)
+        )
+
+    @staticmethod
+    def _json_hash(value: object) -> str:
+        """Return one deterministic SHA-256 JSON binding."""
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _canonicalize_github_report(session: RunSession, report: str) -> str:
@@ -868,6 +1578,16 @@ class DeepResearchAgent:
     ) -> None:
         """Execute the workflow without storing run scope on the coordinator."""
         session.raise_if_run_controlled()
+        if (
+            session.command.research_profile_id == "web.evidence.v1"
+            and not session.command.config.enable_evidence_web
+        ):
+            session.state.research_profile_id = "web.default.v1"
+            session.metrics["evidence_web"] = {
+                "enabled": False,
+                "outcome": "compatibility_fallback",
+                "reason": "feature_disabled",
+            }
 
         planning_state = session.state
         checkpoint_phase = session.checkpoint_phase
@@ -987,11 +1707,22 @@ class DeepResearchAgent:
             research_kernel=self._research_kernel if prepared_research else None,
             prepared_research=prepared_research,
         )
-        self._execute_work_items(session, work_items)
+        search_results = self._execute_work_items(session, work_items)
         session.raise_if_run_controlled()
         if prepared_research is not None:
-            self._finalize_kernel_research(session, prepared_research)
+            self._finalize_kernel_research(
+                session,
+                prepared_research,
+                search_results=search_results,
+            )
             session.raise_if_run_controlled()
+        elif session.command.config.enable_summary_quality_shadow:
+            session.metrics["summary_quality_shadow"] = {
+                "enabled": True,
+                "blocking": False,
+                "outcome": "not_applicable",
+                "reason": "no_evidence_bundle",
+            }
         session.persist_checkpoint("evidence_completed")
         self._generate_report(
             session,
@@ -1013,6 +1744,10 @@ class DeepResearchAgent:
             (session.state.github_context or {}).get("markdown") or ""
         )
         items: list[_TaskWorkItem] = []
+        dimension_by_task = {
+            item.id: item.dimension
+            for item in (prepared_research.tasks if prepared_research else ())
+        }
         for index, task in enumerate(session.state.todo_items):
             session.raise_if_run_controlled()
             if task.status in {"completed", "failed", "skipped", "cancelled"}:
@@ -1044,6 +1779,7 @@ class DeepResearchAgent:
                     note_content=note_content,
                     source_strategy=task.source_strategy,
                     repository=task.repository,
+                    dimension=dimension_by_task.get(task.id, "overview"),
                     github_markdown=github_markdown,
                     loop_offset=index * 3,
                     config=session.command.config,
@@ -1059,10 +1795,11 @@ class DeepResearchAgent:
         self,
         session: RunSession,
         work_items: list[_TaskWorkItem],
-    ) -> None:
+    ) -> list[SourceSearchResult]:
         """Run detached workers with bounded submissions and coordinator-only merges."""
         if not work_items:
-            return
+            return []
+        search_results: list[SourceSearchResult] = []
         operations = work_items[0].operations
         max_workers = min(
             session.command.config.max_concurrent_tasks,
@@ -1110,6 +1847,7 @@ class DeepResearchAgent:
                         session,
                         message,
                         operations=operations,
+                        search_results=search_results,
                     )
                     if message.kind in {
                         _WorkerMessageKind.COMPLETED,
@@ -1157,6 +1895,7 @@ class DeepResearchAgent:
                     session,
                     message,
                     operations=operations,
+                    search_results=search_results,
                 )
             session.raise_if_run_controlled()
         except _OPERATION_CONTROL_ERRORS:
@@ -1166,6 +1905,7 @@ class DeepResearchAgent:
         finally:
             stop_event.set()
             executor.shutdown(wait=True, cancel_futures=True)
+        return search_results
 
     def _run_task_worker(
         self,
@@ -1333,6 +2073,8 @@ class DeepResearchAgent:
                 context = (
                     f"{item.github_markdown}\n\n## Web Search Context\n{context}"
                 )
+            raw_results = search_result.get("results")
+            typed_results = raw_results if isinstance(raw_results, list) else []
             self._put_worker_message(
                 result_queue,
                 _WorkerMessage(
@@ -1344,6 +2086,28 @@ class DeepResearchAgent:
                         "backend": backend,
                         "notices": safe_notices,
                         "notice_codes": safe_notice_codes,
+                        "_source_search_result": SourceSearchResult(
+                            provider_id=(
+                                typed_search.provider_id
+                                if item.research_kernel is not None
+                                and item.prepared_research is not None
+                                else "web"
+                            ),
+                            results=tuple(
+                                {
+                                    **dict(result),
+                                    "dimension": item.dimension,
+                                }
+                                for result in typed_results
+                                if isinstance(result, Mapping)
+                            ),
+                            answer=(
+                                answer_text if isinstance(answer_text, str) else None
+                            ),
+                            backend=(backend if isinstance(backend, str) else "none"),
+                            notices=tuple(safe_notices),
+                            notice_codes=tuple(safe_notice_codes),
+                        ),
                     },
                 ),
                 cancellation,
@@ -1448,12 +2212,16 @@ class DeepResearchAgent:
         message: _WorkerMessage,
         *,
         operations: GovernedOperations,
+        search_results: list[SourceSearchResult] | None = None,
     ) -> None:
         """Apply one worker result through canonical transitions on this thread."""
         session.raise_if_run_controlled()
         payload = dict(message.payload)
         if message.kind is _WorkerMessageKind.SOURCES:
             context = payload.pop("context", None)
+            typed_search = payload.pop("_source_search_result", None)
+            if isinstance(typed_search, SourceSearchResult) and search_results is not None:
+                search_results.append(typed_search)
             session.record_sources(
                 message.task_id,
                 context=context if isinstance(context, str) else None,
@@ -1569,8 +2337,6 @@ class DeepResearchAgent:
     def _should_use_research_kernel(self, session: RunSession) -> bool:
         """Resolve the explicit-mode-first boundary for the shared kernel."""
         command = session.command
-        if command.research_mode is not None:
-            return command.research_mode is not ResearchMode.WEB
         if command.research_profile_id is not None:
             try:
                 profile = self._research_kernel.profile_registry.get(
@@ -1578,7 +2344,13 @@ class DeepResearchAgent:
                 )
             except KeyError:
                 return True
+            if profile.profile_id == "web.evidence.v1":
+                return command.config.enable_evidence_web
             return profile.mode is not ResearchMode.WEB
+        if command.research_mode is not None:
+            if command.research_mode is ResearchMode.WEB:
+                return command.config.enable_evidence_web
+            return True
         if not command.config.enable_github_research:
             return False
         return bool(parse_github_repositories(command.topic))
@@ -1599,6 +2371,8 @@ class DeepResearchAgent:
             mode = ResearchMode.GITHUB
         if profile_id is None and mode is ResearchMode.GITHUB:
             profile_id = "github.repository.v1"
+        if profile_id is None and mode is ResearchMode.WEB:
+            profile_id = "web.evidence.v1"
         return self._research_kernel.prepare(
             command.topic,
             mode=mode,
@@ -1620,20 +2394,29 @@ class DeepResearchAgent:
         serialized = self._serialize_kernel_contexts(prepared)
         primary = serialized[0]
         source_context = dict(prepared.source_context)
-        source_context["repositories"] = serialized
         source_context["target"] = dict(primary.get("target") or {})
-        source_context["markdown"] = "\n\n".join(
-            str(item.get("markdown") or "")
-            for item in serialized
-            if item.get("markdown")
-        )
-        repository_event = self._kernel_repository_event(primary)
-        session.record_repository(
-            github_context=source_context,
-            repository=repository_event["repository"],
-            notices=repository_event["notices"],
-            notice_codes=repository_event["notice_codes"],
-        )
+        if prepared.profile.mode is ResearchMode.GITHUB:
+            source_context["repositories"] = serialized
+            source_context["markdown"] = "\n\n".join(
+                str(item.get("markdown") or "")
+                for item in serialized
+                if item.get("markdown")
+            )
+            repository_event = self._kernel_repository_event(primary)
+            session.record_repository(
+                github_context=source_context,
+                repository=repository_event["repository"],
+                notices=repository_event["notices"],
+                notice_codes=repository_event["notice_codes"],
+            )
+        else:
+            session.record_source_context(
+                source_context,
+                provider_ids=(prepared.provider.provider_id,),
+                source_count=len(prepared.targets),
+                research_mode=prepared.profile.mode,
+                profile_id=prepared.profile.profile_id,
+            )
         baseline = self._research_kernel.finalize(prepared)
         session.replace_research_intelligence(baseline.as_dict())
         legacy_bundle = self._legacy_bundle_for_kernel(prepared)
@@ -1644,28 +2427,102 @@ class DeepResearchAgent:
         self,
         session: RunSession,
         prepared: PreparedResearch,
+        *,
+        search_results: Sequence[SourceSearchResult] = (),
     ) -> None:
         """Finalize provider evidence after workers and emit the canonical events."""
-        task_results: list[str] = []
+        task_results: list[object] = []
+        legacy_task_sources: list[str] = []
+        dimension_by_task = {item.id: item.dimension for item in prepared.tasks}
         for task in session.state.todo_items:
             if task.summary:
-                task_results.append(task.summary)
+                legacy_task_sources.append(task.summary)
+                task_results.append(
+                    {
+                        "summary": task.summary,
+                        "dimension": dimension_by_task.get(task.id, "overview"),
+                    }
+                )
             if task.sources_summary:
-                task_results.append(task.sources_summary)
+                legacy_task_sources.append(task.sources_summary)
+        captured_collections: tuple[SourceCollection, ...] = ()
+        if prepared.profile.profile_id == "web.evidence.v1":
+            captured_collections = self._research_kernel.collect_search_evidence(
+                prepared,
+                search_results,
+            )
+        snapshot_descriptors = self._persist_web_snapshots(
+            session,
+            captured_collections,
+        )
         bundle = self._research_kernel.finalize(
             prepared,
             task_results=task_results,
+            collections=captured_collections,
         )
+        if snapshot_descriptors:
+            bundle = replace(
+                bundle,
+                artifact_manifest=ArtifactManifestV2(
+                    artifacts=tuple(
+                        {
+                            item.artifact_id: item
+                            for item in (
+                                *bundle.artifact_manifest.artifacts,
+                                *snapshot_descriptors,
+                            )
+                        }.values()
+                    )
+                ),
+            )
         session.record_research_intelligence(
             bundle.as_dict(),
             provider_ids=(prepared.provider.provider_id,),
         )
         legacy_bundle = self._legacy_bundle_for_kernel(
             prepared,
-            task_sources=tuple(task_results),
+            task_sources=tuple(legacy_task_sources),
         )
         if legacy_bundle is not None:
             session.replace_legacy_github_intelligence(legacy_bundle.as_dict())
+
+    def _persist_web_snapshots(
+        self,
+        session: RunSession,
+        collections: Sequence[SourceCollection],
+    ) -> tuple[Any, ...]:
+        """Write captured Web snapshot bodies and emit descriptor-only events."""
+        if self._artifact_store is None:
+            return ()
+        descriptors = []
+        recorded = {
+            event.payload.get("artifact_id")
+            for event in session.events
+            if event.kind is EventKind.ARTIFACT_READY
+        }
+        for collection in collections:
+            capture = collection.provider_payload
+            if not isinstance(capture, WebCaptureResult) or capture.snapshot is None:
+                continue
+            snapshot = capture.snapshot
+            artifact_id = f"artifact_web_snapshot_{snapshot.content_hash[:24]}"
+            descriptor = self._artifact_store.put(
+                session.run_id,
+                ArtifactPayload(
+                    artifact_id=artifact_id,
+                    artifact_type="web_page_snapshot",
+                    mime_type=snapshot.mime_type,
+                    title=snapshot.page_title,
+                    description="Normalized captured Web page.",
+                    content=snapshot.content,
+                    source_ids=(snapshot.source_id,),
+                ),
+            )
+            descriptors.append(descriptor)
+            if descriptor.artifact_id not in recorded:
+                session.record_artifact(descriptor.as_dict())
+                recorded.add(descriptor.artifact_id)
+        return tuple(descriptors)
 
     @staticmethod
     def _serialize_kernel_contexts(

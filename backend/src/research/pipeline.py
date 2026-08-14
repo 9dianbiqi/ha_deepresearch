@@ -50,6 +50,8 @@ from .sources import (
 )
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
+_CLAIM_SPLIT_RE = re.compile(r"(?<=[.!?\u3002\uff01\uff1f])\s+|[\r\n]+")
+_MARKDOWN_PREFIX_RE = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")
 
 
 class _NeverCancelled:
@@ -249,6 +251,33 @@ class ResearchKernel:
             bundle = replace(bundle, evidence_frozen=True)
         return bundle
 
+    def collect_search_evidence(
+        self,
+        prepared: PreparedResearch,
+        search_results: Sequence[SourceSearchResult],
+    ) -> tuple[SourceCollection, ...]:
+        """Capture search results through the Web provider without persisting bodies."""
+        if not isinstance(prepared, PreparedResearch):
+            raise TypeError("Search evidence collection requires PreparedResearch.")
+        try:
+            provider = self.provider_registry.get("web")
+        except KeyError:
+            return ()
+        if not isinstance(provider, WebSourceProvider):
+            return ()
+        collections: list[SourceCollection] = []
+        for search in search_results:
+            for result in search.results:
+                dimension = _text(result.get("dimension"), "overview")
+                collections.append(
+                    provider.collect_search_result(
+                        result,
+                        prepared.provider_context,
+                        dimension=dimension,
+                    )
+                )
+        return tuple(collections)
+
     def search(
         self,
         prepared: PreparedResearch,
@@ -295,18 +324,22 @@ class ResearchKernel:
     @staticmethod
     def _split_task_results(
         task_results: Sequence[object],
-    ) -> tuple[list[SourceCollection], list[SourceSearchResult], list[str]]:
+    ) -> tuple[
+        list[SourceCollection],
+        list[SourceSearchResult],
+        list[tuple[str, str]],
+    ]:
         """Separate provider collections, search results, and legacy text summaries."""
         collections: list[SourceCollection] = []
         search_results: list[SourceSearchResult] = []
-        text_results: list[str] = []
+        text_results: list[tuple[str, str]] = []
         for result in task_results:
             if isinstance(result, SourceCollection):
                 collections.append(result)
             elif isinstance(result, SourceSearchResult):
                 search_results.append(result)
             elif isinstance(result, str) and result.strip():
-                text_results.append(result.strip())
+                text_results.append(("overview", result.strip()))
             elif isinstance(result, Mapping):
                 raw_results = result.get("results")
                 if isinstance(raw_results, (list, tuple)):
@@ -321,7 +354,12 @@ class ResearchKernel:
                         )
                     )
                 elif isinstance(result.get("summary"), str):
-                    text_results.append(str(result["summary"]))
+                    text_results.append(
+                        (
+                            _text(result.get("dimension"), "overview"),
+                            str(result["summary"]).strip(),
+                        )
+                    )
         return collections, search_results, text_results
 
     def _build_bundle(
@@ -330,7 +368,7 @@ class ResearchKernel:
         *,
         collections: Sequence[SourceCollection],
         search_results: Sequence[SourceSearchResult],
-        task_text: Sequence[str],
+        task_text: Sequence[tuple[str, str]],
         retry_count: int,
     ) -> ResearchIntelligenceBundle:
         """Build a referentially complete v2 bundle from bounded provider data."""
@@ -424,7 +462,7 @@ class ResearchKernel:
                     )
                 )
                 dimension_by_evidence[evidence_id] = dimension
-        for text_result in task_text:
+        for _dimension, text_result in task_text:
             urls = _URL_RE.findall(text_result)
             for index, url in enumerate(urls[: prepared.profile.retrieval_budget.max_evidence]):
                 source_id = url.rstrip(".,;)")
@@ -468,7 +506,41 @@ class ResearchKernel:
             if evidence_id in {item.evidence_id for item in evidence}
         }
         claims: list[ClaimRecord] = []
+        for dimension, text_result in task_text:
+            dimension_evidence = tuple(
+                item
+                for item in evidence
+                if dimension_by_evidence.get(item.evidence_id) == dimension
+            )
+            if not dimension_evidence:
+                continue
+            for statement in self._atomic_claim_statements(text_result):
+                claim_id = stable_claim_id(
+                    profile_id=prepared.profile.profile_id,
+                    dimension=dimension,
+                    statement=statement,
+                )
+                if any(item.claim_id == claim_id for item in claims):
+                    continue
+                claims.append(
+                    ClaimRecord(
+                        claim_id=claim_id,
+                        dimension=dimension,
+                        statement=statement,
+                        confidence="unverified",
+                        evidence_ids=self._candidate_evidence_ids(
+                            statement,
+                            dimension_evidence,
+                        ),
+                    )
+                )
+                if len(claims) >= 24:
+                    break
+            if len(claims) >= 24:
+                break
         for profile_dimension in prepared.profile.dimensions:
+            if any(item.dimension == profile_dimension.id for item in claims):
+                continue
             evidence_ids = tuple(
                 item.evidence_id
                 for item in evidence
@@ -530,6 +602,50 @@ class ResearchKernel:
             report_spec=report_spec,
             evidence_frozen=False,
         )
+
+    @staticmethod
+    def _atomic_claim_statements(text: str) -> tuple[str, ...]:
+        """Extract a bounded set of factual candidate sentences from one task summary."""
+        statements: list[str] = []
+        for raw_part in _CLAIM_SPLIT_RE.split(text):
+            normalized = _MARKDOWN_PREFIX_RE.sub("", raw_part).strip()
+            normalized = " ".join(normalized.split())
+            if len(normalized) < 20:
+                continue
+            if len(normalized) > 600:
+                normalized = normalized[:600].rstrip()
+            if normalized in statements:
+                continue
+            statements.append(normalized)
+            if len(statements) >= 3:
+                break
+        if statements:
+            return tuple(statements)
+        fallback = " ".join(text.split()).strip()
+        return (fallback[:600],) if len(fallback) >= 20 else ()
+
+    @staticmethod
+    def _candidate_evidence_ids(
+        statement: str,
+        evidence: Sequence[EvidenceRecord],
+        *,
+        limit: int = 8,
+    ) -> tuple[str, ...]:
+        """Rank a bounded candidate set without claiming factual support."""
+        claim_terms = set(statement.casefold()) - set(" \t\r\n,.;:!?，。；：！？")
+
+        def rank(item: EvidenceRecord) -> tuple[float, int, str]:
+            evidence_terms = set(item.excerpt.casefold())
+            overlap = (
+                len(claim_terms & evidence_terms) / len(claim_terms)
+                if claim_terms
+                else 0.0
+            )
+            level = 1 if item.evidence_level == "full_text" else 0
+            return (overlap, level, item.evidence_id)
+
+        ranked = sorted(evidence, key=rank, reverse=True)
+        return tuple(item.evidence_id for item in ranked[:limit])
 
     @staticmethod
     def _locator(record: Mapping[str, Any], *, url: str) -> EvidenceLocator:

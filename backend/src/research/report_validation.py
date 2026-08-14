@@ -251,6 +251,13 @@ def validate_structured_citations(
             reasons.append("factual_claim_missing")
         if citations_required and not paragraph.citation_ids:
             reasons.append("paragraph_citation_missing")
+        if any(
+            not set(paragraph.citation_ids).intersection(
+                (*claim.evidence_ids, *claim.conflicting_evidence_ids)
+            )
+            for claim in known_claims
+        ):
+            reasons.append("claim_citation_missing")
         if unknown_claims:
             reasons.append("unknown_claim_id")
         if unknown_evidence:

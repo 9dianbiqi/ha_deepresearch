@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,21 @@ from .models import HarnessRunRecord, RecorderConfig, RunContext
 def _optional_text(value: object) -> str | None:
     """Return an optional text field from a stored legacy task."""
     return value if isinstance(value, str) else None
+
+
+def _stored_json(value: object) -> Any:
+    """Recursively detach persisted or immutable JSON containers."""
+    if isinstance(value, Mapping):
+        return {str(key): _stored_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_stored_json(item) for item in value]
+    return value
+
+
+def _stored_mapping(value: object) -> dict[str, Any]:
+    """Detach one persisted or immutable mapping into the legacy output view."""
+    detached = _stored_json(value)
+    return detached if isinstance(detached, dict) else {}
 
 
 def _wire_mapping(wire: dict[str, Any], field_name: str) -> dict[str, Any]:
@@ -92,15 +108,33 @@ def _stored_output(raw_output: dict[str, Any]) -> SummaryStateOutput:
                     repository=_optional_text(raw_item.get("repository")),
                 )
             )
+    raw_mode = raw_output.get("research_mode")
+    raw_profile = raw_output.get("research_profile_id")
+    raw_source_context = raw_output.get("source_context")
+    raw_research_intelligence = raw_output.get("research_intelligence")
     raw_github_intelligence = raw_output.get("github_intelligence")
+    raw_structured_summary = raw_output.get("structured_summary")
+    raw_quality_assessment = raw_output.get("quality_assessment")
     return SummaryStateOutput(
         running_summary=_optional_text(raw_output.get("running_summary")),
         report_markdown=_optional_text(raw_output.get("report_markdown")),
         todo_items=items,
+        research_mode=raw_mode if isinstance(raw_mode, str) else None,
+        research_profile_id=raw_profile if isinstance(raw_profile, str) else None,
+        source_context=(
+            _stored_mapping(raw_source_context)
+        ),
+        research_intelligence=(
+            _stored_mapping(raw_research_intelligence)
+        ),
         github_intelligence=(
-            dict(raw_github_intelligence)
-            if isinstance(raw_github_intelligence, dict)
-            else {}
+            _stored_mapping(raw_github_intelligence)
+        ),
+        structured_summary=(
+            _stored_mapping(raw_structured_summary)
+        ),
+        quality_assessment=(
+            _stored_mapping(raw_quality_assessment)
         ),
     )
 

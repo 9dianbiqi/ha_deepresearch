@@ -474,6 +474,44 @@ def _web_profile() -> ResearchProfile:
     )
 
 
+def _web_evidence_profile() -> ResearchProfile:
+    """Build the explicit evidence-first Web research profile."""
+    return ResearchProfile(
+        profile_id="web.evidence.v1",
+        version=1,
+        mode=ResearchMode.WEB,
+        dimensions=(ResearchDimension(id="overview", title="Evidence-backed overview"),),
+        task_templates=(),
+        source_priority=("web",),
+        retrieval_budget=RetrievalBudget(
+            max_requests=60,
+            max_results=100,
+            max_tasks=8,
+            max_evidence=120,
+            max_enrich_passes=1,
+            max_excerpt_chars=1200,
+        ),
+        coverage_policy=CoveragePolicy(
+            required_dimensions=("overview",),
+            min_coverage_score=1.0,
+            min_evidence_per_dimension=1,
+            min_independent_sources=1,
+        ),
+        citation_policy=CitationPolicy(
+            require_evidence_ids=True,
+            allow_external_urls=False,
+            require_locator=True,
+        ),
+        report_sections=(
+            ReportSectionSpec(
+                id="overview",
+                title="Evidence-backed findings",
+                dimension="overview",
+            ),
+        ),
+    )
+
+
 def _paper_profile() -> ResearchProfile:
     """Build the contract-only profile reserved for the future Paper Provider."""
     return ResearchProfile(
@@ -508,7 +546,9 @@ def _paper_profile() -> ResearchProfile:
 
 def built_in_profile_registry() -> ResearchProfileRegistry:
     """Return a fresh registry containing only approved built-in profiles."""
-    return ResearchProfileRegistry((_web_profile(), _github_profile(), _paper_profile()))
+    return ResearchProfileRegistry(
+        (_web_profile(), _web_evidence_profile(), _github_profile(), _paper_profile())
+    )
 
 
 __all__ = [

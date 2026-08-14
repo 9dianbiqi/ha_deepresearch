@@ -20,6 +20,12 @@ SAFE_CONFIGURATION_FIELDS = (
     "enable_notes",
     "enable_quality_gate",
     "enable_github_research",
+    "enable_evidence_web",
+    "enable_summary_quality_shadow",
+    "summary_semantic_threshold",
+    "summary_factual_threshold",
+    "summary_citation_threshold",
+    "summary_overall_threshold",
     "run_timeout_seconds",
     "max_concurrent_runs",
     "retention_days",
@@ -170,6 +176,40 @@ class Configuration(BaseModel):
         default=True,
         title="Enable GitHub Research",
         description="Automatically use GitHub API context for repository topics",
+    )
+    enable_evidence_web: bool = Field(
+        default=False,
+        title="Enable Evidence Web",
+        description="Use the evidence-first Web profile for explicit Web mode requests",
+    )
+    enable_summary_quality_shadow: bool = Field(
+        default=True,
+        title="Enable Summary Quality Shadow",
+        description="Evaluate evidence quality without blocking compatibility Web reports",
+    )
+    summary_semantic_threshold: float = Field(
+        default=0.72,
+        ge=0.0,
+        le=1.0,
+        title="Summary Semantic Threshold",
+    )
+    summary_factual_threshold: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        title="Summary Factual Threshold",
+    )
+    summary_citation_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        title="Summary Citation Threshold",
+    )
+    summary_overall_threshold: float = Field(
+        default=0.78,
+        ge=0.0,
+        le=1.0,
+        title="Summary Overall Threshold",
     )
     github_token: str | None = Field(
         default=None,

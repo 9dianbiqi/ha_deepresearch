@@ -380,6 +380,30 @@ class LegacySseProjector:
                     "stream_token": _optional_text(payload.get("stream_token")),
                 }
             )
+        elif event.kind is EventKind.SUMMARY_QUALITY_UPDATE:
+            raw_score = payload.get("overall_score")
+            projected.update(
+                {
+                    "type": "summary_quality_update",
+                    "overall_score": (
+                        float(raw_score)
+                        if isinstance(raw_score, (int, float))
+                        and not isinstance(raw_score, bool)
+                        else 0.0
+                    ),
+                    "passed": bool(payload.get("passed", False)),
+                    "paragraph_count": _optional_int(
+                        payload.get("paragraph_count")
+                    )
+                    or 0,
+                    "claim_count": _optional_int(payload.get("claim_count")) or 0,
+                    "blocked_paragraph_count": _optional_int(
+                        payload.get("blocked_paragraph_count")
+                    )
+                    or 0,
+                    "blocker_codes": _text_list(payload.get("blocker_codes")),
+                }
+            )
         elif event.kind is EventKind.TASK_RETRY_SCHEDULED:
             projected.update(
                 {

@@ -310,6 +310,20 @@ class SummaryQualityGateV1:
             citation_scores.append(score)
             warnings.extend(f"{claim.claim_id}:{item}" for item in reasons)
             verification = verification_by_claim.get(claim.claim_id)
+            if verification is not None:
+                supporting_ids = set(verification.supporting_evidence_ids)
+                conflicting_ids = set(verification.conflicting_evidence_ids)
+                if not supporting_ids.intersection(citations):
+                    blockers.append(
+                        f"claim_missing_verified_support:{claim.claim_id}"
+                    )
+                for evidence_id in citations:
+                    if evidence_id in conflicting_ids:
+                        blockers.append(
+                            f"conflicting_citation_used_as_support:{evidence_id}"
+                        )
+                    elif evidence_id not in supporting_ids:
+                        blockers.append(f"citation_not_verified:{evidence_id}")
             if (
                 claim.claim_id in core_claim_ids
                 and verification is not None
