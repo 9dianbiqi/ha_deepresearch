@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 
 import pytest
 
@@ -311,6 +312,53 @@ def test_single_full_text_source_is_capped_at_point_seven_five() -> None:
 
     assert result.claim_assessments[0].support_confidence == pytest.approx(0.75)
     assert result.passed is False
+
+
+def test_commit_pinned_github_primary_evidence_can_clear_default_gate() -> None:
+    source = SourceReference(
+        provider_id="github",
+        source_kind="repository",
+        source_id="owner/repository",
+        canonical_url="https://github.com/owner/repository",
+        resolved_version="a" * 40,
+        content_hash="repository-snapshot",
+    )
+    evidence = tuple(
+        EvidenceRecord(
+            evidence_id=f"ev-{index}",
+            source=source,
+            evidence_type="source_code",
+            evidence_level="full_text",
+            title=f"Source file {index}",
+            excerpt=f"Exact supporting sentence {index}.",
+            locator=EvidenceLocator(
+                locator_type="line_range",
+                url=(
+                    "https://github.com/owner/repository/blob/"
+                    f"{'a' * 40}/src/file-{index}.py#L1-L2"
+                ),
+                file_path=f"src/file-{index}.py",
+                line_start=1,
+                line_end=2,
+            ),
+        )
+        for index in (1, 2)
+    )
+    document, web_bundle = _case(evidence=evidence)
+    bundle = replace(
+        web_bundle,
+        mode=ResearchMode.GITHUB,
+        profile_id="github.repository.v1",
+    )
+
+    result = _gate().evaluate(document, bundle)
+
+    assert result.passed is True
+    assert result.overall_score == pytest.approx(0.79)
+    assert (
+        "confidence_cap:single_repository_primary"
+        in result.claim_assessments[0].reasons
+    )
 
 
 def test_different_source_ids_with_same_canonical_url_are_not_independent() -> None:

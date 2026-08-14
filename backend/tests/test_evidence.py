@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
+from agent import DeepResearchAgent
+from config import Configuration
+from models import ResearchState
+from research.artifacts import FileArtifactStore
+from research.claim_verifier import FactualVerification, SupportSpan
+from research.compatibility import GitHubEvidenceV1Adapter
+from research.contracts import ResearchCommand
 from research.evidence import (
     build_github_evidence_bundle,
     canonicalize_github_report,
@@ -12,6 +20,9 @@ from research.evidence import (
     render_github_artifacts,
     supplement_github_evidence,
 )
+from research.report_document import StructuredSummaryDocument, SummaryParagraph
+from research.session import RunSession
+from research.summary_quality import SummaryQualityGateV1
 from services.github_research import GitHubRepositoryTarget
 
 
@@ -122,6 +133,112 @@ def test_artifact_manifest_round_trips_and_supports_comparison() -> None:
     assert restored is not None
     assert len(restored.artifacts) == 5
     assert restored.artifacts[0].checksum == rendered.artifacts[0].checksum
+
+
+def test_every_mapped_github_artifact_descriptor_has_external_body(tmp_path) -> None:
+    """The v2 manifest must never advertise an inline v1 artifact that was not stored."""
+    rendered = render_github_artifacts(
+        build_github_evidence_bundle([make_context()]),
+        report_markdown="# Repository report",
+    )
+    generic = GitHubEvidenceV1Adapter.to_v2(rendered)
+    store = FileArtifactStore(tmp_path)
+    config = Configuration.from_env(overrides={"enable_notes": False})
+    command = ResearchCommand(topic="owner/repo", config=config)
+    session = RunSession(
+        command=command,
+        state=ResearchState(research_topic=command.topic),
+    )
+    session.start()
+    agent = DeepResearchAgent(
+        config=config,
+        planner=object(),
+        summarizer=object(),
+        reporting=object(),
+        note_agent=None,
+        github_adapter=None,
+        artifact_store=store,
+    )
+
+    persisted = agent._persist_legacy_github_artifacts(
+        session,
+        bundle=generic,
+        legacy_bundle=rendered,
+    )
+
+    assert len(persisted.artifact_manifest.artifacts) == len(rendered.artifacts)
+    for descriptor in persisted.artifact_manifest.artifacts:
+        body = store.get(session.run_id, descriptor.artifact_id)
+        assert body
+        assert len(body) == descriptor.size_bytes
+        assert hashlib.sha256(body).hexdigest() == descriptor.checksum
+
+
+def test_real_single_repository_primary_claim_can_pass_default_quality_gate() -> None:
+    """A real adapter bundle can retain precise code findings after quality gating."""
+    generic = GitHubEvidenceV1Adapter.to_v2(
+        freeze_github_evidence(build_github_evidence_bundle([make_context()]))
+    )
+    claim = next(item for item in generic.claims if item.dimension == "architecture")
+    evidence_by_id = {item.evidence_id: item for item in generic.evidence}
+    selected = next(
+        evidence_by_id[item]
+        for item in claim.evidence_ids
+        if evidence_by_id[item].evidence_level == "full_text"
+        and evidence_by_id[item].locator.line_start is not None
+    )
+
+    class SemanticScorer:
+        name = "test-semantic"
+        version = "1"
+
+        @staticmethod
+        def score(claim, evidence) -> float:
+            del claim, evidence
+            return 1.0
+
+    class PrimaryEvidenceVerifier:
+        name = "test-factual"
+        version = "1"
+        prompt_version = "1"
+
+        @staticmethod
+        def verify(claim, evidence) -> FactualVerification:
+            del claim
+            record = next(item for item in evidence if item.evidence_id == selected.evidence_id)
+            return FactualVerification(
+                verdict="supported",
+                factual_score=1.0,
+                supporting_evidence_ids=(record.evidence_id,),
+                support_spans=(
+                    SupportSpan(
+                        evidence_id=record.evidence_id,
+                        exact_text=record.excerpt,
+                    ),
+                ),
+            )
+
+    document = StructuredSummaryDocument(
+        task_id="report",
+        paragraphs=(
+            SummaryParagraph(
+                section_id="architecture",
+                paragraph_type="factual",
+                text=claim.statement,
+                claim_ids=(claim.claim_id,),
+                citation_ids=(selected.evidence_id,),
+            ),
+        ),
+        claim_ids=(claim.claim_id,),
+    )
+    assessment = SummaryQualityGateV1(
+        semantic_scorer=SemanticScorer(),
+        factual_verifier=PrimaryEvidenceVerifier(),
+    ).evaluate(document, generic)
+
+    assert assessment.passed is True
+    assert assessment.overall_score == 0.79
+    assert assessment.paragraph_assessments[0].blockers == ()
 
 
 def test_report_urls_and_citations_are_derived_from_evidence() -> None:

@@ -127,6 +127,14 @@
               <span>自动参考相关历史（本次可关闭）</span>
             </label>
 
+            <label class="memory-toggle evidence-mode-toggle">
+              <input v-model="form.evidenceResearch" type="checkbox" />
+              <span>
+                深度证据研究
+                <small>生成段落级引用、置信度和证据视图；后端未开启时自动使用普通研究。</small>
+              </span>
+            </label>
+
             <button
               v-if="loading"
               class="plain-button full-button"
@@ -805,6 +813,7 @@ const form = reactive({
   followupTopic: "",
   searchApi: "",
   useHistoryMemory: true,
+  evidenceResearch: false,
 });
 
 const loading = ref(false);
@@ -1343,6 +1352,8 @@ async function openHistory(item: HistoryItem): Promise<void> {
     currentTopic.value = record.topic || item.topic;
     form.topic = "";
     form.followupTopic = "";
+    form.evidenceResearch =
+      output.research_profile_id === "web.evidence.v1";
     todoTasks.value = normalizeTasks(output.todo_items);
     if (todoTasks.value.length) {
       activeTaskId.value = todoTasks.value[0].id;
@@ -1380,6 +1391,8 @@ async function hydrateRunArtifacts(token: ResearchHydrationToken): Promise<void>
     const record = await getRunRecord(token.runId);
     if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
     const output = ensureRecord(record.output);
+    form.evidenceResearch =
+      output.research_profile_id === "web.evidence.v1";
     setResearchData(
       output.github_intelligence,
       output.research_intelligence,
@@ -1963,6 +1976,10 @@ const handleSubmit = async () => {
         topic,
         search_api: form.searchApi || undefined,
         use_history_memory: form.useHistoryMemory,
+        research_mode: form.evidenceResearch ? "web" : undefined,
+        research_profile: form.evidenceResearch
+          ? "web.evidence.v1"
+          : undefined,
       },
       (event) => {
         if (researchHydrationGuard.isGenerationCurrent(streamGeneration)) {
@@ -2020,6 +2037,8 @@ const handleContinue = async () => {
     parent_run_id: parentRunId,
     search_api: form.searchApi || undefined,
     use_history_memory: form.useHistoryMemory,
+    research_mode: form.evidenceResearch ? "web" : undefined,
+    research_profile: form.evidenceResearch ? "web.evidence.v1" : undefined,
   };
 
   try {
@@ -2070,6 +2089,7 @@ const startNewResearch = () => {
   form.followupTopic = "";
   form.searchApi = "";
   form.useHistoryMemory = true;
+  form.evidenceResearch = false;
 };
 
 const downloadReport = () => {
@@ -2431,6 +2451,26 @@ p {
   width: 15px;
   height: 15px;
   accent-color: var(--color-primary);
+}
+
+.evidence-mode-toggle {
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #d8e6e3;
+  border-radius: 12px;
+  background: #f7fbfa;
+}
+
+.evidence-mode-toggle input {
+  margin-top: 2px;
+}
+
+.evidence-mode-toggle small {
+  display: block;
+  margin-top: 2px;
+  color: #718783;
+  font-size: 11px;
 }
 
 .surface-card + .surface-card,

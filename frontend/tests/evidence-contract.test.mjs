@@ -118,3 +118,24 @@ test("missing explicit citation never falls back to the first evidence item", ()
     /find\(\(item\) => item\.evidence_id === props\.selectedEvidenceId\) \?\?\s*filteredEvidence\.value\[0\]/,
   );
 });
+
+test("standard research form can start and continue evidence mode", () => {
+  assert.match(appSource, /v-model="form\.evidenceResearch"/);
+  assert.match(appSource, /深度证据研究/);
+  assert.equal(
+    [...appSource.matchAll(/research_profile:\s*form\.evidenceResearch/g)].length,
+    2,
+  );
+  assert.equal(
+    [...appSource.matchAll(/research_mode:\s*form\.evidenceResearch/g)].length,
+    2,
+  );
+  assert.equal(
+    [...appSource.matchAll(/"web\.evidence\.v1"/g)].length >= 2,
+    true,
+  );
+  assert.match(
+    appSource,
+    /form\.evidenceResearch\s*=\s*\n?\s*output\.research_profile_id === "web\.evidence\.v1"/,
+  );
+});

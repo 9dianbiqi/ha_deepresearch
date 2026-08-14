@@ -191,8 +191,16 @@ class SummaryQualityGateV1:
         semantic_score = self._safe_semantic_score(claim, bound_evidence, reasons)
         verification = self._safe_verify(claim, bound_evidence, reasons)
         reasons.extend(verification.reasons)
+        verified_ids = tuple(
+            dict.fromkeys(
+                (
+                    *verification.supporting_evidence_ids,
+                    *verification.conflicting_evidence_ids,
+                )
+            )
+        )
         citation_score, citation_reasons = self._citation_score(
-            tuple(item.evidence_id for item in bound_evidence),
+            verified_ids,
             claim=claim,
             evidence_by_id=evidence_by_id,
         )
@@ -204,7 +212,7 @@ class SummaryQualityGateV1:
         )
         supporting_records = tuple(
             evidence_by_id[item]
-            for item in claim.evidence_ids
+            for item in verification.supporting_evidence_ids
             if item in evidence_by_id
         )
         if supporting_records and all(item.evidence_level == "metadata" for item in supporting_records):
@@ -212,8 +220,16 @@ class SummaryQualityGateV1:
             reasons.append("confidence_cap:metadata_only")
         independent_sources = self._independent_source_count(supporting_records)
         if supporting_records and independent_sources <= 1:
-            confidence = min(confidence, 0.75)
-            reasons.append("confidence_cap:single_source")
+            if self._is_version_pinned_repository_evidence(supporting_records):
+                # GitHub research intentionally has one canonical repository
+                # source.  Commit-pinned, full-text locators are independently
+                # inspectable evidence units even though their canonical URL is
+                # shared, so they may narrowly clear the default 0.78 gate.
+                confidence = min(confidence, 0.79)
+                reasons.append("confidence_cap:single_repository_primary")
+            else:
+                confidence = min(confidence, 0.75)
+                reasons.append("confidence_cap:single_source")
         if claim.conflicting_evidence_ids or verification.conflicting_evidence_ids:
             confidence = min(confidence, 0.59)
             reasons.append("confidence_cap:unresolved_conflict")
@@ -484,6 +500,7 @@ class SummaryQualityGateV1:
         return bool(
             locator.paragraph
             or locator.fragment
+            or locator.file_path
             or (locator.line_start is not None and locator.line_end is not None)
             or (locator.page_start is not None and locator.page_end is not None)
         )
@@ -496,6 +513,21 @@ class SummaryQualityGateV1:
             for item in evidence
         }
         return len(identities)
+
+    @classmethod
+    def _is_version_pinned_repository_evidence(
+        cls,
+        evidence: tuple[EvidenceRecord, ...],
+    ) -> bool:
+        """Recognize auditable first-party GitHub evidence within one repository."""
+        return bool(evidence) and all(
+            item.source.provider_id == "github"
+            and item.source.source_kind == "repository"
+            and bool(item.source.resolved_version)
+            and item.evidence_level == "full_text"
+            and cls._is_precise_locator(item.locator)
+            for item in evidence
+        )
 
     @staticmethod
     def _average(values: Iterable[float]) -> float:

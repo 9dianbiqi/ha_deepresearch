@@ -43,6 +43,7 @@ from research.claim_verifier import (
 from research.context import FollowupContext, ResearchContextAssembler
 from research.contracts import EventKind, ResearchCommand, ResearchEvent, RunStatus
 from research.evidence import (
+    GitHubEvidenceBundle,
     build_github_evidence_bundle,
     canonicalize_github_report,
     freeze_github_evidence,
@@ -297,6 +298,9 @@ class DeepResearchAgent:
         self._legacy_event_queue_capacity = legacy_event_queue_capacity
         self._last_session: RunSession | None = None
         self._last_session_lock = Lock()
+        # Quality agents are shared production dependencies.  Their conversation
+        # history must never be mutated by two concurrent runs at once.
+        self._quality_agent_lock = Lock()
         self._search_adapter = search_adapter or dispatch_search
         self._uses_default_search_adapter = search_adapter is None
         self._context_preparer = context_preparer or prepare_research_context
@@ -1019,14 +1023,15 @@ class DeepResearchAgent:
 
         def run_agent(agent: SimpleAgent, prompt: str, *, role: str) -> str:
             quality_session = operation_scope.operations.session
-            try:
-                with llm_telemetry_scope(quality_session, role=role):
-                    response = agent.run(
-                        prompt,
-                        _research_operation_scope=operation_scope,
-                    )
-            finally:
-                agent.clear_history()
+            with self._quality_agent_lock:
+                try:
+                    with llm_telemetry_scope(quality_session, role=role):
+                        response = agent.run(
+                            prompt,
+                            _research_operation_scope=operation_scope,
+                        )
+                finally:
+                    agent.clear_history()
             return response if isinstance(response, str) else ""
 
         def semantic_invoker(
@@ -1276,11 +1281,8 @@ class DeepResearchAgent:
 
     @staticmethod
     def _strict_summary_quality(session: RunSession) -> bool:
-        """Use fail-closed reporting for GitHub and explicitly strict runs."""
-        return (
-            session.state.research_mode == ResearchMode.GITHUB.value
-            or session.command.permission_mode == "strict"
-        )
+        """Use fail-closed reporting only when the caller explicitly requests it."""
+        return session.command.permission_mode == "strict"
 
     def _record_structured_quality(
         self,
@@ -1494,6 +1496,34 @@ class DeepResearchAgent:
                 bundle = ResearchIntelligenceBundle.from_dict(raw_generic)
                 if not bundle.evidence_frozen:
                     bundle = replace(bundle, evidence_frozen=True)
+                raw_legacy = session.state.github_intelligence
+                legacy_bundle = github_evidence_bundle_from_dict(raw_legacy)
+                if legacy_bundle is not None:
+                    task_sources = [
+                        str(task.sources_summary or "")
+                        for task in session.state.todo_items
+                        if task.sources_summary
+                    ]
+                    if (
+                        legacy_bundle.coverage.gap_queries
+                        and legacy_bundle.coverage.retry_count < 1
+                    ):
+                        legacy_bundle = supplement_github_evidence(
+                            legacy_bundle,
+                            task_sources,
+                        )
+                    legacy_bundle = render_github_artifacts(
+                        freeze_github_evidence(legacy_bundle),
+                        report_markdown=report,
+                    )
+                    session.replace_legacy_github_intelligence(
+                        legacy_bundle.as_dict()
+                    )
+                    bundle = self._persist_legacy_github_artifacts(
+                        session,
+                        bundle=bundle,
+                        legacy_bundle=legacy_bundle,
+                    )
                 if self._artifact_store is not None:
                     bundle = persist_research_artifacts(
                         self._artifact_store,
@@ -1511,29 +1541,6 @@ class DeepResearchAgent:
                     if artifact.artifact_id in recorded_artifacts:
                         continue
                     session.record_artifact(artifact.as_dict())
-
-                raw_legacy = session.state.github_intelligence
-                legacy_bundle = github_evidence_bundle_from_dict(raw_legacy)
-                if legacy_bundle is not None:
-                    task_sources = [
-                        str(task.sources_summary or "")
-                        for task in session.state.todo_items
-                        if task.sources_summary
-                    ]
-                    if (
-                        legacy_bundle.coverage.gap_queries
-                        and legacy_bundle.coverage.retry_count < 1
-                    ):
-                        legacy_bundle = supplement_github_evidence(
-                            legacy_bundle,
-                            task_sources,
-                        )
-                    session.replace_legacy_github_intelligence(
-                        render_github_artifacts(
-                            freeze_github_evidence(legacy_bundle),
-                            report_markdown=report,
-                        ).as_dict()
-                    )
             except (TypeError, ValueError, OSError):
                 logger.warning("Unable to persist generic research artifacts")
             return
@@ -1565,6 +1572,41 @@ class DeepResearchAgent:
                 )
         except (TypeError, ValueError):
             logger.warning("Unable to refresh GitHub artifacts")
+
+    def _persist_legacy_github_artifacts(
+        self,
+        session: RunSession,
+        *,
+        bundle: ResearchIntelligenceBundle,
+        legacy_bundle: GitHubEvidenceBundle,
+    ) -> ResearchIntelligenceBundle:
+        """Write every GitHub v1 inline artifact represented by a v2 descriptor."""
+        if self._artifact_store is None or not legacy_bundle.artifacts:
+            return bundle
+        descriptors_by_id = {
+            item.artifact_id: item for item in bundle.artifact_manifest.artifacts
+        }
+        for artifact in legacy_bundle.artifacts:
+            mapped = descriptors_by_id.get(artifact.artifact_id)
+            descriptor = self._artifact_store.put(
+                session.run_id,
+                ArtifactPayload(
+                    artifact_id=artifact.artifact_id,
+                    artifact_type=artifact.artifact_type,
+                    mime_type=artifact.mime_type,
+                    title=artifact.title or artifact.artifact_type,
+                    description=artifact.description,
+                    content=artifact.content,
+                    source_ids=mapped.source_ids if mapped is not None else (),
+                ),
+            )
+            descriptors_by_id[descriptor.artifact_id] = descriptor
+        return replace(
+            bundle,
+            artifact_manifest=ArtifactManifestV2(
+                artifacts=tuple(descriptors_by_id.values())
+            ),
+        )
 
     def _execute_governed(
         self,

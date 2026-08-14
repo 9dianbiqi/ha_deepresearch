@@ -15,7 +15,7 @@
 - 搜索结果先经 Web capture 转换为可定位段落 Evidence，再封存 Evidence bundle。
 - 网页 snapshot、`structured_summary.json` 与 `quality_assessment.json` 的正文写入 ArtifactStore；Run 和 SSE 只携带描述符或有界结构化字段。
 - 摘要先生成 `StructuredSummaryDocument`，再经过语义、事实和引用质量门禁。生产 verifier 使用现有受治理 LLM 边界、确定性温度和严格 JSON；不可用或输出不合法时结果为 `unverified`，不会伪造高分。
-- 首次失败只允许重写一次。balanced Web 第二次失败会删除不合格事实段并追加 limitation；GitHub 或 `permission_mode=strict` 会阻止报告。
+- 首次失败只允许重写一次。默认 Web/GitHub 第二次失败会删除不合格事实段并追加 limitation；只有调用方显式选择 `permission_mode=strict` 才会阻止报告。
 - 每个事实/分析段落中的每个 claim 都必须有绑定引用；最终引用还必须与 verifier 的正向支持 Evidence 相交，冲突 Evidence 不能作为普通支持。
 
 当前版本没有在摘要质量失败后重新发起 gap query。生命周期不能安全保证补检索只执行一次时，系统选择确定性重写与删段降级，并保留稳定质量告警。

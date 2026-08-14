@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
 from pathlib import Path
+from threading import Lock
+from time import sleep
 from typing import Any
 
 import pytest
@@ -19,10 +22,13 @@ from research.claim_verifier import FactualVerification, SupportSpan
 from research.contracts import EventKind, ResearchCommand
 from research.intelligence import (
     ClaimRecord,
+    EvidenceLocator,
     EvidenceRecord,
     ResearchIntelligenceBundle,
+    SourceReference,
 )
 from research.legacy_sse import project_legacy_event
+from research.operations import GovernedOperations, OperationScope
 from research.profiles import ResearchMode
 from research.providers import WebSourceProvider
 from research.quality import EvidenceGateBlockedError
@@ -122,6 +128,29 @@ class _FactualVerifier:
                 for evidence_id in supporting
             ),
         )
+
+
+class _OverlapDetectingQualityAgent:
+    """Return valid semantic JSON while detecting overlapping shared-agent calls."""
+
+    def __init__(self) -> None:
+        self._state_lock = Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def run(self, prompt: str, **kwargs: object) -> str:
+        del prompt, kwargs
+        with self._state_lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        sleep(0.03)
+        with self._state_lock:
+            self.active -= 1
+        return '{"semantic_score": 1.0}'
+
+    def clear_history(self) -> None:
+        """Mirror the shared SimpleAgent cleanup boundary."""
+        return None
 
 
 class _Reporter:
@@ -557,3 +586,54 @@ def test_evidence_configuration_is_safe_and_defaults_are_fail_closed() -> None:
     assert snapshot["summary_overall_threshold"] == 0.78
     assert "llm_api_key" not in snapshot
     assert "secret-that-must-not-be-snapshotted" not in str(snapshot)
+
+
+def test_shared_quality_agent_calls_are_serialized_across_runs() -> None:
+    config = _config()
+    agent, _ = _agent(config)
+    agent._summary_quality_gate = None
+    detector = _OverlapDetectingQualityAgent()
+    agent._quality_semantic_agent = detector  # type: ignore[assignment]
+    agent._quality_factual_agent = detector  # type: ignore[assignment]
+    session = _session(config, mode=ResearchMode.WEB, profile_id="web.evidence.v1")
+    scope = OperationScope(
+        operations=GovernedOperations(session, agent._operation_authorizer)
+    )
+    gate = agent._summary_quality_gate_for_scope(scope)
+    source = SourceReference(
+        provider_id="fake",
+        source_kind="web",
+        source_id="source-1",
+        canonical_url="https://public.example.test/source",
+        resolved_version="capture-v1",
+        content_hash="hash-1",
+    )
+    evidence = EvidenceRecord(
+        evidence_id="ev-1",
+        source=source,
+        evidence_type="web_paragraph",
+        evidence_level="full_text",
+        title="Evidence",
+        excerpt="Exact support.",
+        locator=EvidenceLocator(
+            locator_type="paragraph",
+            url=source.canonical_url,
+            paragraph="p-1",
+        ),
+    )
+    claim = ClaimRecord(
+        claim_id="claim-1",
+        dimension="overview",
+        statement="A supported claim.",
+        confidence="unverified",
+        evidence_ids=(evidence.evidence_id,),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(gate._semantic_scorer.score, claim, (evidence,))
+            for _ in range(2)
+        ]
+        assert [future.result() for future in futures] == [1.0, 1.0]
+
+    assert detector.max_active == 1
