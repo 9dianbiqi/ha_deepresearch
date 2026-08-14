@@ -350,6 +350,36 @@ def test_conflicting_evidence_is_bound_rendered_and_traced() -> None:
     assert "disagree about initialization. [E2]" in result.markdown
 
 
+def test_each_claim_requires_its_own_bound_paragraph_citation() -> None:
+    """One citation cannot silently support multiple unrelated claims."""
+    claims, evidence = _records()
+    document = StructuredSummaryDocument(
+        task_id="report",
+        paragraphs=(
+            SummaryParagraph(
+                section_id="overview",
+                paragraph_type="factual",
+                text="The paragraph asserts both application and streaming facts.",
+                claim_ids=("claim_architecture", "claim_streaming"),
+                citation_ids=("ev_architecture",),
+            ),
+        ),
+        claim_ids=("claim_architecture", "claim_streaming"),
+    )
+
+    gate = validate_structured_citations(document, claims, evidence)
+
+    assert gate.valid is False
+    assert "claim_citation_missing" in gate.failure_reasons
+    with pytest.raises(StructuredReportValidationError):
+        render_structured_report(
+            document,
+            title="Report",
+            claims=claims,
+            evidence=evidence,
+        )
+
+
 def test_paragraph_url_allowlist_uses_only_actual_citation_ids() -> None:
     """An uncited locator from the same Claim cannot enter paragraph prose."""
     claims, evidence = _records_with_conflict()

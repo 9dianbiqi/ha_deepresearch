@@ -41,7 +41,7 @@ def _locator_label(locator: EvidenceLocator) -> str:
     if locator.paragraph:
         parts.append(f"paragraph {locator.paragraph}")
     if locator.fragment:
-        parts.append(f"fragment {locator.fragment}")
+        parts.append("exact fragment available")
     return " · ".join(_plain_markdown(item) for item in parts)
 
 
@@ -178,6 +178,12 @@ def render_structured_report(
 
     claim_by_id = {item.claim_id: item for item in normalized_claims}
     evidence_by_id = {item.evidence_id: item for item in normalized_evidence}
+    used_evidence_ids = {
+        evidence_id
+        for paragraph in document.paragraphs
+        for evidence_id in paragraph.citation_ids
+        if evidence_id in evidence_by_id
+    }
     bound_evidence_ids = sorted(
         {
             evidence_id
@@ -251,12 +257,12 @@ def render_structured_report(
         supporting_markers = "".join(
             f"[{marker_by_id[item]}]"
             for item in claim.evidence_ids
-            if item in marker_by_id
+            if item in marker_by_id and item in used_evidence_ids
         )
         conflicting_markers = "".join(
             f"[{marker_by_id[item]}]"
             for item in claim.conflicting_evidence_ids
-            if item in marker_by_id
+            if item in marker_by_id and item in used_evidence_ids
         )
         claim_line = (
             f"- {_plain_markdown(claim.statement)} — Evidence: "
@@ -269,7 +275,10 @@ def render_structured_report(
         lines.append("- No reportable claims.")
 
     lines.extend(["", "## Evidence References"])
-    for evidence_id in bound_evidence_ids:
+    for evidence_id in sorted(
+        used_evidence_ids,
+        key=lambda item: marker_position[item],
+    ):
         item = evidence_by_id[evidence_id]
         marker = marker_by_id[evidence_id]
         locator = _locator_label(item.locator)
@@ -277,10 +286,8 @@ def render_structured_report(
             f"- [{marker}] `{_plain_markdown(evidence_id)}` — "
             f"[{_plain_markdown(item.title)}]({item.locator.url}) — {locator}"
         )
-        if item.excerpt:
-            reference += f" — Excerpt: {_plain_markdown(item.excerpt)}"
         lines.append(reference)
-    if not bound_evidence_ids:
+    if not used_evidence_ids:
         lines.append("- No frozen evidence references.")
 
     return RenderedStructuredReport(

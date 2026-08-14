@@ -198,7 +198,11 @@ def _generic_prompt(context: GenericReportingContext) -> str:
     )
 
 
-def _structured_prompt(context: GenericReportingContext) -> str:
+def _structured_prompt(
+    context: GenericReportingContext,
+    *,
+    quality_feedback: Sequence[str] = (),
+) -> str:
     """Build a strict JSON prompt for the opt-in structured boundary."""
     markdown_instruction = (
         "Write concise Markdown. Do not create new URLs, Evidence IDs, claims, "
@@ -216,7 +220,23 @@ def _structured_prompt(context: GenericReportingContext) -> str:
         "a limitation paragraph may omit both. Do not include Markdown fences, "
         "citation markers, or URLs in paragraph text."
     )
-    return prompt[: -len(markdown_instruction)] + schema_instruction
+    feedback = tuple(
+        item.strip()[:128]
+        for item in quality_feedback
+        if isinstance(item, str) and item.strip()
+    )[:32]
+    feedback_instruction = (
+        "\nThe previous draft failed these quality checks: "
+        + ", ".join(feedback)
+        + ". Correct only those failures while preserving known IDs."
+        if feedback
+        else ""
+    )
+    return (
+        prompt[: -len(markdown_instruction)]
+        + schema_instruction
+        + feedback_instruction
+    )
 
 
 class StructuredReportGenerationError(RuntimeError):
@@ -368,6 +388,26 @@ class ReportingService:
         string interface remains unchanged until the research kernel adopts the
         structured flow explicitly.
         """
+        document = self.generate_structured_document(
+            context_or_state,
+            notes_context,
+            operation_scope=operation_scope,
+        )
+        return self.render_structured_document(
+            context_or_state,
+            document,
+            notes_context,
+        )
+
+    def generate_structured_document(
+        self,
+        context_or_state: GenericReportingContext | SummaryState,
+        notes_context: dict[str, Any] | None = None,
+        *,
+        operation_scope: OperationScope | None = None,
+        quality_feedback: Sequence[str] = (),
+    ) -> StructuredSummaryDocument:
+        """Generate and validate strict structured JSON without rendering it."""
         if isinstance(context_or_state, GenericReportingContext):
             context = context_or_state
         else:
@@ -379,7 +419,10 @@ class ReportingService:
             raise StructuredReportGenerationError(
                 "Structured reports require a frozen intelligence bundle."
             )
-        prompt = _structured_prompt(context)
+        prompt = _structured_prompt(
+            context,
+            quality_feedback=quality_feedback,
+        )
         with self._agent_lock:
             try:
                 if operation_scope is None:
@@ -426,7 +469,7 @@ class ReportingService:
             raise StructuredReportGenerationError(
                 "Structured report must contain at least one paragraph."
             )
-        return self.render_structured_document(context, document)
+        return document
 
 
 __all__ = [

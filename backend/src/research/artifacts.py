@@ -286,10 +286,16 @@ def persist_research_artifacts(
             source_ids=tuple(item.source_id for item in bundle.sources),
         )
     )
-    descriptors = tuple(store.put(run_id, payload) for payload in payloads)
+    written = tuple(store.put(run_id, payload) for payload in payloads)
+    descriptors_by_id = {
+        item.artifact_id: item for item in bundle.artifact_manifest.artifacts
+    }
+    descriptors_by_id.update({item.artifact_id: item for item in written})
     return replace(
         bundle,
-        artifact_manifest=ArtifactManifestV2(artifacts=descriptors),
+        artifact_manifest=ArtifactManifestV2(
+            artifacts=tuple(descriptors_by_id.values())
+        ),
     )
 
 __all__ = [

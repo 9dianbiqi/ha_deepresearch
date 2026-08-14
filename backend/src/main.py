@@ -136,6 +136,8 @@ class ResearchResponse(BaseModel):
         default_factory=dict,
         description="Optional versioned GitHub evidence intelligence bundle",
     )
+    structured_summary: dict[str, Any] = Field(default_factory=dict)
+    quality_assessment: dict[str, Any] = Field(default_factory=dict)
 
 
 class ContinueRequest(BaseModel):
@@ -230,6 +232,8 @@ class HarnessResponse(BaseModel):
     source_context: dict[str, Any] = Field(default_factory=dict)
     research_intelligence: dict[str, Any] = Field(default_factory=dict)
     github_intelligence: dict[str, Any] = Field(default_factory=dict)
+    structured_summary: dict[str, Any] = Field(default_factory=dict)
+    quality_assessment: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
     findings: list[dict[str, Any]] = Field(default_factory=list)
     compressed_context: dict[str, Any] = Field(default_factory=dict)
@@ -371,6 +375,16 @@ def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
         github_intelligence=(
             dict(output.github_intelligence)
             if output and getattr(output, "github_intelligence", None)
+            else {}
+        ),
+        structured_summary=(
+            dict(output.structured_summary)
+            if output and getattr(output, "structured_summary", None)
+            else {}
+        ),
+        quality_assessment=(
+            dict(output.quality_assessment)
+            if output and getattr(output, "quality_assessment", None)
             else {}
         ),
         metrics=result.metrics,
@@ -956,6 +970,16 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
             github_intelligence=(
                 dict(output.github_intelligence)
                 if output and getattr(output, "github_intelligence", None)
+                else {}
+            ),
+            structured_summary=(
+                dict(output.structured_summary)
+                if output and getattr(output, "structured_summary", None)
+                else {}
+            ),
+            quality_assessment=(
+                dict(output.quality_assessment)
+                if output and getattr(output, "quality_assessment", None)
                 else {}
             ),
         )

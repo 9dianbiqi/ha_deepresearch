@@ -44,6 +44,7 @@ _CHECKPOINT_PHASES = frozenset(
         "planning_completed",
         "research_tasks_progress",
         "evidence_completed",
+        "summary_quality_completed",
         "report_before_generation",
         "report_generated",
         "report_retry",

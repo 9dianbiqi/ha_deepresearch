@@ -112,6 +112,8 @@ NEVER_CANCELLED: CancellationToken = _NeverCancelledToken()
 
 Observer = Callable[[ResearchEvent], None]
 _LOGGER = logging.getLogger(__name__)
+_MAX_STRUCTURED_SUMMARY_BYTES = 256 * 1024
+_MAX_QUALITY_ASSESSMENT_BYTES = 512 * 1024
 
 _TERMINAL_EVENTS = {
     RunStatus.COMPLETED: EventKind.RUN_COMPLETED,
@@ -464,6 +466,8 @@ class RunSession:
                 ),
                 "source_context": dict(self.state.source_context),
                 "research_intelligence": dict(self.state.research_intelligence),
+                "structured_summary": dict(self.state.structured_summary),
+                "quality_assessment": dict(self.state.quality_assessment),
                 "github_context": dict(self.state.github_context),
                 "github_intelligence": dict(self.state.github_intelligence),
                 "report_note_id": self.state.report_note_id,
@@ -613,6 +617,34 @@ class RunSession:
             if isinstance(raw_research_intelligence, Mapping)
             else {}
         )
+        raw_structured_summary = continuation_state.get("structured_summary")
+        if not isinstance(raw_structured_summary, Mapping):
+            raw_structured_summary = output.get("structured_summary")
+        structured_summary = (
+            {
+                str(key): value
+                for key, value in cast(
+                    Mapping[str, object], raw_structured_summary
+                ).items()
+                if isinstance(key, str)
+            }
+            if isinstance(raw_structured_summary, Mapping)
+            else {}
+        )
+        raw_quality_assessment = continuation_state.get("quality_assessment")
+        if not isinstance(raw_quality_assessment, Mapping):
+            raw_quality_assessment = output.get("quality_assessment")
+        quality_assessment = (
+            {
+                str(key): value
+                for key, value in cast(
+                    Mapping[str, object], raw_quality_assessment
+                ).items()
+                if isinstance(key, str)
+            }
+            if isinstance(raw_quality_assessment, Mapping)
+            else {}
+        )
         # Older checkpoints only carry the GitHub v1 projection.  Adapt it in
         # memory so recovery can use one canonical intelligence field without
         # rewriting the persisted checkpoint or changing the legacy output.
@@ -706,6 +738,8 @@ class RunSession:
             research_profile_id=research_profile_id,
             source_context=source_context,
             research_intelligence=research_intelligence,
+            structured_summary=structured_summary,
+            quality_assessment=quality_assessment,
             github_context=github_context,
             github_intelligence=github_intelligence,
             report_note_id=report_note_id,
@@ -1192,6 +1226,78 @@ class RunSession:
         with self._lock:
             self._require_running_locked()
             event = self._validated_event_locked(EventKind.ARTIFACT_READY, payload)
+            should_drain = self._commit_event_locked(event)
+        if should_drain:
+            self._drain_notifications()
+        return event
+
+    def record_summary_quality(
+        self,
+        document: Mapping[str, Any],
+        assessment: Mapping[str, Any],
+    ) -> ResearchEvent:
+        """Persist bounded structured quality output and emit metadata only."""
+        if not isinstance(document, Mapping) or not isinstance(assessment, Mapping):
+            raise TypeError("Structured summary and quality assessment must be mappings.")
+        try:
+            detached_document = json.loads(json.dumps(dict(document)))
+            detached_assessment = json.loads(json.dumps(dict(assessment)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("Structured quality output must be JSON serializable.") from exc
+        if len(json.dumps(detached_document).encode("utf-8")) > _MAX_STRUCTURED_SUMMARY_BYTES:
+            raise ValueError("Structured summary exceeds its persistence bound.")
+        if len(json.dumps(detached_assessment).encode("utf-8")) > _MAX_QUALITY_ASSESSMENT_BYTES:
+            raise ValueError("Quality assessment exceeds its persistence bound.")
+        paragraphs = detached_document.get("paragraphs")
+        paragraph_assessments = detached_assessment.get("paragraph_assessments")
+        claim_assessments = detached_assessment.get("claim_assessments")
+        blockers: set[str] = set()
+        for item in (
+            paragraph_assessments
+            if isinstance(paragraph_assessments, list)
+            else []
+        ):
+            if not isinstance(item, Mapping):
+                continue
+            item_blockers = item.get("blockers")
+            if not isinstance(item_blockers, list):
+                continue
+            blockers.update(
+                str(blocker).partition(":")[0]
+                for blocker in item_blockers
+                if isinstance(blocker, str)
+            )
+        score = detached_assessment.get("overall_score")
+        payload = {
+            "overall_score": (
+                float(score)
+                if isinstance(score, (int, float)) and not isinstance(score, bool)
+                else 0.0
+            ),
+            "passed": bool(detached_assessment.get("passed", False)),
+            "paragraph_count": len(paragraphs) if isinstance(paragraphs, list) else 0,
+            "claim_count": (
+                len(claim_assessments) if isinstance(claim_assessments, list) else 0
+            ),
+            "blocked_paragraph_count": sum(
+                1
+                for item in (
+                    paragraph_assessments
+                    if isinstance(paragraph_assessments, list)
+                    else []
+                )
+                if isinstance(item, Mapping) and item.get("blockers")
+            ),
+            "blocker_codes": sorted(blockers),
+        }
+        with self._lock:
+            self._require_running_locked()
+            event = self._validated_event_locked(
+                EventKind.SUMMARY_QUALITY_UPDATE,
+                payload,
+            )
+            self.state.structured_summary = detached_document
+            self.state.quality_assessment = detached_assessment
             should_drain = self._commit_event_locked(event)
         if should_drain:
             self._drain_notifications()
@@ -1821,6 +1927,8 @@ class RunSession:
                 source_context=dict(self.state.source_context),
                 research_intelligence=dict(self.state.research_intelligence),
                 github_intelligence=dict(self.state.github_intelligence),
+                structured_summary=dict(self.state.structured_summary),
+                quality_assessment=dict(self.state.quality_assessment),
             )
 
     def to_snapshot(
@@ -1859,6 +1967,8 @@ class RunSession:
                     "source_context": dict(output.source_context),
                     "research_intelligence": dict(output.research_intelligence),
                     "github_intelligence": dict(output.github_intelligence),
+                    "structured_summary": dict(output.structured_summary),
+                    "quality_assessment": dict(output.quality_assessment),
                 },
                 followup_context=dict(self.followup_context),
                 metrics=dict(self.metrics),

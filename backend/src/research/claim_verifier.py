@@ -202,6 +202,54 @@ class FactualSupportVerifier(Protocol):
 VerifierInvoker = Callable[[ClaimRecord, tuple[EvidenceRecord, ...]], str | Mapping[str, Any]]
 
 
+class StructuredSemanticSupportScorer:
+    """Validate a strict semantic-score object returned by an injected invoker."""
+
+    def __init__(
+        self,
+        invoker: VerifierInvoker,
+        *,
+        name: str,
+        version: str,
+    ) -> None:
+        """Bind one deterministic invocation behind a strict JSON boundary."""
+        if not callable(invoker):
+            raise TypeError("Semantic scorer invoker must be callable.")
+        self._invoker = invoker
+        self.name = _required_string(name, field_name="semantic scorer name", limit=256)
+        self.version = _required_string(
+            version,
+            field_name="semantic scorer version",
+            limit=256,
+        )
+
+    def score(
+        self,
+        claim: ClaimRecord,
+        evidence: tuple[EvidenceRecord, ...],
+    ) -> float:
+        """Invoke the scorer and accept exactly one bounded numeric field."""
+        raw = self._invoker(claim, evidence)
+        if isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise VerifierResponseError(
+                    "Semantic scorer returned invalid JSON."
+                ) from exc
+        elif isinstance(raw, Mapping):
+            payload = dict(raw)
+        else:
+            raise VerifierResponseError(
+                "Semantic scorer response must be JSON text or an object."
+            )
+        if not isinstance(payload, Mapping) or set(payload) != {"semantic_score"}:
+            raise VerifierResponseError(
+                "Semantic scorer response has missing or unknown fields."
+            )
+        return _bounded_score(payload["semantic_score"], field_name="semantic_score")
+
+
 class StructuredFactualSupportVerifier:
     """Validate JSON returned by an injected deterministic verifier invocation."""
 
@@ -327,6 +375,7 @@ __all__ = [
     "SemanticScorerUnavailableError",
     "SemanticSupportScorer",
     "StructuredFactualSupportVerifier",
+    "StructuredSemanticSupportScorer",
     "SupportSpan",
     "UnavailableFactualSupportVerifier",
     "UnavailableSemanticSupportScorer",
