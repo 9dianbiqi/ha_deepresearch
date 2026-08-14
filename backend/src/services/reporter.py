@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -25,6 +26,11 @@ from research.profiles import (
     ResearchMode,
     ResearchProfile,
     built_in_profile_registry,
+)
+from research.report_document import StructuredSummaryDocument
+from research.report_renderer import (
+    RenderedStructuredReport,
+    render_structured_report,
 )
 from research.report_validation import validate_citations
 from research.session import CancellationRequestedError, DeadlineExceededError
@@ -192,6 +198,31 @@ def _generic_prompt(context: GenericReportingContext) -> str:
     )
 
 
+def _structured_prompt(context: GenericReportingContext) -> str:
+    """Build a strict JSON prompt for the opt-in structured boundary."""
+    markdown_instruction = (
+        "Write concise Markdown. Do not create new URLs, Evidence IDs, claims, "
+        "or unsupported conclusions."
+    )
+    prompt = _generic_prompt(context)
+    if not prompt.endswith(markdown_instruction):  # pragma: no cover - internal invariant
+        raise RuntimeError("Generic reporter prompt suffix changed unexpectedly.")
+    schema_instruction = (
+        "Return exactly one JSON object with schema_version=1, task_id=\"report\", "
+        "claim_ids, and paragraphs. Each paragraph must contain section_id, "
+        "paragraph_type, text, claim_ids, and citation_ids. Use only the claim "
+        "and Evidence IDs listed above. A factual paragraph always needs a claim "
+        "and citation; an analysis paragraph with claim_ids also needs citations; "
+        "a limitation paragraph may omit both. Do not include Markdown fences, "
+        "citation markers, or URLs in paragraph text."
+    )
+    return prompt[: -len(markdown_instruction)] + schema_instruction
+
+
+class StructuredReportGenerationError(RuntimeError):
+    """Raised when the opt-in structured reporter cannot produce valid JSON."""
+
+
 def _deterministic_sections(context: GenericReportingContext) -> str:
     """Append deterministic traceability sections after model prose."""
     if context.report_spec is None:  # pragma: no cover - normalized in __post_init__
@@ -293,5 +324,113 @@ class ReportingService:
                 report_text += _deterministic_sections(context)
         return report_text or "# Report generation failed\n\n## Limitations\nNo report content was returned."
 
+    def render_structured_document(
+        self,
+        context_or_state: GenericReportingContext | SummaryState,
+        document: StructuredSummaryDocument,
+        notes_context: dict[str, Any] | None = None,
+    ) -> RenderedStructuredReport:
+        """Render one pre-built document against frozen context evidence."""
+        if isinstance(context_or_state, GenericReportingContext):
+            context = context_or_state
+        else:
+            context = GenericReportingContext.from_state(
+                context_or_state,
+                notes_context=notes_context,
+            )
+        if context.bundle is None or not context.bundle.evidence_frozen:
+            raise StructuredReportGenerationError(
+                "Structured reports require a frozen intelligence bundle."
+            )
+        report_spec = context.report_spec or GenericReportSpec(title=context.topic)
+        section_titles = {
+            item.id: item.title for item in context.profile.report_sections
+        }
+        return render_structured_report(
+            document,
+            title=report_spec.title,
+            claims=context.claims,
+            evidence=context.evidence,
+            section_titles=section_titles,
+            evidence_frozen=True,
+        )
 
-__all__ = ["GenericReportingContext", "ReportingService"]
+    def generate_structured_report(
+        self,
+        context_or_state: GenericReportingContext | SummaryState,
+        notes_context: dict[str, Any] | None = None,
+        *,
+        operation_scope: OperationScope | None = None,
+    ) -> RenderedStructuredReport:
+        """Generate strict structured JSON, validate it, and render Markdown.
+
+        This is an opt-in integration boundary. The existing ``generate_report``
+        string interface remains unchanged until the research kernel adopts the
+        structured flow explicitly.
+        """
+        if isinstance(context_or_state, GenericReportingContext):
+            context = context_or_state
+        else:
+            context = GenericReportingContext.from_state(
+                context_or_state,
+                notes_context=notes_context,
+            )
+        if context.bundle is None or not context.bundle.evidence_frozen:
+            raise StructuredReportGenerationError(
+                "Structured reports require a frozen intelligence bundle."
+            )
+        prompt = _structured_prompt(context)
+        with self._agent_lock:
+            try:
+                if operation_scope is None:
+                    response = self._agent.run(prompt)
+                else:
+                    response = self._agent.run(
+                        prompt,
+                        _research_operation_scope=operation_scope,
+                    )
+            except (
+                OperationRejectedError,
+                CancellationRequestedError,
+                DeadlineExceededError,
+            ):
+                raise
+            except Exception as exc:
+                logger.error("Structured reporter LLM call failed")
+                raise StructuredReportGenerationError(
+                    "Structured report agent failed."
+                ) from exc
+            finally:
+                self._agent.clear_history()
+
+        response_text = response.strip() if isinstance(response, str) else ""
+        if getattr(self._config, "strip_thinking_tokens", False):
+            response_text = strip_thinking_tokens(response_text)
+        try:
+            payload = json.loads(response_text)
+        except (TypeError, ValueError) as exc:
+            raise StructuredReportGenerationError(
+                "Structured report agent returned invalid JSON."
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise StructuredReportGenerationError(
+                "Structured report JSON must be an object."
+            )
+        try:
+            document = StructuredSummaryDocument.from_dict(payload)
+        except (TypeError, ValueError) as exc:
+            raise StructuredReportGenerationError(
+                "Structured report JSON violates the document contract."
+            ) from exc
+        if not document.paragraphs:
+            raise StructuredReportGenerationError(
+                "Structured report must contain at least one paragraph."
+            )
+        return self.render_structured_document(context, document)
+
+
+__all__ = [
+    "GenericReportingContext",
+    "ReportingService",
+    "StructuredReportGenerationError",
+]
