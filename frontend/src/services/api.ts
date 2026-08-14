@@ -164,6 +164,8 @@ export interface RunRecord {
     source_context?: Record<string, unknown>;
     research_intelligence?: ResearchIntelligence;
     github_intelligence?: GithubIntelligence;
+    structured_summary?: StructuredSummaryDocument;
+    quality_assessment?: SummaryQualityAssessment;
   };
   events?: ResearchStreamEvent[];
   [key: string]: unknown;
@@ -214,15 +216,132 @@ export interface GithubIntelligence {
   [key: string]: unknown;
 }
 
+export interface EvidenceSourceReference {
+  provider_id: string;
+  source_kind: string;
+  source_id: string;
+  canonical_url: string;
+  requested_ref?: string | null;
+  resolved_version?: string | null;
+  captured_at?: string | null;
+  content_hash?: string | null;
+}
+
+export interface EvidenceLocator {
+  locator_type: string;
+  url: string;
+  file_path?: string | null;
+  line_start?: number | null;
+  line_end?: number | null;
+  page_start?: number | null;
+  page_end?: number | null;
+  section?: string | null;
+  paragraph?: string | null;
+  fragment?: string | null;
+}
+
+export interface ResearchEvidence {
+  evidence_id: string;
+  source: EvidenceSourceReference;
+  evidence_type: string;
+  evidence_level: "metadata" | "abstract" | "full_text" | "derived" | string;
+  title: string;
+  excerpt: string;
+  locator: EvidenceLocator;
+  attributes?: Record<string, unknown>;
+}
+
+export interface ResearchClaim {
+  claim_id: string;
+  dimension: string;
+  statement: string;
+  confidence: string;
+  evidence_ids: string[];
+  conflicting_evidence_ids: string[];
+  limitations?: string[];
+  reportable?: boolean;
+}
+
+export interface SummaryParagraph {
+  paragraph_id: string;
+  section_id: string;
+  paragraph_type: "factual" | "analysis" | "limitation";
+  text: string;
+  claim_ids: string[];
+  citation_ids: string[];
+}
+
+export interface StructuredSummaryDocument {
+  schema_version: 1;
+  task_id: string;
+  paragraphs: SummaryParagraph[];
+  claim_ids: string[];
+}
+
+export type ClaimVerdict =
+  | "supported"
+  | "partial"
+  | "unsupported"
+  | "contradicted"
+  | "unverified";
+
+export type ConfidenceLevel = "high" | "medium" | "low" | "unverified";
+
+export interface ClaimSupportAssessment {
+  claim_id: string;
+  semantic_score: number;
+  factual_score: number;
+  citation_score: number;
+  support_confidence: number;
+  verdict: ClaimVerdict;
+  supporting_evidence_ids: string[];
+  conflicting_evidence_ids: string[];
+  reasons: string[];
+}
+
+export interface ParagraphQualityAssessment {
+  paragraph_id: string;
+  semantic_score: number;
+  factual_score: number;
+  citation_score: number;
+  support_confidence: number;
+  level: ConfidenceLevel;
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface SummaryQualityAssessment {
+  schema_version: 1;
+  passed: boolean;
+  overall_score: number;
+  thresholds: Record<string, number>;
+  paragraph_assessments: ParagraphQualityAssessment[];
+  claim_assessments: ClaimSupportAssessment[];
+  verifier: string;
+  verifier_version: string;
+  prompt_version: string;
+}
+
+export interface ResearchCoverage {
+  coverage_score?: number;
+  covered_dimensions?: string[];
+  missing_dimensions?: string[];
+  gap_queries?: string[];
+  allow_report?: boolean;
+  blockers?: string[];
+  warnings?: string[];
+  [key: string]: unknown;
+}
+
 export interface ResearchIntelligence {
   schema_version?: number;
   mode?: "web" | "github" | "paper";
   profile_id?: string;
   profile_version?: number;
-  sources?: Array<Record<string, unknown>>;
-  evidence?: Array<Record<string, unknown>>;
-  claims?: Array<Record<string, unknown>>;
-  coverage?: Record<string, unknown>;
+  sources?: EvidenceSourceReference[];
+  evidence?: ResearchEvidence[];
+  claims?: ResearchClaim[];
+  coverage?: ResearchCoverage;
   report_spec?: Record<string, unknown>;
   artifact_manifest?: {
     schema_version?: number;
@@ -467,6 +586,15 @@ export async function fetchArtifact(
       response.headers.get("Content-Disposition"),
     ),
   };
+}
+
+export async function fetchJsonArtifact<T>(
+  runId: string,
+  artifactId: string,
+): Promise<T> {
+  const downloaded = await fetchArtifact(runId, artifactId);
+  const text = await downloaded.blob.text();
+  return JSON.parse(text) as T;
 }
 
 export async function listMemories(

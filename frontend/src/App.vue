@@ -507,7 +507,13 @@
               </div>
               <span class="status-tag completed">已生成</span>
             </div>
-            <div class="markdown-body report-body" v-html="renderedReport"></div>
+            <ResearchReport
+              :document="structuredSummary"
+              :assessment="qualityAssessment"
+              :fallback-html="renderedReport"
+              :selected-paragraph-id="selectedParagraphId"
+              @select-evidence="selectEvidenceFromReport"
+            />
           </section>
         </template>
       </section>
@@ -582,57 +588,19 @@
           <p v-else class="empty-copy">暂无工具调用。</p>
         </section>
 
-        <section v-if="githubIntelligence" class="surface-card evidence-drawer">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">GitHub Evidence Drawer</p>
-              <h2>证据与覆盖</h2>
-            </div>
-            <span class="status-tag completed">
-              {{ githubIntelligence.evidence?.length || 0 }} 条
-            </span>
-          </div>
-          <p class="muted-copy">
-            覆盖率 {{ formatCoverage(githubIntelligence.coverage?.coverage_score) }} ·
-            {{ githubIntelligence.snapshots?.length || 0 }} 个固定快照
-          </p>
-          <div v-if="githubIntelligence.coverage?.missing_dimensions?.length" class="notice-list">
-            <p class="eyebrow">待补证据</p>
-            <p>{{ githubIntelligence.coverage.missing_dimensions.join("、") }}</p>
-          </div>
-          <div v-if="githubIntelligence.claims?.length" class="claim-list">
-            <article v-for="claim in githubIntelligence.claims.slice(0, 4)" :key="String(claim.claim_id)" class="claim-item">
-              <strong>{{ claim.category || "claim" }}</strong>
-              <span>{{ claim.statement || "" }}</span>
-            </article>
-          </div>
-          <div v-if="sourceEvidence.length" class="source-evidence-list">
-            <p class="eyebrow">文件级引用</p>
-            <article v-for="evidence in sourceEvidence" :key="evidence.evidence_id" class="source-evidence-row">
-              <div>
-                <strong>{{ evidence.file_path || evidence.title }}</strong>
-                <span>{{ formatEvidenceLines(evidence) }}</span>
-              </div>
-              <a
-                v-if="evidenceHref(evidence)"
-                class="link-button"
-                :href="evidenceHref(evidence) || undefined"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                查看固定源码
-              </a>
-            </article>
-          </div>
-          <div v-if="(githubIntelligence.snapshots?.length || 0) > 1" class="comparison-list">
-            <p class="eyebrow">Comparison View</p>
-            <article v-for="snapshot in githubIntelligence.snapshots" :key="String(snapshot.snapshot_id)" class="comparison-row">
-              <strong>{{ snapshot.repository || "repository" }}</strong>
-              <span>{{ snapshot.commit_sha || "未取得 SHA" }}</span>
-              <span>{{ snapshot.collection_status || "partial" }}</span>
-            </article>
-          </div>
-        </section>
+        <EvidenceDrawer
+          v-if="genericEvidence.length || structuredSummary || qualityAssessment"
+          class="surface-card evidence-drawer"
+          :evidence="genericEvidence"
+          :claims="genericClaims"
+          :document="structuredSummary"
+          :assessment="qualityAssessment"
+          :selected-evidence-id="selectedEvidenceId"
+          :selected-paragraph-id="selectedParagraphId"
+          :coverage-score="genericCoverageScore"
+          :mode="activeResearchMode"
+          @select-evidence="selectEvidenceFromDrawer"
+        />
 
         <section v-if="artifactManifest.length" class="surface-card artifacts-panel">
           <div class="section-heading">
@@ -728,11 +696,14 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { marked } from "marked";
 
+import EvidenceDrawer from "./components/EvidenceDrawer.vue";
+import ResearchReport from "./components/ResearchReport.vue";
 import {
   confirmMemory,
   createMemoryCandidate,
   deleteMemory,
   fetchArtifact,
+  fetchJsonArtifact,
   clearStoredApiKey,
   getStoredApiKey,
   listMemories,
@@ -744,9 +715,12 @@ import {
   getRunRecord,
   listHistory,
   type GithubArtifact,
-  type GithubEvidenceItem,
   type GithubIntelligence,
+  type ResearchClaim,
+  type ResearchEvidence,
   type ResearchIntelligence,
+  type StructuredSummaryDocument,
+  type SummaryQualityAssessment,
   type ContinueRequest,
   type HistoryItem,
   type ResearchStreamEvent,
@@ -830,6 +804,11 @@ const sourcesHighlight = ref(false);
 const reportHighlight = ref(false);
 const toolHighlight = ref(false);
 const githubIntelligence = ref<GithubIntelligence | null>(null);
+const researchIntelligence = ref<ResearchIntelligence | null>(null);
+const structuredSummary = ref<StructuredSummaryDocument | null>(null);
+const qualityAssessment = ref<SummaryQualityAssessment | null>(null);
+const selectedEvidenceId = ref<string | null>(null);
+const selectedParagraphId = ref<string | null>(null);
 const artifactManifest = ref<GithubArtifact[]>([]);
 
 let currentController: AbortController | null = null;
@@ -876,10 +855,65 @@ const currentTask = computed(() => {
   return todoTasks.value[0] ?? null;
 });
 const currentTaskSources = computed(() => currentTask.value?.sourceItems ?? []);
-const sourceEvidence = computed<GithubEvidenceItem[]>(() =>
-  (githubIntelligence.value?.evidence ?? [])
-    .filter((item) => item.evidence_type === "source_code")
-    .slice(0, 6),
+const genericEvidence = computed<ResearchEvidence[]>(() => {
+  const current = researchIntelligence.value?.evidence;
+  if (Array.isArray(current) && current.length) {
+    return current;
+  }
+  return (githubIntelligence.value?.evidence ?? []).map((item) => ({
+    evidence_id: item.evidence_id,
+    source: {
+      provider_id: "github",
+      source_kind: item.evidence_type,
+      source_id: item.source_url || item.evidence_id,
+      canonical_url: item.source_url,
+      resolved_version: item.commit_sha ?? null,
+      captured_at: null,
+      content_hash: item.commit_sha ?? null,
+    },
+    evidence_type: item.evidence_type,
+    evidence_level: item.evidence_type === "source_code" ? "full_text" : "metadata",
+    title: item.title,
+    excerpt: item.excerpt,
+    locator: {
+      locator_type: item.file_path ? "line" : "metadata",
+      url: item.source_url,
+      file_path: item.file_path ?? null,
+      line_start: item.line_start ?? null,
+      line_end: item.line_end ?? null,
+    },
+  }));
+});
+const genericClaims = computed<ResearchClaim[]>(() => {
+  const current = researchIntelligence.value?.claims;
+  if (Array.isArray(current) && current.length) {
+    return current;
+  }
+  return (githubIntelligence.value?.claims ?? []).map((rawClaim, index) => {
+    const claim = ensureRecord(rawClaim);
+    return {
+      claim_id: extractOptionalString(claim.claim_id) ?? `legacy_claim_${index + 1}`,
+      dimension:
+        extractOptionalString(claim.dimension) ??
+        extractOptionalString(claim.category) ??
+        "overview",
+      statement: extractOptionalString(claim.statement) ?? "",
+      confidence: extractOptionalString(claim.confidence) ?? "unverified",
+      evidence_ids: stringArray(claim.evidence_ids),
+      conflicting_evidence_ids: stringArray(claim.conflicting_evidence_ids),
+      limitations: stringArray(claim.limitations),
+      reportable: claim.reportable !== false,
+    };
+  });
+});
+const genericCoverageScore = computed(() => {
+  const value =
+    researchIntelligence.value?.coverage?.coverage_score ??
+    githubIntelligence.value?.coverage?.coverage_score;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+});
+const activeResearchMode = computed(
+  () => researchIntelligence.value?.mode ?? (githubIntelligence.value ? "github" : "web"),
 );
 const currentTaskTitle = computed(() => currentTask.value?.title ?? "");
 const currentTaskIntent = computed(() => currentTask.value?.intent ?? "");
@@ -955,24 +989,6 @@ function formatTaskStatus(status: string): string {
   return TASK_STATUS_LABEL[status] ?? status;
 }
 
-function formatCoverage(value: unknown): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? `${Math.round(value * 100)}%`
-    : "0%";
-}
-
-function formatEvidenceLines(evidence: GithubEvidenceItem): string {
-  if (typeof evidence.line_start !== "number") return "固定 commit 快照";
-  const end = typeof evidence.line_end === "number" ? evidence.line_end : evidence.line_start;
-  return `第 ${evidence.line_start}-${end} 行 · ${evidence.commit_sha || "固定快照"}`;
-}
-
-function evidenceHref(evidence: GithubEvidenceItem): string | null {
-  return evidence.source_url.startsWith("https://github.com/")
-    ? evidence.source_url
-    : null;
-}
-
 function artifactDescriptors(value: unknown): GithubArtifact[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return [];
@@ -993,7 +1009,37 @@ function artifactDescriptors(value: unknown): GithubArtifact[] {
     : [];
 }
 
-function setGithubIntelligence(value: unknown, researchValue?: unknown): void {
+function structuredSummaryFrom(value: unknown): StructuredSummaryDocument | null {
+  const record = ensureRecord(value);
+  return record.schema_version === 1 && Array.isArray(record.paragraphs)
+    ? (record as unknown as StructuredSummaryDocument)
+    : null;
+}
+
+function qualityAssessmentFrom(value: unknown): SummaryQualityAssessment | null {
+  const record = ensureRecord(value);
+  return record.schema_version === 1 &&
+    typeof record.passed === "boolean" &&
+    Array.isArray(record.paragraph_assessments) &&
+    Array.isArray(record.claim_assessments)
+    ? (record as unknown as SummaryQualityAssessment)
+    : null;
+}
+
+function setResearchData(
+  value: unknown,
+  researchValue?: unknown,
+  structuredValue?: unknown,
+  assessmentValue?: unknown,
+): void {
+  researchIntelligence.value =
+    researchValue && typeof researchValue === "object" && !Array.isArray(researchValue)
+      ? (researchValue as ResearchIntelligence)
+      : null;
+  structuredSummary.value = structuredSummaryFrom(structuredValue);
+  qualityAssessment.value = qualityAssessmentFrom(assessmentValue);
+  selectedEvidenceId.value = null;
+  selectedParagraphId.value = null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     githubIntelligence.value = null;
     artifactManifest.value = artifactDescriptors(researchValue);
@@ -1002,6 +1048,44 @@ function setGithubIntelligence(value: unknown, researchValue?: unknown): void {
   const bundle = value as GithubIntelligence;
   githubIntelligence.value = bundle;
   artifactManifest.value = artifactDescriptors(researchValue);
+}
+
+async function hydrateEvidenceArtifacts(runId: string): Promise<void> {
+  const structuredArtifact = artifactManifest.value.find((artifact) => {
+    const key = `${artifact.artifact_type} ${artifact.path}`.toLowerCase();
+    return key.includes("structured_summary") || key.includes("structured-summary");
+  });
+  const qualityArtifact = artifactManifest.value.find((artifact) => {
+    const key = `${artifact.artifact_type} ${artifact.path}`.toLowerCase();
+    return key.includes("quality_assessment") || key.includes("quality-assessment");
+  });
+  if (!structuredSummary.value && structuredArtifact) {
+    try {
+      structuredSummary.value = structuredSummaryFrom(
+        await fetchJsonArtifact<unknown>(runId, structuredArtifact.artifact_id),
+      );
+    } catch {
+      // The Markdown report remains available when an optional structured artifact is absent.
+    }
+  }
+  if (!qualityAssessment.value && qualityArtifact) {
+    try {
+      qualityAssessment.value = qualityAssessmentFrom(
+        await fetchJsonArtifact<unknown>(runId, qualityArtifact.artifact_id),
+      );
+    } catch {
+      // Quality details are optional and never invalidate a completed report view.
+    }
+  }
+}
+
+function selectEvidenceFromReport(evidenceId: string, paragraphId: string): void {
+  selectedEvidenceId.value = evidenceId;
+  selectedParagraphId.value = paragraphId;
+}
+
+function selectEvidenceFromDrawer(evidenceId: string): void {
+  selectedEvidenceId.value = evidenceId;
 }
 
 async function downloadArtifact(artifact: GithubArtifact): Promise<void> {
@@ -1222,7 +1306,13 @@ async function openHistory(item: HistoryItem): Promise<void> {
       extractOptionalString(output.report_markdown) ??
       extractOptionalString(output.running_summary) ??
       "";
-    setGithubIntelligence(output.github_intelligence, output.research_intelligence);
+    setResearchData(
+      output.github_intelligence,
+      output.research_intelligence,
+      output.structured_summary,
+      output.quality_assessment,
+    );
+    await hydrateEvidenceArtifacts(record.run_id);
     progressLogs.value = [`已恢复历史研究：${currentTopic.value}`];
     historyRecallCount.value = 0;
     try {
@@ -1242,7 +1332,13 @@ async function hydrateRunArtifacts(runId: string | null): Promise<void> {
   try {
     const record = await getRunRecord(runId);
     const output = ensureRecord(record.output);
-    setGithubIntelligence(output.github_intelligence, output.research_intelligence);
+    setResearchData(
+      output.github_intelligence,
+      output.research_intelligence,
+      output.structured_summary,
+      output.quality_assessment,
+    );
+    await hydrateEvidenceArtifacts(runId);
   } catch {
     // The SSE terminal event remains authoritative if the record is not yet readable.
   }
@@ -1373,6 +1469,12 @@ function ensureRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    : [];
+}
+
 function createTaskView(item: Record<string, unknown>, index: number): TodoTaskView {
   const rawId =
     typeof item.id === "number"
@@ -1489,6 +1591,11 @@ function resetWorkflowState(
   activeTaskId.value = null;
   reportMarkdown.value = "";
   githubIntelligence.value = null;
+  researchIntelligence.value = null;
+  structuredSummary.value = null;
+  qualityAssessment.value = null;
+  selectedEvidenceId.value = null;
+  selectedParagraphId.value = null;
   artifactManifest.value = [];
   streamTelemetry.value = null;
   progressLogs.value = [];
