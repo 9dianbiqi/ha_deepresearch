@@ -74,6 +74,10 @@
     </p>
     <p v-else class="empty-copy">当前筛选条件下没有证据。</p>
 
+    <p v-if="selectedEvidenceUnavailable" class="quality-notice" role="alert">
+      所选引用证据不可用，未使用其他证据代替。
+    </p>
+
     <article v-if="selectedEvidence" class="evidence-detail" aria-live="polite">
       <div class="detail-heading">
         <div>
@@ -255,11 +259,19 @@ const filteredEvidence = computed(() => {
   });
 });
 
-const selectedEvidence = computed(() =>
-  filteredEvidence.value.find((item) => item.evidence_id === props.selectedEvidenceId) ??
-  filteredEvidence.value[0] ??
-  null,
+const explicitlySelectedEvidence = computed(() => {
+  if (!props.selectedEvidenceId) return null;
+  return props.evidence.find((item) => item.evidence_id === props.selectedEvidenceId) ?? null;
+});
+
+const selectedEvidenceUnavailable = computed(
+  () => Boolean(props.selectedEvidenceId) && explicitlySelectedEvidence.value === null,
 );
+
+const selectedEvidence = computed(() => {
+  if (props.selectedEvidenceId) return explicitlySelectedEvidence.value;
+  return filteredEvidence.value[0] ?? null;
+});
 
 const relatedClaims = computed(() => {
   if (!selectedEvidence.value) return [];

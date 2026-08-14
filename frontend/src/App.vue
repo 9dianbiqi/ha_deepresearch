@@ -692,6 +692,40 @@
   </main>
 </template>
 
+<script lang="ts">
+export interface ResearchHydrationToken {
+  readonly runId: string;
+  readonly generation: number;
+}
+
+export interface ResearchHydrationGuard {
+  invalidate: () => number;
+  capture: (runId: string) => ResearchHydrationToken;
+  isGenerationCurrent: (generation: number) => boolean;
+  isCurrent: (token: ResearchHydrationToken, currentRunId: string | null) => boolean;
+}
+
+export function createResearchHydrationGuard(): ResearchHydrationGuard {
+  let generation = 0;
+
+  return {
+    invalidate() {
+      generation += 1;
+      return generation;
+    },
+    capture(runId) {
+      return { runId, generation };
+    },
+    isGenerationCurrent(candidate) {
+      return candidate === generation;
+    },
+    isCurrent(token, currentRunId) {
+      return token.generation === generation && token.runId === currentRunId;
+    },
+  };
+}
+</script>
+
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { marked } from "marked";
@@ -814,6 +848,7 @@ const artifactManifest = ref<GithubArtifact[]>([]);
 let currentController: AbortController | null = null;
 let pulseRaf = 0;
 let pulseTimer = 0;
+const researchHydrationGuard = createResearchHydrationGuard();
 
 const apiKeyReady = computed(() => Boolean(apiKey.value));
 
@@ -1050,29 +1085,37 @@ function setResearchData(
   artifactManifest.value = artifactDescriptors(researchValue);
 }
 
-async function hydrateEvidenceArtifacts(runId: string): Promise<void> {
-  const structuredArtifact = artifactManifest.value.find((artifact) => {
+async function hydrateEvidenceArtifacts(token: ResearchHydrationToken): Promise<void> {
+  if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
+
+  const manifest = [...artifactManifest.value];
+  const structuredArtifact = manifest.find((artifact) => {
     const key = `${artifact.artifact_type} ${artifact.path}`.toLowerCase();
     return key.includes("structured_summary") || key.includes("structured-summary");
   });
-  const qualityArtifact = artifactManifest.value.find((artifact) => {
+  const qualityArtifact = manifest.find((artifact) => {
     const key = `${artifact.artifact_type} ${artifact.path}`.toLowerCase();
     return key.includes("quality_assessment") || key.includes("quality-assessment");
   });
   if (!structuredSummary.value && structuredArtifact) {
     try {
-      structuredSummary.value = structuredSummaryFrom(
-        await fetchJsonArtifact<unknown>(runId, structuredArtifact.artifact_id),
+      const value = structuredSummaryFrom(
+        await fetchJsonArtifact<unknown>(token.runId, structuredArtifact.artifact_id),
       );
+      if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
+      structuredSummary.value = value;
     } catch {
       // The Markdown report remains available when an optional structured artifact is absent.
     }
   }
+  if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
   if (!qualityAssessment.value && qualityArtifact) {
     try {
-      qualityAssessment.value = qualityAssessmentFrom(
-        await fetchJsonArtifact<unknown>(runId, qualityArtifact.artifact_id),
+      const value = qualityAssessmentFrom(
+        await fetchJsonArtifact<unknown>(token.runId, qualityArtifact.artifact_id),
       );
+      if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
+      qualityAssessment.value = value;
     } catch {
       // Quality details are optional and never invalidate a completed report view.
     }
@@ -1284,12 +1327,14 @@ async function removeUserMemory(memory: UserMemory): Promise<void> {
 
 async function openHistory(item: HistoryItem): Promise<void> {
   if (loading.value || historyLoading.value) return;
+  const requestGeneration = researchHydrationGuard.invalidate();
   historyLoading.value = true;
   historyError.value = "";
   try {
     const record = await getRunRecord(item.run_id);
+    if (!researchHydrationGuard.isGenerationCurrent(requestGeneration)) return;
     const output = ensureRecord(record.output);
-    resetWorkflowState();
+    const generation = resetWorkflowState();
     currentRunId.value = record.run_id;
     resumableRunId.value =
       record.resumable === false
@@ -1312,7 +1357,9 @@ async function openHistory(item: HistoryItem): Promise<void> {
       output.structured_summary,
       output.quality_assessment,
     );
-    await hydrateEvidenceArtifacts(record.run_id);
+    const token: ResearchHydrationToken = { runId: record.run_id, generation };
+    await hydrateEvidenceArtifacts(token);
+    if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
     progressLogs.value = [`已恢复历史研究：${currentTopic.value}`];
     historyRecallCount.value = 0;
     try {
@@ -1327,10 +1374,11 @@ async function openHistory(item: HistoryItem): Promise<void> {
   }
 }
 
-async function hydrateRunArtifacts(runId: string | null): Promise<void> {
-  if (!runId) return;
+async function hydrateRunArtifacts(token: ResearchHydrationToken): Promise<void> {
+  if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
   try {
-    const record = await getRunRecord(runId);
+    const record = await getRunRecord(token.runId);
+    if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
     const output = ensureRecord(record.output);
     setResearchData(
       output.github_intelligence,
@@ -1338,7 +1386,7 @@ async function hydrateRunArtifacts(runId: string | null): Promise<void> {
       output.structured_summary,
       output.quality_assessment,
     );
-    await hydrateEvidenceArtifacts(runId);
+    await hydrateEvidenceArtifacts(token);
   } catch {
     // The SSE terminal event remains authoritative if the record is not yet readable.
   }
@@ -1585,7 +1633,8 @@ function resetWorkflowState(
     preserveRunId?: boolean;
     preserveResumableRunId?: boolean;
   } = {},
-) {
+): number {
+  const generation = researchHydrationGuard.invalidate();
   clearAnimations();
   todoTasks.value = [];
   activeTaskId.value = null;
@@ -1614,6 +1663,7 @@ function resetWorkflowState(
   if (!options.preserveResumableRunId) {
     resumableRunId.value = null;
   }
+  return generation;
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
@@ -1702,7 +1752,10 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     } else if (typeof event.last_resumable_parent === "string") {
       resumableRunId.value = event.last_resumable_parent;
     }
-    void hydrateRunArtifacts(currentRunId.value);
+    const completedRunId = currentRunId.value;
+    if (completedRunId) {
+      void hydrateRunArtifacts(researchHydrationGuard.capture(completedRunId));
+    }
     try {
       if (currentRunId.value) {
         window.localStorage.setItem("helloagents:last-run-id", currentRunId.value);
@@ -1897,7 +1950,7 @@ const handleSubmit = async () => {
     currentController = null;
   }
 
-  resetWorkflowState();
+  const streamGeneration = resetWorkflowState();
   currentTopic.value = topic;
   loading.value = true;
 
@@ -1911,7 +1964,11 @@ const handleSubmit = async () => {
         search_api: form.searchApi || undefined,
         use_history_memory: form.useHistoryMemory,
       },
-      handleStreamEvent,
+      (event) => {
+        if (researchHydrationGuard.isGenerationCurrent(streamGeneration)) {
+          handleStreamEvent(event);
+        }
+      },
       { signal: controller.signal }
     );
 
@@ -1948,7 +2005,7 @@ const handleContinue = async () => {
 
   const topic = form.followupTopic.trim();
 
-  resetWorkflowState({
+  const streamGeneration = resetWorkflowState({
     preserveRunId: true,
     preserveResumableRunId: true,
   });
@@ -1966,9 +2023,15 @@ const handleContinue = async () => {
   };
 
   try {
-    await runContinueStream(continuePayload, handleStreamEvent, {
-      signal: controller.signal,
-    });
+    await runContinueStream(
+      continuePayload,
+      (event) => {
+        if (researchHydrationGuard.isGenerationCurrent(streamGeneration)) {
+          handleStreamEvent(event);
+        }
+      },
+      { signal: controller.signal },
+    );
 
     if (!reportMarkdown.value) {
       reportMarkdown.value = "暂无生成的报告";
