@@ -1,0 +1,66 @@
+{
+  "structured_summary": {
+    "schema_version": 1,
+    "task_id": "task_architecture",
+    "paragraphs": [
+      {
+        "paragraph_id": "para_1317219963a54e389381",
+        "section_id": "architecture",
+        "paragraph_type": "factual",
+        "text": "The service streams research progress over Server-Sent Events.",
+        "claim_ids": [
+          "claim_streaming"
+        ],
+        "citation_ids": [
+          "ev_streaming_route"
+        ]
+      }
+    ],
+    "claim_ids": [
+      "claim_streaming"
+    ]
+  },
+  "quality_assessment": {
+    "schema_version": 1,
+    "passed": true,
+    "overall_score": 0.9,
+    "thresholds": {
+      "citation_score": 0.85,
+      "factual_score": 0.75,
+      "overall_score": 0.78,
+      "semantic_score": 0.72
+    },
+    "paragraph_assessments": [
+      {
+        "paragraph_id": "para_1317219963a54e389381",
+        "semantic_score": 0.93,
+        "factual_score": 0.91,
+        "citation_score": 1.0,
+        "support_confidence": 0.93,
+        "level": "high",
+        "blockers": [],
+        "warnings": []
+      }
+    ],
+    "claim_assessments": [
+      {
+        "claim_id": "claim_streaming",
+        "semantic_score": 0.93,
+        "factual_score": 0.91,
+        "citation_score": 1.0,
+        "support_confidence": 0.93,
+        "verdict": "supported",
+        "supporting_evidence_ids": [
+          "ev_streaming_route"
+        ],
+        "conflicting_evidence_ids": [],
+        "reasons": [
+          "The cited source directly describes the streaming route."
+        ]
+      }
+    ],
+    "verifier": "fixture-verifier",
+    "verifier_version": "1.0",
+    "prompt_version": "summary-support-v1"
+  }
+}
