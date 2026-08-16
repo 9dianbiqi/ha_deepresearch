@@ -256,6 +256,30 @@ def test_web_provider_turns_unexpected_dispatcher_failures_into_stable_notice() 
     assert "raw backend secret" not in " ".join(result.notices)
 
 
+def test_web_provider_truncates_cleanly_when_evidence_budget_is_exhausted() -> None:
+    """An exhausted evidence budget must not fail the whole research run."""
+    context = make_context(mode=ResearchMode.WEB)
+    context.budget.reserve(evidence=180)
+    collection = WebSourceProvider().collect_search_result(
+        {
+            "title": "Example page",
+            "url": "https://example.com/docs",
+            "content": "metadata fallback",
+            "raw_content": (
+                "<html><body>"
+                "<p>This is a sufficiently long first paragraph for evidence.</p>"
+                "<p>This is a sufficiently long second paragraph for evidence.</p>"
+                "</body></html>"
+            ),
+        },
+        context,
+    )
+
+    assert collection.collection_status == "complete"
+    assert collection.records == ()
+    assert context.budget.remaining()["evidence"] == 0
+
+
 def test_provider_enrich_requires_a_target_and_consumes_a_bounded_budget() -> None:
     """Enrichment uses the same typed target path and budget accounting."""
     context = make_context()

@@ -58,6 +58,7 @@ _SAFE_REPLAY_OPERATION_PREFIXES = (
     "planner.",
     "summarizer.",
     "reporter.",
+    "quality_",
     "llm.",
     "search.",
     "github.",

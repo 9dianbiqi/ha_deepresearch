@@ -241,10 +241,13 @@ class WebSourceProvider:
             raise TypeError("Web capture service returned an invalid result.")
         records = capture.as_records(dimension=dimension)
         remaining = context.budget.remaining()["evidence"]
-        if records and remaining < 1:
-            context.budget.reserve(evidence=1)
-        bounded_records = records[:remaining]
-        context.budget.reserve(evidence=len(bounded_records))
+        # A profile budget is a hard upper bound.  Once it is exhausted, keep
+        # the capture metadata for provenance but return no additional records;
+        # attempting to reserve a synthetic record here would turn a normal
+        # multi-result truncation into a coordinator-wide failure.
+        bounded_records = records[:remaining] if remaining > 0 else ()
+        if bounded_records:
+            context.budget.reserve(evidence=len(bounded_records))
         target = SourceTarget(
             provider_id=self.provider_id,
             source_kind="web_page",
