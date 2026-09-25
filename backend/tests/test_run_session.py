@@ -38,6 +38,40 @@ def test_event_sequence_is_monotonic() -> None:
     assert [event.sequence for event in session.events] == [1, 2]
 
 
+def test_task_quality_decision_is_evented_and_persisted_in_metrics() -> None:
+    """Task-quality diagnostics survive snapshot persistence without raw evidence."""
+    session = make_session()
+    session.start()
+    session.install_plan([TodoItem(id=1, title="T", intent="I", query="q")])
+
+    event = session.record_task_quality(
+        1,
+        {
+            "action": "retrieve_gaps",
+            "reason_codes": ["missing_primary_source"],
+            "retrieval_relevance": 0.9,
+            "claim_support": 0.4,
+            "citation_integrity": 1.0,
+            "checked_claim_ids": ["task-1-claim-1"],
+            "retrieval_gaps": [
+                {
+                    "claim_id": "task-1-claim-1",
+                    "gap_type": "missing_primary_source",
+                    "topic": "Redis slot count",
+                    "preferred_source_types": ["official_documentation"],
+                    "time_constraint": None,
+                }
+            ],
+        },
+    )
+
+    snapshot = session.to_snapshot().as_dict()
+    assert event.kind is EventKind.TASK_QUALITY_EVALUATED
+    assert event.payload["claim_support"] == 0.4
+    assert snapshot["metrics"]["task_quality"]["1"][0]["action"] == "retrieve_gaps"
+    assert "evidence" not in json.dumps(event.as_dict()).casefold()
+
+
 def test_reentrant_observer_preserves_fifo_for_later_observers() -> None:
     session = make_session()
     observed_by_second: list[int] = []

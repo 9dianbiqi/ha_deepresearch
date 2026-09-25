@@ -19,6 +19,7 @@ from main import _build_harness_response
 from models import ResearchState, SummaryState, TodoItem
 from research.artifacts import FileArtifactStore
 from research.claim_verifier import FactualVerification, SupportSpan
+from research.context import FollowupContext, ResearchContextAssembler
 from research.contracts import EventKind, ResearchCommand
 from research.intelligence import (
     ClaimRecord,
@@ -38,10 +39,134 @@ from research.report_document import (
     SummaryQualityAssessment,
 )
 from research.report_renderer import render_structured_report
-from research.session import RunSession
+from research.session import (
+    CancellationRequestedError,
+    DeadlineExceededError,
+    RunSession,
+)
 from research.sources import SourceProviderRegistry
 from research.summary_quality import SummaryQualityGateV1
+from research.task_quality import (
+    ClaimJudgment,
+    ClaimVerdict,
+    TaskQualityController,
+)
+from research.task_quality import (
+    SupportSpan as TaskSupportSpan,
+)
 from research.web_capture import WebCaptureService
+
+
+@pytest.mark.parametrize(
+    ("mode", "profile_id"),
+    [(ResearchMode.WEB, None), (None, "web.evidence.v1")],
+)
+def test_task_summary_and_judge_read_shared_captures_before_final_report(
+    monkeypatch, mode, profile_id,
+):
+    config = _config(enable_quality_gate=True, max_concurrent_tasks=2)
+    agent, _ = _agent(config)
+    provider = agent._research_kernel.provider_registry.get("web")
+    original_capture = provider.capture_search_result
+    captured = []
+    requests = []
+    judgments = []
+
+    def capture(result, context):
+        page = original_capture(result, context)
+        captured.append(page)
+        return page
+
+    monkeypatch.setattr(provider, "capture_search_result", capture)
+
+    def candidate_search(query, search_config, loop_count, **kwargs):
+        assert search_config.fetch_full_page is False
+        return _search(query, search_config, loop_count, **kwargs)
+
+    monkeypatch.setattr(provider, "_dispatcher", candidate_search)
+
+    planner_calls = []
+    planned_tasks = [
+        TodoItem(
+            id=index, title=f"Verify {index}",
+            intent="Collect an evidence-backed overview",
+            query=f"Alpha evidence research {index}",
+        ) for index in (1, 2)
+    ]
+
+    def plan(state, **kwargs):
+        planner_calls.append(kwargs)
+        return planned_tasks
+
+    monkeypatch.setattr(agent.planner, "plan_todo_list", plan)
+
+    class GroundedSummary:
+        def stream_summary(self, request):
+            assert len(captured) == 2
+            assert len(request.evidence) == 2
+            assert "Worker-only source body" not in request.context
+            assert all(item.evidence_level == "full_text" for item in request.evidence)
+            assert all(item.locator["paragraph"] for item in request.evidence)
+            requests.append(request)
+            item = request.evidence[0]
+            summary = f"- {item.excerpt} [{item.evidence_id}]"
+            return iter((summary,)), lambda: summary
+
+    class Relevant:
+        def score(self, query, intent, evidence):
+            return 1.0
+
+    class Judge:
+        def judge(self, claims, evidence, budget):
+            judgments.append(evidence)
+            assert len(captured) == 2
+            assert all(item.evidence_level == "full_text" for item in evidence)
+            by_id = {item.evidence_id: item for item in evidence}
+            return tuple(
+                ClaimJudgment(
+                    claim_id=claim.claim_id, verdict=ClaimVerdict.SUPPORTED,
+                    supporting_evidence_ids=claim.evidence_ids,
+                    support_spans=tuple(
+                        TaskSupportSpan(evidence_id=eid, exact_text=by_id[eid].excerpt)
+                        for eid in claim.evidence_ids
+                    ),
+                    reason_code="fixture_supported",
+                )
+                for claim in claims
+            )
+
+    agent.summarizer = GroundedSummary()
+    agent._task_quality_controller = TaskQualityController(ranker=Relevant(), judge=Judge())
+    session = _session(config, mode=mode, profile_id=profile_id)
+    checkpoints = []
+    session.checkpoint_writer = lambda snapshot: checkpoints.append(snapshot.checkpoint_state)
+    session.related_history_context = {"summary": "Previous research"}
+    session.user_memory_context = {"preference": "Prefer official sources"}
+    prior = FollowupContext(
+        source_run_id="previous", key_findings=("Alpha finding",),
+        key_sources=(), open_questions=("How does it work?",),
+    )
+    agent.execute(session, prior)
+    assert len(planner_calls) == 1
+    assert planner_calls[0]["prior_context"] == ResearchContextAssembler().assemble(prior)
+    assert planner_calls[0]["related_history"] == session.related_history_context
+    assert planner_calls[0]["user_memories"] == session.user_memory_context
+    assert planner_calls[0]["operation_scope"].operations.session is session
+    planning = next(item for item in checkpoints if item["phase"] == "planning_completed")
+    assert [(item["id"], item["title"], item["intent"], item["query"])
+            for item in planning["task_state"]] == [
+        (item.id, item.title, item.intent, item.query) for item in planned_tasks
+    ]
+    assert all(item.status == "completed" for item in session.state.todo_items)
+    assert len(requests) == 2
+    assert len(judgments) == 2
+    assert len(captured) == 2  # Neither the second task nor finalization reads again.
+    bundle = ResearchIntelligenceBundle.from_dict(session.state.research_intelligence)
+    canonical = {item.evidence_id: item for item in bundle.evidence}
+    for request in requests:
+        for item in request.evidence:
+            assert canonical[item.evidence_id].excerpt == item.excerpt
+            assert canonical[item.evidence_id].locator.as_dict() == dict(item.locator)
 
 
 class _Planner:
@@ -367,13 +492,21 @@ def test_web_evidence_selection_is_explicit_and_flag_gated(
     assert agent._should_use_research_kernel(disabled) is False
 
 
-def test_disabled_explicit_profile_falls_back_without_mislabeling() -> None:
+def test_disabled_explicit_profile_falls_back_without_mislabeling(monkeypatch) -> None:
     config = _config(enable_evidence_web=False)
     agent, reporter = _agent(config)
     session = _session(config, profile_id="web.evidence.v1")
+    original_plan = agent.planner.plan_todo_list
+    planner_calls = []
 
+    def plan(state, prior_context=None):
+        planner_calls.append(prior_context)
+        return original_plan(state, prior_context=prior_context)
+
+    monkeypatch.setattr(agent.planner, "plan_todo_list", plan)
     agent.execute(session, None)
 
+    assert len(planner_calls) == 1
     assert session.state.research_profile_id == "web.default.v1"
     assert session.state.research_intelligence == {}
     assert session.state.structured_report == "Legacy report remains unchanged."
@@ -637,3 +770,94 @@ def test_shared_quality_agent_calls_are_serialized_across_runs() -> None:
         assert [future.result() for future in futures] == [1.0, 1.0]
 
     assert detector.max_active == 1
+
+
+def test_evidence_web_empty_plan_uses_fallback_once(monkeypatch):
+    config = _config()
+    agent, _ = _agent(config)
+    calls = []
+    fallback_calls = []
+
+    def plan(*args, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    def fallback(state):
+        fallback_calls.append(state)
+        return TodoItem(id=1, title="Fallback", intent="Overview", query=state.research_topic)
+
+    monkeypatch.setattr(agent.planner, "plan_todo_list", plan)
+    monkeypatch.setattr(agent.planner, "create_fallback_task", fallback)
+    session = _session(config, mode=ResearchMode.WEB)
+    agent.execute(session, None)
+    assert len(calls) == len(fallback_calls) == 1
+    assert [task.title for task in session.state.todo_items] == ["Fallback"]
+
+
+def test_evidence_web_plan_budget_fails_before_task_side_effects(monkeypatch):
+    config = _config()
+    agent, _ = _agent(config)
+    monkeypatch.setattr(agent.planner, "plan_todo_list", lambda *args, **kwargs: [
+        TodoItem(id=index, title="Task", intent="Overview", query="Alpha")
+        for index in range(1, 10)
+    ])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Task side effects must not run before plan budget validation")
+
+    monkeypatch.setattr(agent, "_create_task_notes_for_tasks", forbidden)
+    monkeypatch.setattr(agent, "_execute_work_items", forbidden)
+    session = _session(config, mode=ResearchMode.WEB)
+    with pytest.raises(ValueError, match="Planned tasks exceed"):
+        agent.execute(session, None)
+    assert session.state.todo_items == []
+    assert session.checkpoint_phase != "planning_completed"
+
+
+@pytest.mark.parametrize("error_type", [CancellationRequestedError, DeadlineExceededError])
+def test_evidence_web_planner_control_errors_are_not_fallback(monkeypatch, error_type):
+    config = _config()
+    agent, _ = _agent(config)
+
+    def plan(*args, **kwargs):
+        raise error_type("Controlled planning stop")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Controlled planning errors must not generate a fallback")
+
+    monkeypatch.setattr(agent.planner, "plan_todo_list", plan)
+    monkeypatch.setattr(agent.planner, "create_fallback_task", forbidden)
+    monkeypatch.setattr(agent, "_create_task_notes_for_tasks", forbidden)
+    with pytest.raises(error_type):
+        agent.execute(_session(config, mode=ResearchMode.WEB), None)
+
+
+@pytest.mark.parametrize("phase", ["planning_completed", "research_tasks_progress"])
+def test_evidence_web_task_resume_does_not_replan(monkeypatch, tmp_path, phase):
+    config = _config()
+    agent, _ = _agent(config, artifact_store=FileArtifactStore(tmp_path))
+    session = _session(config, mode=ResearchMode.WEB)
+    original = TodoItem(id=7, title="Saved task", intent="Saved intent", query="Saved query")
+    session.install_plan([original])
+    scope = OperationScope(operations=GovernedOperations(session, agent._operation_authorizer))
+    prepared = agent._prepare_kernel_research(session, operation_scope=scope)
+    agent._install_kernel_baseline(session, prepared)
+    agent._persist_research_checkpoint(session, phase, prepared)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Task resume must use the saved plan without invoking Planner")
+
+    class ReachedExecution(Exception):
+        pass
+
+    def stop_at_execution(current_session, work_items):
+        assert [(item.task_id, item.title, item.intent, item.original_query) for item in work_items] == [
+            (7, "Saved task", "Saved intent", "Saved query")
+        ]
+        raise ReachedExecution
+
+    monkeypatch.setattr(agent.planner, "plan_todo_list", forbidden)
+    monkeypatch.setattr(agent.planner, "create_fallback_task", forbidden)
+    monkeypatch.setattr(agent, "_execute_work_items", stop_at_execution)
+    with pytest.raises(ReachedExecution):
+        agent.resume(session, None)

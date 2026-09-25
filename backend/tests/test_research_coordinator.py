@@ -1225,7 +1225,7 @@ def test_no_results_retry_preserves_payload_history_and_original_query() -> None
     }
 
 
-def test_quality_gate_retry_preserves_reason_and_original_query() -> None:
+def test_quality_gate_regenerates_before_spending_retrieval_budget() -> None:
     task = TodoItem(
         id=1,
         title="Quality",
@@ -1245,15 +1245,22 @@ def test_quality_gate_retry_preserves_reason_and_original_query() -> None:
     agent.execute(session, None)
 
     canonical = session.state.todo_items[0]
-    retry = next(
-        event for event in session.events
-        if event.kind is EventKind.TASK_RETRY_SCHEDULED
-    )
+    quality_events = [
+        event
+        for event in session.events
+        if event.kind is EventKind.TASK_QUALITY_EVALUATED
+    ]
     assert canonical.status == "completed"
     assert canonical.query == "original"
-    assert canonical.refined_queries == ["broader intent"]
-    assert retry.payload["attempt"] == 1
-    assert retry.payload["reason"] == "too_short,no_structure"
+    assert canonical.refined_queries == []
+    assert [event.payload["action"] for event in quality_events] == [
+        "regenerate_summary",
+        "repair_citations",
+    ]
+    assert quality_events[0].payload["reason_codes"] == (
+        "too_short",
+        "no_structure",
+    )
 
 
 def test_task_workers_never_exceed_configured_concurrency() -> None:
@@ -2590,3 +2597,39 @@ def test_application_service_completes_with_real_coordinator_and_fakes() -> None
     assert "# Final report" in result.output.report_markdown
     assert "states (completed)" in result.output.report_markdown
     assert result.run_id in repository.snapshots
+
+
+@pytest.mark.parametrize("mode", [None, "github"])
+def test_github_template_plan_does_not_invoke_web_planner(monkeypatch, mode):
+    """Keep both existing GitHub template paths independent of Web planning."""
+    config = make_config(enable_github_research=True, enable_evidence_web=True)
+    planner = FakePlanner()
+
+    class GitHubAdapter:
+        def collect_repository_context(self, target, **kwargs):
+            return GitHubRepositoryContext(target=target, repository={"stars": 1})
+
+    agent = DeepResearchAgent(
+        config=config, planner=planner, search_adapter=FakeSearchAdapter(),
+        context_preparer=fake_context_preparer, summarizer=FakeSummarizer(),
+        reporting=FakeReporter(), note_agent=None, github_adapter=GitHubAdapter(),
+    )
+    topic = "https://github.com/owner/repository"
+    session = RunSession(
+        command=ResearchCommand(topic=topic, config=config, research_mode=mode),
+        state=ResearchState(research_topic=topic),
+    )
+    session.start()
+
+    class ReachedExecution(Exception):
+        pass
+
+    def stop_at_execution(current_session, work_items):
+        assert len(work_items) > 1
+        assert planner.states == []
+        assert all(item.repository == "owner/repository" for item in work_items)
+        raise ReachedExecution
+
+    monkeypatch.setattr(agent, "_execute_work_items", stop_at_execution)
+    with pytest.raises(ReachedExecution):
+        agent.execute(session, None)

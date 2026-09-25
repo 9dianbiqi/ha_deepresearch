@@ -114,6 +114,7 @@ class EventKind(str, Enum):
     SOURCES_COLLECTED = "sources_collected"
     SUMMARY_DELTA = "summary_delta"
     SUMMARY_QUALITY_UPDATE = "summary_quality_update"
+    TASK_QUALITY_EVALUATED = "task_quality_evaluated"
     TASK_RETRY_SCHEDULED = "task_retry_scheduled"
     TASK_COMPLETED = "task_completed"
     TASK_SKIPPED = "task_skipped"

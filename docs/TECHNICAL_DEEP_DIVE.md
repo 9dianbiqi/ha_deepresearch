@@ -34,6 +34,7 @@ backend/src/
 │   ├── context.py                  follow-up projection 与 prompt context assembly
 │   ├── repository.py               schema-v1 原子文件仓库
 │   ├── validation.py               在线 terminal correctness validation
+│   ├── task_quality.py              普通任务质量诊断、批量 judge 与动作决策
 │   ├── legacy_sse.py               内部事件到旧 SSE 的纯投影
 │   ├── observers.py                observer 组合与安全边界
 │   └── evaluation.py               离线 RunSnapshot assessment
@@ -251,7 +252,10 @@ planner LLM
      -> search/cache/retry/fallback
      -> context preparation
      -> summarizer stream
-     -> optional summary quality retry
+     -> task quality controller
+        -> repair citations / regenerate with existing Evidence
+        -> retrieve explicit Evidence gaps when required
+        -> preserve conflicts or degrade/block by mode
 -> coordinator merges worker messages
 -> optional task note updates
 -> reporter LLM
@@ -259,7 +263,7 @@ planner LLM
 -> canonical report transition
 ```
 
-在线 `ENABLE_QUALITY_GATE` 只检查单个摘要并可能细化 query 重试。它与离线 `ResearchAssessment` 的用途和生命周期不同。
+在线 `ENABLE_QUALITY_GATE` 对普通任务分别检查 retrieval relevance、claim support 与 citation integrity。三者不是三次 LLM 调用：relevance 使用 ranking/reranker seam，citation 使用确定性规则，只有最多 3 个高风险 claim 进入有界批量 claim-evidence judge。Controller 根据稳定原因码选择修引用、重写摘要、按 `RetrievalGap` 补检索、保留冲突、降级或阻断。它与离线 `ResearchAssessment` 的用途和生命周期不同。
 
 ### 5.2 GitHub 主题
 
@@ -381,13 +385,13 @@ wrapper 不访问 `_client`、`_history` 等私有字段。并发 summarizer 通
 - configured backend；
 - 每 backend 最多 3 次物理尝试；
 - 非 DuckDuckGo backend 失败后的 DuckDuckGo fallback；
-- 显式启用的首轮 search cache（默认关闭）；
+- 默认启用、按唯一 query 生效的 24 小时 search cache；
 - structured result、answer、source formatting；
 - 可取消 backoff。
 
 Perplexity 每个真实尝试需要 `search:web` 与 `search:premium`。如果 premium policy 拒绝，异常作为 control flow 立即上抛，不能降级到免费的 backend 以绕过策略。
 
-cache read/write 也在同一 search scope 下审计。cache 必须由调用方显式 opt-in；持久化时只保留有界的 schema-v1 安全投影，URL 去除 userinfo、fragment 和已知敏感 query 参数，同时保留用于资源身份的普通参数及其重复值、空值，且不写入 `raw_content`、直接答案或 provider 扩展字段。默认应用在 ASGI startup 从解析后的 workspace parent 信任根扫描直属 cache 条目，拒绝 symlink/reparse 路径，并清除 legacy/未知 schema、过期文件和本应用遗留临时文件；扫描通过 512 条目、1 秒和单文件 256 KiB 的预算限制启动成本，直接 cache read 复用同一有界读取与精确 schema 校验。event 只记录 SHA-256 query hash；原 query 和 raw result 不进入 operation event。
+cache read/write 也在同一 search scope 下审计。cache 默认由 `ENABLE_SEARCH_CACHE=true` 启用，TTL 由 `SEARCH_CACHE_TTL_SECONDS` 控制；表达“最新、当前、实时、价格、版本、政策”等 freshness intent 的查询自动绕过读写。持久化时只保留有界的 schema-v1 安全投影，URL 去除 userinfo、fragment 和已知敏感 query 参数，同时保留用于资源身份的普通参数及其重复值、空值，且不写入 `raw_content`、直接答案或 provider 扩展字段。运行时 Evidence 元数据派生 `retrieved_at`、`cache_age_seconds`、provider、original query 与 content hash。默认应用在 ASGI startup 从解析后的 workspace parent 信任根扫描直属 cache 条目，拒绝 symlink/reparse 路径，并清除 legacy/未知 schema、过期文件和本应用遗留临时文件；扫描通过 512 条目、1 秒和单文件 256 KiB 的预算限制启动成本，直接 cache read 复用同一有界读取与精确 schema 校验。operation event 只记录 SHA-256 query hash，不包含原 query 和 raw result。
 
 ### 7.3 GitHub
 

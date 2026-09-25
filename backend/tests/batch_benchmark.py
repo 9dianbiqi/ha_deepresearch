@@ -71,7 +71,7 @@ def _evaluate_persisted_run(
 
 
 def _check_summary_quality_static(summary: str) -> QualityCheck:
-    """Standalone copy of DeepResearchAgent._check_summary_quality for analysis."""
+    """Legacy basic-summary metric retained for historical benchmark comparison."""
     passed = True
     reasons = []
     if not summary or summary.strip() == "暂无可用信息":

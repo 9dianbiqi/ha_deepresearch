@@ -27,6 +27,7 @@ from .contracts import (
     canonicalize_github_report,
     deterministic_citation_block,
 )
+from .evidence_normalization import normalize_collections
 from .history import HistoryCursorError, HistoryPage, ResearchHistoryStore
 from .intelligence import (
     INTELLIGENCE_SCHEMA_VERSION,
@@ -51,7 +52,7 @@ from .memory import (
     UserMemory,
     UserMemoryStore,
 )
-from .pipeline import PreparedResearch, ResearchKernel
+from .pipeline import PreparedResearch, ResearchKernel, TaskEvidenceBinding
 from .profiles import (
     CitationPolicy,
     CoveragePolicy,
@@ -86,6 +87,16 @@ from .session import (
     CheckpointPersistenceError,
     InvalidTransitionError,
     RunSession,
+)
+from .task_quality import (
+    ClaimJudgment,
+    ClaimVerdict,
+    QualityAction,
+    QualityMode,
+    RetrievalGap,
+    TaskQualityController,
+    TaskQualityInput,
+    TaskQualityResult,
 )
 
 __all__ = [
@@ -128,8 +139,10 @@ __all__ = [
     "GenericReportSpec",
     "ResearchIntelligenceBundle",
     "PreparedResearch",
+    "TaskEvidenceBinding",
     "ParagraphQualityAssessment",
     "ResearchKernel",
+    "normalize_collections",
     "SourceReference",
     "StructuredSummaryDocument",
     "SummaryParagraph",
@@ -148,6 +161,14 @@ __all__ = [
     "RunSession",
     "RunSnapshot",
     "RunStatus",
+    "ClaimJudgment",
+    "ClaimVerdict",
+    "QualityAction",
+    "QualityMode",
+    "RetrievalGap",
+    "TaskQualityController",
+    "TaskQualityInput",
+    "TaskQualityResult",
     "ResearchHistoryStore",
     "MemoryNotFoundError",
     "MemoryStateError",

@@ -272,6 +272,8 @@ class RunSession:
         phase: str,
         *,
         resumable: bool = True,
+        evidence_recovery: Mapping[str, Any] | None = None,
+        evidence_recovery_unavailable: bool = False,
     ) -> RunSnapshot:
         """Build and atomically persist one validated recovery checkpoint."""
         if not isinstance(phase, str) or not phase.strip():
@@ -281,7 +283,15 @@ class RunSession:
             checkpoint_state = self._build_checkpoint_state_locked(
                 phase=phase.strip(),
                 resumable=resumable,
+                evidence_recovery=evidence_recovery,
+                evidence_recovery_unavailable=evidence_recovery_unavailable,
             )
+            if evidence_recovery is not None:
+                from .evidence_recovery import validate_evidence_recovery
+                validate_evidence_recovery(
+                    evidence_recovery, run_id=self.run_id,
+                    task_state=checkpoint_state["task_state"],
+                )
             # A checkpoint that observes an uncertain side effect must never
             # replace the last trusted recovery target.  Keep the prior safe
             # checkpoint durable until a later boundary proves replay-safe.
@@ -364,6 +374,8 @@ class RunSession:
         *,
         phase: str,
         resumable: bool,
+        evidence_recovery: Mapping[str, Any] | None = None,
+        evidence_recovery_unavailable: bool = False,
     ) -> dict[str, Any]:
         """Capture only the detached state needed to replay the next phase."""
         from .operations import operation_replay_safety
@@ -436,9 +448,22 @@ class RunSession:
             recovery_blocked_reason = "operation_outcome_uncertain"
         elif not report_stream_safe:
             recovery_blocked_reason = "report_stream_incomplete"
+        elif evidence_recovery_unavailable:
+            recovery_blocked_reason = "evidence_recovery_unavailable"
         effective_resumable = bool(
-            resumable and active_operations_safe and report_stream_safe
+            resumable
+            and active_operations_safe
+            and report_stream_safe
+            and not evidence_recovery_unavailable
         )
+        task_quality = self.metrics.get("task_quality")
+        if not isinstance(task_quality, Mapping):
+            task_quality = {}
+        saved_evidence_recovery = evidence_recovery
+        if saved_evidence_recovery is None:
+            prior_evidence_recovery = self.checkpoint_state.get("evidence_recovery")
+            if isinstance(prior_evidence_recovery, Mapping):
+                saved_evidence_recovery = prior_evidence_recovery
         checkpoint_state = {
             "schema_version": 1,
             "checkpoint_id": checkpoint_id,
@@ -478,10 +503,13 @@ class RunSession:
                 "memory_scope": self.command.memory_scope,
                 "related_history_context": dict(self.related_history_context),
                 "user_memory_context": dict(self.user_memory_context),
+                "task_quality": dict(task_quality),
             },
             "validated": True,
             "resumable": effective_resumable,
         }
+        if saved_evidence_recovery is not None:
+            checkpoint_state["evidence_recovery"] = dict(saved_evidence_recovery)
         if recovery_blocked_reason is not None:
             checkpoint_state["recovery_blocked_reason"] = recovery_blocked_reason
         return checkpoint_state
@@ -708,7 +736,9 @@ class RunSession:
             if isinstance(raw_memory_context, Mapping)
             else {}
         )
-        raw_tasks_value = output.get("todo_items", [])
+        raw_tasks_value = checkpoint_state.get("task_state")
+        if not isinstance(raw_tasks_value, (list, tuple)):
+            raw_tasks_value = output.get("todo_items", [])
         raw_tasks = (
             raw_tasks_value
             if isinstance(raw_tasks_value, (list, tuple))
@@ -745,6 +775,19 @@ class RunSession:
             report_note_id=report_note_id,
             report_note_path=report_note_path,
         )
+        restored_metrics = json.loads(json.dumps(detached_snapshot["metrics"]))
+        checkpoint_task_quality = continuation_state.get("task_quality")
+        if isinstance(checkpoint_task_quality, Mapping):
+            restored_metrics["task_quality"] = {
+                str(key): value
+                for key, value in checkpoint_task_quality.items()
+                if isinstance(key, str)
+            }
+        else:
+            # Terminal metrics can contain quality judgments made after the
+            # durable checkpoint.  Do not let those later values leak into a
+            # recovered continuation.
+            restored_metrics.pop("task_quality", None)
         session = cls(
             command=command,
             state=state,
@@ -752,7 +795,7 @@ class RunSession:
             checkpoint=snapshot.checkpoint,
             checkpoint_state=checkpoint_state,
             last_resumable_parent=snapshot.last_resumable_parent,
-            metrics=json.loads(json.dumps(detached_snapshot["metrics"])),
+            metrics=restored_metrics,
             followup_context=dict(detached_snapshot["followup_context"]),
             related_history_context=related_history_context,
             user_memory_context=user_memory_context,
@@ -1546,6 +1589,41 @@ class RunSession:
             task.refined_queries.append(refined_query)
             task.query = refined_query
             task.notices.append(reason)
+            should_drain = self._commit_event_locked(event)
+        if should_drain:
+            self._drain_notifications()
+        return event
+
+    def record_task_quality(
+        self,
+        task_id: int,
+        assessment: Mapping[str, Any],
+    ) -> ResearchEvent:
+        """Persist bounded task-quality telemetry and emit an ordered event."""
+        try:
+            detached = json.loads(json.dumps(dict(assessment)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("Task quality assessment must be JSON serializable.") from exc
+        encoded = json.dumps(detached, ensure_ascii=False).encode("utf-8")
+        if len(encoded) > 16 * 1024:
+            raise ValueError("Task quality assessment exceeds its event bound.")
+        with self._lock:
+            self._require_running_locked()
+            task = self._task_locked(task_id)
+            payload = self._task_projection_locked(task)
+            payload.update(detached)
+            event = self._validated_event_locked(
+                EventKind.TASK_QUALITY_EVALUATED,
+                payload,
+                task_id=task_id,
+            )
+            raw_quality = self.metrics.get("task_quality")
+            quality = dict(raw_quality) if isinstance(raw_quality, Mapping) else {}
+            raw_attempts = quality.get(str(task_id))
+            attempts = list(raw_attempts) if isinstance(raw_attempts, list) else []
+            attempts.append(detached)
+            quality[str(task_id)] = attempts[-8:]
+            self.metrics["task_quality"] = quality
             should_drain = self._commit_event_locked(event)
         if should_drain:
             self._drain_notifications()

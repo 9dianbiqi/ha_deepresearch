@@ -181,6 +181,15 @@ class WebSourceProvider:
         path is parsed locally. Otherwise the page fetch is run through the
         existing governed ``search:web`` operation boundary.
         """
+        capture = self.capture_search_result(result, context)
+        return self.collection_from_capture(capture, context, dimension=dimension)
+
+    def capture_search_result(
+        self,
+        result: Mapping[str, object],
+        context: ProviderContext,
+    ) -> WebCaptureResult:
+        """Read one page without consuming paragraph evidence budget."""
         context.cancellation.raise_if_cancelled()
         raw_url = result.get("url")
         if not isinstance(raw_url, str) or not raw_url.strip():
@@ -239,6 +248,16 @@ class WebSourceProvider:
             )
         if not isinstance(capture, WebCaptureResult):
             raise TypeError("Web capture service returned an invalid result.")
+        return capture
+
+    @staticmethod
+    def collection_from_capture(
+        capture: WebCaptureResult,
+        context: ProviderContext,
+        *,
+        dimension: str = "overview",
+    ) -> SourceCollection:
+        """Project a capture for callers using the legacy collection boundary."""
         records = capture.as_records(dimension=dimension)
         remaining = context.budget.remaining()["evidence"]
         # A profile budget is a hard upper bound.  Once it is exhausted, keep
@@ -249,7 +268,7 @@ class WebSourceProvider:
         if bounded_records:
             context.budget.reserve(evidence=len(bounded_records))
         target = SourceTarget(
-            provider_id=self.provider_id,
+            provider_id="web",
             source_kind="web_page",
             source_id=capture.source_id,
             canonical_url=capture.canonical_url,
@@ -260,7 +279,7 @@ class WebSourceProvider:
             },
         )
         return SourceCollection(
-            provider_id=self.provider_id,
+            provider_id="web",
             source_kind=target.source_kind,
             target=target,
             collection_status=capture.status,

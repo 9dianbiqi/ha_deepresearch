@@ -135,6 +135,10 @@ def _redact(value: Any) -> Any:
             if key == "research_intelligence" and isinstance(item, Mapping):
                 redacted[key] = _redact_v2_intelligence(item)
                 continue
+            if key == "evidence_recovery" and isinstance(item, Mapping):
+                from .evidence_recovery import sanitize_evidence_recovery
+                redacted[key] = sanitize_evidence_recovery(item)
+                continue
             if key.strip().casefold().replace("-", "_") == "stream_token":
                 if item is None:
                     redacted[key] = None
@@ -427,6 +431,18 @@ def _contains_sensitive_key(value: Any) -> bool:
                 continue
             if key == "research_intelligence" and isinstance(item, dict):
                 # This subtree was already reduced by _redact_v2_intelligence.
+                continue
+            if key == "evidence_recovery" and isinstance(item, dict):
+                from .evidence_recovery import (
+                    EvidenceRecoveryError,
+                    sanitize_evidence_recovery,
+                )
+                try:
+                    sanitized = sanitize_evidence_recovery(item)
+                except (EvidenceRecoveryError, TypeError, ValueError, KeyError, AttributeError):
+                    return True
+                if sanitized != item:
+                    return True
                 continue
             normalized = key.strip().casefold().replace("-", "_")
             if normalized == "stream_token" and item is None:

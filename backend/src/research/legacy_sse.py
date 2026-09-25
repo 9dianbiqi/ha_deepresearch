@@ -404,6 +404,21 @@ class LegacySseProjector:
                     "blocker_codes": _text_list(payload.get("blocker_codes")),
                 }
             )
+        elif event.kind is EventKind.TASK_QUALITY_EVALUATED:
+            projected.update(
+                {
+                    "type": "task_quality_evaluated",
+                    "task_id": _optional_int(event.task_id),
+                    "action": _optional_text(payload.get("action")),
+                    "reason_codes": _text_list(payload.get("reason_codes")),
+                    "retrieval_relevance": payload.get("retrieval_relevance"),
+                    "claim_support": payload.get("claim_support"),
+                    "citation_integrity": payload.get("citation_integrity"),
+                    "checked_claim_ids": _text_list(
+                        payload.get("checked_claim_ids")
+                    ),
+                }
+            )
         elif event.kind is EventKind.TASK_RETRY_SCHEDULED:
             projected.update(
                 {

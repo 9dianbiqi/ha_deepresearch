@@ -11,6 +11,7 @@ from hello_agents import SimpleAgent
 from config import Configuration
 from models import SummaryState, TodoItem
 from research.operations import OperationScope
+from research.task_quality import TaskEvidence
 from utils import strip_thinking_tokens
 
 
@@ -25,6 +26,8 @@ class TaskSummaryInput:
     context: str
     note_id: str | None = None
     note_content: str = ""
+    evidence: tuple[TaskEvidence, ...] = ()
+    quality_feedback: tuple[str, ...] = ()
 
 
 class SummarizationService:
@@ -214,6 +217,27 @@ class SummarizationService:
                 "请参考以上笔记内容，避免重复已有信息。\n"
             )
 
+        evidence_section = ""
+        if request.evidence:
+            lines = ["\n可引用证据（只能使用方括号中的 evidence ID）："]
+            for item in request.evidence:
+                lines.append(
+                    f"[{item.evidence_id}] {item.title}\n"
+                    f"URL: {item.url}\n证据等级: {item.evidence_level}\n"
+                    f"来源溯源: {dict(item.source_provenance)}\n"
+                    f"证据定位: {dict(item.locator)}\n证据片段: "
+                    f"{item.excerpt if item.canonical else item.excerpt[:2000]}"
+                )
+            evidence_section = "\n".join(lines) + "\n"
+
+        feedback_section = ""
+        if request.quality_feedback:
+            feedback_section = (
+                "\n质量控制修订要求：\n- "
+                + "\n- ".join(request.quality_feedback)
+                + "\n"
+            )
+
         return (
             f"任务主题：{request.topic}\n"
             f"任务名称：{request.title}\n"
@@ -221,5 +245,10 @@ class SummarizationService:
             f"检索查询：{request.query}\n"
             f"任务上下文：\n{request.context}\n"
             f"{note_section}"
+            f"{evidence_section}"
+            f"{feedback_section}"
+            "每条事实性发现末尾必须标注至少一个真实 evidence ID，例如 "
+            "[task-1-ev-1]；不得虚构 evidence ID。\n"
+            "metadata 仅是搜索摘要，不能当作已核实的正文；证据不足时明确说明限制。\n"
             "请返回一份面向用户的 Markdown 总结（遵循任务总结模板）。"
         )

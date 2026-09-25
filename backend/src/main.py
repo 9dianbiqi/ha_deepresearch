@@ -864,13 +864,17 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
 
         logger.info(
             "DeepResearch configuration loaded: provider={} model={} endpoint={} search_api={} "
-            "max_loops={} fetch_full_page={} tool_calling={} strip_thinking={} api_key={}",
+            "max_loops={} fetch_full_page={} search_cache={} cache_ttl={} "
+            "task_quality_mode={} tool_calling={} strip_thinking={} api_key={}",
             config.llm_provider,
             config.resolved_model() or "unset",
             _configuration_presence(base_url),
             (config.search_api.value if isinstance(config.search_api, SearchAPI) else config.search_api),
             config.max_web_research_loops,
             config.fetch_full_page,
+            config.enable_search_cache,
+            config.search_cache_ttl_seconds,
+            config.task_quality_mode,
             config.use_tool_calling,
             config.strip_thinking_tokens,
             _configuration_presence(config.llm_api_key),

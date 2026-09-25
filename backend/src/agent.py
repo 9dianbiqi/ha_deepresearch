@@ -51,6 +51,10 @@ from research.evidence import (
     render_github_artifacts,
     supplement_github_evidence,
 )
+from research.evidence_recovery import (
+    EvidenceRecoveryError,
+    persist_evidence_recovery,
+)
 from research.intelligence import (
     ArtifactManifestV2,
     ClaimRecord,
@@ -63,7 +67,7 @@ from research.operations import (
     OperationRejectedError,
     OperationScope,
 )
-from research.pipeline import PreparedResearch, ResearchKernel
+from research.pipeline import PreparedResearch, ResearchKernel, TaskEvidenceBinding
 from research.profiles import ResearchMode, built_in_profile_registry
 from research.providers.github import GitHubSourceProvider
 from research.providers.web import WebSourceProvider
@@ -90,6 +94,18 @@ from research.sources import (
 from research.summary_quality import (
     SummaryQualityGateV1,
     SummaryQualityThresholds,
+)
+from research.task_quality import (
+    JsonBatchClaimEvidenceJudge,
+    QualityAction,
+    QualityMode,
+    TaskEvidence,
+    TaskQualityBudget,
+    TaskQualityController,
+    TaskQualityInput,
+    TaskQualityResult,
+    document_from_markdown,
+    evidence_from_search_result,
 )
 from research.telemetry import TelemetryHelloAgentsLLM, llm_telemetry_scope
 from research.web_capture import WebCaptureResult
@@ -190,6 +206,7 @@ class _WorkerMessageKind(str, Enum):
 
     SOURCES = "sources"
     SUMMARY_DELTA = "summary_delta"
+    QUALITY = "quality"
     RETRY = "retry"
     COMPLETED = "completed"
     SKIPPED = "skipped"
@@ -213,6 +230,7 @@ class _TaskWorkItem:
     dimension: str
     github_markdown: str
     loop_offset: int
+    attempt_offset: int
     config: Configuration
     operations: GovernedOperations
     search_adapter: Any | None
@@ -288,6 +306,7 @@ class DeepResearchAgent:
         research_kernel: ResearchKernel | None = None,
         artifact_store: ArtifactStore | None = None,
         summary_quality_gate: SummaryQualityGateV1 | None = None,
+        task_quality_controller: TaskQualityController | None = None,
         operation_authorizer: Any | None = None,
         legacy_event_queue_capacity: int = 64,
     ) -> None:
@@ -434,6 +453,7 @@ class DeepResearchAgent:
             )
         self._artifact_store = artifact_store
         self._summary_quality_gate = summary_quality_gate
+        self._task_quality_controller = task_quality_controller
 
     @property
     def last_session(self) -> RunSession | None:
@@ -1076,6 +1096,37 @@ class DeepResearchAgent:
             thresholds=thresholds,
         )
 
+    def _task_quality_controller_for_scope(
+        self,
+        operation_scope: OperationScope,
+    ) -> TaskQualityController:
+        """Build one run-scoped ordinary-task quality controller."""
+        if self._task_quality_controller is not None:
+            return self._task_quality_controller
+        factual_agent = self._quality_factual_agent
+        if factual_agent is None:
+            return TaskQualityController()
+
+        def invoke(prompt: str) -> str:
+            quality_session = operation_scope.operations.session
+            with self._quality_agent_lock:
+                try:
+                    with llm_telemetry_scope(
+                        quality_session,
+                        role="task_quality_judge",
+                    ):
+                        response = factual_agent.run(
+                            prompt,
+                            _research_operation_scope=operation_scope,
+                        )
+                finally:
+                    factual_agent.clear_history()
+            return response.strip() if isinstance(response, str) else ""
+
+        return TaskQualityController(
+            judge=JsonBatchClaimEvidenceJudge(invoke),
+        )
+
     @staticmethod
     def _semantic_quality_prompt(
         claim: ClaimRecord,
@@ -1470,7 +1521,7 @@ class DeepResearchAgent:
         if isinstance(raw_generic, dict) and raw_generic.get("schema_version") == 2:
             try:
                 bundle = ResearchIntelligenceBundle.from_dict(raw_generic)
-                if not bundle.evidence_frozen:
+                if not bundle.evidence_frozen and bundle.coverage.allow_report:
                     bundle = replace(bundle, evidence_frozen=True)
                 return validate_citations(report, bundle).sanitized_report or report
             except (TypeError, ValueError):
@@ -1494,7 +1545,7 @@ class DeepResearchAgent:
         if isinstance(raw_generic, dict) and raw_generic.get("schema_version") == 2:
             try:
                 bundle = ResearchIntelligenceBundle.from_dict(raw_generic)
-                if not bundle.evidence_frozen:
+                if not bundle.evidence_frozen and bundle.coverage.allow_report:
                     bundle = replace(bundle, evidence_frozen=True)
                 raw_legacy = session.state.github_intelligence
                 legacy_bundle = github_evidence_bundle_from_dict(raw_legacy)
@@ -1641,6 +1692,29 @@ class DeepResearchAgent:
         )
         prepared_research: PreparedResearch | None = None
         if resuming_tasks:
+            if self._is_kernel_recovery_checkpoint(session):
+                evidence_recovery = session.checkpoint_state.get(
+                    "evidence_recovery"
+                )
+                if not isinstance(evidence_recovery, Mapping):
+                    raise EvidenceRecoveryError(
+                        "evidence_recovery_missing",
+                        "The evidence recovery checkpoint is missing.",
+                    )
+                from research.evidence_recovery import validate_evidence_recovery
+                validate_evidence_recovery(
+                    evidence_recovery, run_id=session.run_id,
+                    task_state=session.checkpoint_state.get("task_state"),
+                )
+                if evidence_recovery["request"]["topic"] != session.command.topic:
+                    raise EvidenceRecoveryError("evidence_recovery_invalid", "Saved research topic does not match.")
+                prepared_research = self._research_kernel.restore_prepared(
+                    evidence_recovery,
+                    run_id=session.run_id,
+                    cancellation=session.cancellation,
+                    operation_scope=root_scope,
+                    artifact_store=self._artifact_store,
+                )
             planned = [TodoItem(**task.to_dict()) for task in session.state.todo_items]
             pending_tasks = [
                 task
@@ -1672,6 +1746,10 @@ class DeepResearchAgent:
                     )
                     for item in prepared_research.tasks
                 ]
+                if not tasks and prepared_research.profile.profile_id == "web.evidence.v1":
+                    tasks = self._plan_research_tasks(
+                        session, prior_context, root_scope=root_scope,
+                    )
             else:
                 github_contexts = self._prepare_github_contexts(
                     planning_state,
@@ -1703,28 +1781,19 @@ class DeepResearchAgent:
                         comparison_targets=[context.target for context in github_contexts[1:]],
                     )
                 else:
-                    assembled_prior = ResearchContextAssembler().assemble(prior_context)
-                    related_history = session.related_history_context or None
-                    user_memories = session.user_memory_context or None
-                    session.raise_if_run_controlled()
-                    planner_kwargs: dict[str, object] = {
-                        "prior_context": assembled_prior,
-                    }
-                    if related_history:
-                        planner_kwargs["related_history"] = related_history
-                    if user_memories:
-                        planner_kwargs["user_memories"] = user_memories
-                    tasks = _call_with_operation_scope(
-                        self.planner.plan_todo_list,
-                        planning_state,
-                        **planner_kwargs,
-                        operation_scope=root_scope,
+                    tasks = self._plan_research_tasks(
+                        session, prior_context, root_scope=root_scope,
                     )
-                    session.raise_if_run_controlled()
 
             if not tasks:
                 logger.info("No TODO items generated; falling back to single task")
                 tasks = [self.planner.create_fallback_task(planning_state)]
+
+            if (
+                prepared_research is not None
+                and len(tasks) > prepared_research.profile.retrieval_budget.max_tasks
+            ):
+                raise ValueError("Planned tasks exceed the profile retrieval budget.")
 
             planned = [TodoItem(**task.to_dict()) for task in tasks]
             for task in planned:
@@ -1741,7 +1810,11 @@ class DeepResearchAgent:
             )
             session.raise_if_run_controlled()
             session.install_plan(planned)
-            session.persist_checkpoint("planning_completed")
+            self._persist_research_checkpoint(
+                session,
+                "planning_completed",
+                prepared_research,
+            )
         work_items = self._prepare_work_items(
             session,
             operations=operations,
@@ -1772,6 +1845,118 @@ class DeepResearchAgent:
             root_scope=root_scope,
         )
 
+    @staticmethod
+    def _is_kernel_recovery_checkpoint(session: RunSession) -> bool:
+        """Return whether the saved task plan belongs to a kernel profile."""
+        profile_id = session.state.research_profile_id or session.command.research_profile_id
+        return (isinstance(profile_id, str) and profile_id not in {"", "web.default.v1"}) or session.state.research_mode == "github"
+
+    def _persist_research_checkpoint(
+        self,
+        session: RunSession,
+        phase: str,
+        prepared: PreparedResearch | None,
+    ) -> None:
+        """Commit kernel runtime artifacts before making their checkpoint visible."""
+        if prepared is None:
+            session.persist_checkpoint(phase)
+            return
+        if self._artifact_store is None:
+            session.persist_checkpoint(
+                phase,
+                evidence_recovery_unavailable=True,
+            )
+            return
+        payload = persist_evidence_recovery(
+            prepared,
+            run_id=session.run_id,
+            artifact_store=self._artifact_store,
+        )
+        session.persist_checkpoint(
+            phase,
+            evidence_recovery=payload,
+        )
+
+    @staticmethod
+    def _task_attempt_high_water(
+        session: RunSession,
+        task_id: int,
+        prepared: PreparedResearch | None,
+    ) -> int:
+        """Find the highest retrieval attempt already consumed at the checkpoint."""
+        task = next(
+            (item for item in session.state.todo_items if item.id == task_id),
+            None,
+        )
+        high_water = (
+            task.retry_count
+            if task is not None
+            and isinstance(task.retry_count, int)
+            and not isinstance(task.retry_count, bool)
+            else 0
+        )
+        if prepared is not None:
+            high_water = max(high_water, prepared.attempt_high_water(task_id))
+            read_binding = getattr(prepared, "read", None)
+            if callable(read_binding):
+                binding = read_binding(task_id=task_id)
+                attempt = getattr(binding, "task_attempt", None)
+                if isinstance(attempt, int) and not isinstance(attempt, bool):
+                    high_water = max(high_water, attempt)
+            bindings = getattr(prepared, "_task_bindings", None)
+            if isinstance(bindings, Mapping):
+                for key in bindings:
+                    if (
+                        isinstance(key, tuple)
+                        and len(key) == 2
+                        and key[0] == task_id
+                        and isinstance(key[1], int)
+                        and not isinstance(key[1], bool)
+                    ):
+                        high_water = max(high_water, key[1])
+        operation_state = session.checkpoint_state.get("operation_state")
+        if isinstance(operation_state, (list, tuple)):
+            for operation in operation_state:
+                if not isinstance(operation, Mapping):
+                    continue
+                if operation.get("task_id") != task_id:
+                    continue
+                if str(operation.get("operation_name", "")).startswith("notes."):
+                    continue
+                pairing_key = operation.get("pairing_key")
+                if (
+                    isinstance(pairing_key, (list, tuple))
+                    and len(pairing_key) == 4
+                    and isinstance(pairing_key[1], int)
+                    and not isinstance(pairing_key[1], bool)
+                ):
+                    high_water = max(high_water, pairing_key[1])
+        return high_water
+
+    def _plan_research_tasks(
+        self,
+        session: RunSession,
+        prior_context: FollowupContext | None,
+        *,
+        root_scope: OperationScope,
+    ) -> list[TodoItem]:
+        """Plan tasks with the same history and operation scope on both Web paths."""
+        assembled_prior = ResearchContextAssembler().assemble(prior_context)
+        planner_kwargs: dict[str, object] = {"prior_context": assembled_prior}
+        if session.related_history_context:
+            planner_kwargs["related_history"] = session.related_history_context
+        if session.user_memory_context:
+            planner_kwargs["user_memories"] = session.user_memory_context
+        session.raise_if_run_controlled()
+        tasks = _call_with_operation_scope(
+            self.planner.plan_todo_list,
+            session.state,
+            **planner_kwargs,
+            operation_scope=root_scope,
+        )
+        session.raise_if_run_controlled()
+        return tasks
+
     def _prepare_work_items(
         self,
         session: RunSession,
@@ -1785,6 +1970,11 @@ class DeepResearchAgent:
         github_markdown = str(
             (session.state.github_context or {}).get("markdown") or ""
         )
+        if prepared_research is not None:
+            # Canonical kernel summaries receive facts only through their bound
+            # EvidenceRecords.  Legacy runs retain their historical note and
+            # GitHub context inputs below.
+            github_markdown = ""
         items: list[_TaskWorkItem] = []
         dimension_by_task = {
             item.id: item.dimension
@@ -1809,6 +1999,8 @@ class DeepResearchAgent:
                     candidate = note_data.get("content")
                     if isinstance(candidate, str):
                         note_content = candidate
+            if prepared_research is not None:
+                note_content = ""
             items.append(
                 _TaskWorkItem(
                     task_id=task.id,
@@ -1824,6 +2016,11 @@ class DeepResearchAgent:
                     dimension=dimension_by_task.get(task.id, "overview"),
                     github_markdown=github_markdown,
                     loop_offset=index * 3,
+                    attempt_offset=self._task_attempt_high_water(
+                        session,
+                        task.id,
+                        prepared_research,
+                    ),
                     config=session.command.config,
                     operations=operations,
                     search_adapter=search_adapter,
@@ -1890,13 +2087,20 @@ class DeepResearchAgent:
                         message,
                         operations=operations,
                         search_results=search_results,
+                        prepared_research=(
+                            work_items[0].prepared_research if work_items else None
+                        ),
                     )
                     if message.kind in {
                         _WorkerMessageKind.COMPLETED,
                         _WorkerMessageKind.SKIPPED,
                         _WorkerMessageKind.FAILED,
                     }:
-                        session.persist_checkpoint("research_tasks_progress")
+                        self._persist_research_checkpoint(
+                            session,
+                            "research_tasks_progress",
+                            work_items[0].prepared_research if work_items else None,
+                        )
 
                 completed = [future for future in active if future.done()]
                 for future in completed:
@@ -1924,7 +2128,11 @@ class DeepResearchAgent:
                                 task_id=item.task_id,
                             ),
                         )
-                        session.persist_checkpoint("research_tasks_progress")
+                        self._persist_research_checkpoint(
+                            session,
+                            "research_tasks_progress",
+                            work_items[0].prepared_research if work_items else None,
+                        )
                 fill_active_slots()
 
             while True:
@@ -1938,6 +2146,9 @@ class DeepResearchAgent:
                     message,
                     operations=operations,
                     search_results=search_results,
+                    prepared_research=(
+                        work_items[0].prepared_research if work_items else None
+                    ),
                 )
             session.raise_if_run_controlled()
         except _OPERATION_CONTROL_ERRORS:
@@ -2004,7 +2215,26 @@ class DeepResearchAgent:
         )
         latest_sources: str | None = None
 
-        for attempt in range(max_attempts):
+        if item.attempt_offset >= max_attempts:
+            self._put_worker_message(
+                result_queue,
+                _WorkerMessage(
+                    kind=_WorkerMessageKind.FAILED,
+                    task_id=item.task_id,
+                    payload={
+                        "message": "Task retrieval attempt budget was exhausted.",
+                        "code": "task_attempt_budget_exhausted",
+                        "original_query": item.original_query,
+                    },
+                ),
+                cancellation,
+                stop_event,
+            )
+            return
+
+        for attempt in range(item.attempt_offset, max_attempts):
+            if item.prepared_research is not None:
+                item.prepared_research.start_attempt(item.task_id, attempt + 1)
             operation_scope = OperationScope(
                 operations=item.operations,
                 task_id=item.task_id,
@@ -2021,7 +2251,7 @@ class DeepResearchAgent:
                     topic=item.topic,
                     config=item.config,
                     loop_count=item.loop_offset + attempt,
-                    use_cache=False,
+                    use_cache=item.config.enable_search_cache,
                     operation_scope=operation_scope,
                 )
                 if not isinstance(typed_search, SourceSearchResult):
@@ -2070,7 +2300,40 @@ class DeepResearchAgent:
                 search_result["notices"] = safe_notices
                 search_result["notice_codes"] = safe_notice_codes
 
-            if not search_result or not search_result.get("results"):
+            raw_results = search_result.get("results") if isinstance(search_result, dict) else None
+            typed_results = (
+                [result for result in raw_results if isinstance(result, Mapping)]
+                if isinstance(raw_results, list)
+                else []
+            )
+            binding = None
+            task_evidence: tuple[TaskEvidence, ...] = ()
+            canonical_kernel = (
+                item.research_kernel is not None
+                and item.prepared_research is not None
+            )
+            if canonical_kernel:
+                assert item.research_kernel is not None and item.prepared_research is not None
+                binding = item.research_kernel.bind_task_evidence(
+                    item.prepared_research,
+                    task_id=item.task_id,
+                    task_attempt=attempt + 1,
+                    query=query,
+                    intent=item.intent,
+                    dimension=item.dimension,
+                    search_results=tuple(dict(result) for result in typed_results),
+                    operation_scope=operation_scope,
+                )
+                task_evidence = tuple(
+                    TaskEvidence.from_record(record, query)
+                    for record in binding.evidence
+                )
+            no_search_or_evidence = (
+                not task_evidence
+                if canonical_kernel
+                else (not search_result or not typed_results)
+            )
+            if no_search_or_evidence:
                 if attempt < max_attempts - 1:
                     previous_query = query
                     local_task.query = query
@@ -2106,17 +2369,28 @@ class DeepResearchAgent:
                 )
                 return
 
-            latest_sources, context = self._context_preparer(
-                search_result,
-                answer_text,
-                item.config,
-            )
-            if item.github_markdown:
+            if canonical_kernel:
+                latest_sources = None
                 context = (
-                    f"{item.github_markdown}\n\n## Web Search Context\n{context}"
+                    "本任务只能依据下方绑定的、带 evidence ID 的证据作答；"
+                    "未绑定的搜索摘要、仓库原文和任务笔记不属于事实来源。"
                 )
-            raw_results = search_result.get("results")
-            typed_results = raw_results if isinstance(raw_results, list) else []
+            else:
+                latest_sources, context = self._context_preparer(
+                    search_result,
+                    answer_text,
+                    item.config,
+                )
+                if item.github_markdown:
+                    context = (
+                        f"{item.github_markdown}\n\n## Web Search Context\n{context}"
+                    )
+                task_evidence = evidence_from_search_result(
+                    search_result,
+                    task_id=item.task_id,
+                    query=query,
+                    backend=backend if isinstance(backend, str) else "none",
+                )
             self._put_worker_message(
                 result_queue,
                 _WorkerMessage(
@@ -2159,43 +2433,8 @@ class DeepResearchAgent:
                 return
             item.operations.session.raise_if_cancelled()
 
-            request = TaskSummaryInput(
-                topic=item.topic,
-                title=item.title,
-                intent=item.intent,
-                query=query,
-                context=context,
-                note_id=item.note_id,
-                note_content=item.note_content,
-            )
-            summary_stream, summary_getter = _call_with_operation_scope(
-                self.summarizer.stream_summary,
-                request,
-                operation_scope=operation_scope,
-            )
-            try:
-                for chunk in summary_stream:
-                    cancellation.raise_if_cancelled()
-                    if chunk:
-                        self._put_worker_message(
-                            result_queue,
-                            _WorkerMessage(
-                                kind=_WorkerMessageKind.SUMMARY_DELTA,
-                                task_id=item.task_id,
-                                payload={"chunk": chunk},
-                            ),
-                            cancellation,
-                            stop_event,
-                        )
-            finally:
-                close = getattr(summary_stream, "close", None)
-                if callable(close):
-                    close()
-
-            summary = summary_getter().strip() or "暂无可用信息"
-            if item.config.enable_quality_gate:
-                quality = self._check_summary_quality(summary)
-                if not quality["passed"] and attempt < max_attempts - 1:
+            if not task_evidence:
+                if attempt < max_attempts - 1:
                     previous_query = query
                     local_task.query = query
                     query = self._refine_query(local_task, attempt)
@@ -2208,13 +2447,146 @@ class DeepResearchAgent:
                                 "previous_query": previous_query,
                                 "refined_query": query,
                                 "attempt": attempt + 1,
-                                "reason": ",".join(quality["reasons"]),
+                                "reason": "no_usable_evidence",
                             },
                         ),
                         cancellation,
                         stop_event,
                     )
                     continue
+                self._put_worker_message(
+                    result_queue,
+                    _WorkerMessage(
+                        kind=_WorkerMessageKind.SKIPPED,
+                        task_id=item.task_id,
+                        payload={
+                            "reason": "no_usable_evidence",
+                            "original_query": item.original_query,
+                        },
+                    ),
+                    cancellation,
+                    stop_event,
+                )
+                return
+            request = TaskSummaryInput(
+                topic=item.topic,
+                title=item.title,
+                intent=item.intent,
+                query=query,
+                context=context,
+                note_id=item.note_id,
+                note_content=item.note_content,
+                evidence=task_evidence,
+            )
+            summary = self._stream_task_summary(
+                request,
+                operation_scope,
+                item=item,
+                result_queue=result_queue,
+                cancellation=cancellation,
+                stop_event=stop_event,
+            )
+            if item.config.enable_quality_gate:
+                quality = self._evaluate_task_quality(
+                    item=item,
+                    query=query,
+                    summary=summary,
+                    evidence=task_evidence,
+                    retrieval_attempt=attempt,
+                    operation_scope=operation_scope,
+                )
+                self._emit_task_quality(
+                    item.task_id,
+                    quality,
+                    result_queue=result_queue,
+                    cancellation=cancellation,
+                    stop_event=stop_event,
+                )
+                if quality.action in {
+                    QualityAction.REPAIR_CITATIONS,
+                    QualityAction.REGENERATE_SUMMARY,
+                }:
+                    revised_request = replace(
+                        request,
+                        quality_feedback=quality.repair_instructions,
+                    )
+                    summary = self._stream_task_summary(
+                        revised_request,
+                        operation_scope,
+                        item=item,
+                        result_queue=result_queue,
+                        cancellation=cancellation,
+                        stop_event=stop_event,
+                    )
+                    quality = self._evaluate_task_quality(
+                        item=item,
+                        query=query,
+                        summary=summary,
+                        evidence=task_evidence,
+                        retrieval_attempt=attempt,
+                        operation_scope=operation_scope,
+                        judge_calls_used=(
+                            1 if quality.assessment.judgments else 0
+                        ),
+                    )
+                    self._emit_task_quality(
+                        item.task_id,
+                        quality,
+                        result_queue=result_queue,
+                        cancellation=cancellation,
+                        stop_event=stop_event,
+                    )
+
+                if (
+                    quality.action is QualityAction.RETRIEVE_GAPS
+                    and attempt < max_attempts - 1
+                ):
+                    previous_query = query
+                    local_task.query = query
+                    query = self._refine_query_from_gaps(local_task, quality, attempt)
+                    self._put_worker_message(
+                        result_queue,
+                        _WorkerMessage(
+                            kind=_WorkerMessageKind.RETRY,
+                            task_id=item.task_id,
+                            payload={
+                                "previous_query": previous_query,
+                                "refined_query": query,
+                                "attempt": attempt + 1,
+                                "reason": ",".join(quality.reason_codes),
+                            },
+                        ),
+                        cancellation,
+                        stop_event,
+                    )
+                    continue
+                if quality.action is QualityAction.BLOCK:
+                    self._put_worker_message(
+                        result_queue,
+                        _WorkerMessage(
+                            kind=_WorkerMessageKind.SKIPPED,
+                            task_id=item.task_id,
+                            payload={
+                                "reason": "task_quality_blocked",
+                                "original_query": item.original_query,
+                            },
+                        ),
+                        cancellation,
+                        stop_event,
+                    )
+                    return
+                if quality.action in {
+                    QualityAction.FLAG_CONFLICT,
+                    QualityAction.DEGRADE,
+                    QualityAction.REPAIR_CITATIONS,
+                    QualityAction.REGENERATE_SUMMARY,
+                    QualityAction.RETRIEVE_GAPS,
+                }:
+                    warning = ", ".join(quality.reason_codes) or quality.action.value
+                    summary = (
+                        f"{summary}\n\n### 质量限制\n"
+                        f"- 本任务以 `{quality.action.value}` 状态输出：{warning}。"
+                    )
 
             self._put_worker_message(
                 result_queue,
@@ -2225,12 +2597,126 @@ class DeepResearchAgent:
                         "summary": summary,
                         "sources_summary": latest_sources,
                         "original_query": item.original_query,
+                        "task_attempt": attempt + 1,
+                        "dimension": item.dimension,
+                        "query": query,
+                        "binding": binding,
                     },
                 ),
                 cancellation,
                 stop_event,
             )
             return
+
+    def _stream_task_summary(
+        self,
+        request: TaskSummaryInput,
+        operation_scope: OperationScope,
+        *,
+        item: _TaskWorkItem,
+        result_queue: Queue[_WorkerMessage],
+        cancellation: CancellationToken,
+        stop_event: Event,
+    ) -> str:
+        """Stream one summary candidate and return its collected text."""
+        summary_stream, summary_getter = _call_with_operation_scope(
+            self.summarizer.stream_summary,
+            request,
+            operation_scope=operation_scope,
+        )
+        try:
+            for chunk in summary_stream:
+                cancellation.raise_if_cancelled()
+                if chunk:
+                    self._put_worker_message(
+                        result_queue,
+                        _WorkerMessage(
+                            kind=_WorkerMessageKind.SUMMARY_DELTA,
+                            task_id=item.task_id,
+                            payload={"chunk": chunk},
+                        ),
+                        cancellation,
+                        stop_event,
+                    )
+        finally:
+            close = getattr(summary_stream, "close", None)
+            if callable(close):
+                close()
+        return summary_getter().strip() or "暂无可用信息"
+
+    def _evaluate_task_quality(
+        self,
+        *,
+        item: _TaskWorkItem,
+        query: str,
+        summary: str,
+        evidence: tuple[TaskEvidence, ...],
+        retrieval_attempt: int,
+        operation_scope: OperationScope,
+        judge_calls_used: int = 0,
+    ) -> TaskQualityResult:
+        """Evaluate one ordinary task through the deep quality module."""
+        document = document_from_markdown(
+            summary,
+            task_id=item.task_id,
+            known_evidence_ids=tuple(record.evidence_id for record in evidence),
+        )
+        controller = self._task_quality_controller_for_scope(operation_scope)
+        return controller.evaluate(
+            TaskQualityInput(
+                task_id=item.task_id,
+                task_intent=item.intent,
+                current_query=query,
+                document=document,
+                evidence=evidence,
+                mode=QualityMode(item.config.task_quality_mode),
+                budget=TaskQualityBudget(
+                    max_judge_calls=2,
+                    judge_calls_used=judge_calls_used,
+                    retrieval_attempts_used=retrieval_attempt,
+                    max_retrieval_attempts=2,
+                ),
+            )
+        )
+
+    @classmethod
+    def _refine_query_from_gaps(
+        cls,
+        task: TodoItem,
+        quality: TaskQualityResult,
+        attempt: int,
+    ) -> str:
+        """Build a query from explicit evidence gaps, with a stable fallback."""
+        if not quality.retrieval_gaps:
+            return cls._refine_query(task, attempt)
+        gap = quality.retrieval_gaps[0]
+        source_hint = " ".join(gap.preferred_source_types)
+        refined = f"{gap.topic} {source_hint}".strip()
+        if refined.casefold() == task.query.strip().casefold():
+            return cls._refine_query(task, attempt)
+        return refined
+
+    @classmethod
+    def _emit_task_quality(
+        cls,
+        task_id: int,
+        quality: TaskQualityResult,
+        *,
+        result_queue: Queue[_WorkerMessage],
+        cancellation: CancellationToken,
+        stop_event: Event,
+    ) -> None:
+        """Send one detached quality decision to the coordinator thread."""
+        cls._put_worker_message(
+            result_queue,
+            _WorkerMessage(
+                kind=_WorkerMessageKind.QUALITY,
+                task_id=task_id,
+                payload=quality.as_event_payload(),
+            ),
+            cancellation,
+            stop_event,
+        )
 
     @staticmethod
     def _put_worker_message(
@@ -2255,6 +2741,7 @@ class DeepResearchAgent:
         *,
         operations: GovernedOperations,
         search_results: list[SourceSearchResult] | None = None,
+        prepared_research: PreparedResearch | None = None,
     ) -> None:
         """Apply one worker result through canonical transitions on this thread."""
         session.raise_if_run_controlled()
@@ -2272,6 +2759,9 @@ class DeepResearchAgent:
             return
         if message.kind is _WorkerMessageKind.SUMMARY_DELTA:
             session.append_task_summary(message.task_id, str(payload["chunk"]))
+            return
+        if message.kind is _WorkerMessageKind.QUALITY:
+            session.record_task_quality(message.task_id, payload)
             return
         if message.kind is _WorkerMessageKind.RETRY:
             session.record_retry(
@@ -2293,6 +2783,15 @@ class DeepResearchAgent:
                 ),
                 original_query=str(payload["original_query"]),
             )
+            if prepared_research is not None:
+                raw_attempt = payload.get("task_attempt")
+                if isinstance(raw_attempt, int) and not isinstance(raw_attempt, bool):
+                    binding = payload.get("binding")
+                    if isinstance(binding, TaskEvidenceBinding):
+                        prepared_research.accept(
+                            task_id=message.task_id,
+                            task_attempt=raw_attempt,
+                        )
         elif message.kind is _WorkerMessageKind.SKIPPED:
             session.skip_task(
                 message.task_id,
@@ -2327,34 +2826,8 @@ class DeepResearchAgent:
         raise KeyError(f"Unknown task ID: {task_id}")
 
     # ------------------------------------------------------------------
-    # Summary quality & query refinement
+    # Query-refinement fallback
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _check_summary_quality(summary: str) -> dict[str, Any]:
-        """Rule-based quality check for a task summary.
-
-        Returns a dict with ``passed`` (bool) and ``reasons`` (list[str]).
-        """
-        passed = True
-        reasons: list[str] = []
-
-        if not summary or summary.strip() == "暂无可用信息":
-            passed = False
-            reasons.append("empty_or_fallback")
-
-        if len(summary.strip()) < 30:
-            passed = False
-            reasons.append("too_short")
-
-        has_structure = any(
-            marker in summary for marker in ("###", "- ", "* ", "1. ", "2. ")
-        )
-        if not has_structure:
-            passed = False
-            reasons.append("no_structure")
-
-        return {"passed": passed, "reasons": reasons}
 
     @staticmethod
     def _refine_query(task: TodoItem, attempt: int) -> str:
@@ -2459,7 +2932,11 @@ class DeepResearchAgent:
                 research_mode=prepared.profile.mode,
                 profile_id=prepared.profile.profile_id,
             )
-        baseline = self._research_kernel.finalize(prepared)
+        baseline = self._research_kernel.finalize(
+            prepared,
+            allow_enrichment=False,
+            freeze=False,
+        )
         session.replace_research_intelligence(baseline.as_dict())
         legacy_bundle = self._legacy_bundle_for_kernel(prepared)
         if legacy_bundle is not None:
@@ -2479,20 +2956,34 @@ class DeepResearchAgent:
         for task in session.state.todo_items:
             if task.summary:
                 legacy_task_sources.append(task.summary)
+            binding = prepared.read_accepted(task_id=task.id)
+            if binding is not None and task.summary:
                 task_results.append(
                     {
+                        "task_id": task.id,
+                        "attempt": binding.task_attempt,
+                        "dimension": binding.dimension,
+                        "query": binding.query,
                         "summary": task.summary,
-                        "dimension": dimension_by_task.get(task.id, "overview"),
+                    }
+                )
+            else:
+                latest = prepared.read(task_id=task.id)
+                task_results.append(
+                    {
+                        "task_id": task.id,
+                        "attempt": latest.task_attempt if latest is not None else 1,
+                        "dimension": (
+                            dimension_by_task.get(task.id)
+                            or (latest.dimension if latest is not None else "overview")
+                        ),
+                        "query": latest.query if latest is not None else task.query,
+                        "summary": "",
                     }
                 )
             if task.sources_summary:
                 legacy_task_sources.append(task.sources_summary)
-        captured_collections: tuple[SourceCollection, ...] = ()
-        if prepared.profile.profile_id == "web.evidence.v1":
-            captured_collections = self._research_kernel.collect_search_evidence(
-                prepared,
-                search_results,
-            )
+        captured_collections: tuple[SourceCollection, ...] = prepared.web_evidence.collections()
         snapshot_descriptors = self._persist_web_snapshots(
             session,
             captured_collections,
@@ -2501,6 +2992,8 @@ class DeepResearchAgent:
             prepared,
             task_results=task_results,
             collections=captured_collections,
+            allow_enrichment=True,
+            freeze=True,
         )
         if snapshot_descriptors:
             bundle = replace(

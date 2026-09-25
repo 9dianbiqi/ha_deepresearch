@@ -900,13 +900,27 @@ def test_search_cache_hit_log_uses_query_hash(
     caplog.set_level(logging.INFO, logger="services.search")
 
     cached = search._load_from_cache(query_sentinel, config)
-    assert cached == {
+    assert cached is not None
+    assert {
+        key: cached[key]
+        for key in (
+            "schema_version",
+            "results",
+            "backend",
+            "notices",
+            "notice_codes",
+        )
+    } == {
         "schema_version": 1,
         "results": [],
         "backend": "none",
         "notices": [],
         "notice_codes": [],
     }
+    assert cached["cache_hit"] is True
+    assert cached["original_query"] == query_sentinel
+    assert cached["cache_age_seconds"] >= 0
+    assert isinstance(cached["retrieved_at"], str)
     assert expected_hash in caplog.text
     assert query_sentinel not in caplog.text
 

@@ -1886,6 +1886,34 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     return;
   }
 
+  if (event.type === "task_quality_evaluated") {
+    const task = findTask(payload.task_id);
+    const action = extractOptionalString(payload.action) ?? "unknown";
+    const reasons = Array.isArray(payload.reason_codes)
+      ? payload.reason_codes.filter((item): item is string => typeof item === "string")
+      : [];
+    const actionLabels: Record<string, string> = {
+      accept: "质量检查通过",
+      repair_citations: "修复引用绑定",
+      regenerate_summary: "基于现有证据重写摘要",
+      retrieve_gaps: "针对证据缺口补充检索",
+      flag_conflict: "保留并标记证据冲突",
+      degrade: "带质量限制降级输出",
+      block: "严格模式阻断输出",
+    };
+    if (
+      task &&
+      ["repair_citations", "regenerate_summary", "retrieve_gaps"].includes(action)
+    ) {
+      task.summary = "";
+    }
+    progressLogs.value.push(
+      `任务「${task?.title || "未知"}」${actionLabels[action] || action}` +
+        (reasons.length ? `（${reasons.join("、")}）` : ""),
+    );
+    return;
+  }
+
   if (event.type === "task_retry") {
     const task = findTask(payload.task_id);
     const refined = extractOptionalString(payload.refined_query) ?? "";

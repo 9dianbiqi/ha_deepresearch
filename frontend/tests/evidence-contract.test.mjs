@@ -139,3 +139,11 @@ test("standard research form can start and continue evidence mode", () => {
     /form\.evidenceResearch\s*=\s*\n?\s*output\.research_profile_id === "web\.evidence\.v1"/,
   );
 });
+
+test("task quality actions reset superseded streaming candidates", () => {
+  assert.match(appSource, /event\.type === "task_quality_evaluated"/);
+  assert.match(appSource, /repair_citations/);
+  assert.match(appSource, /regenerate_summary/);
+  assert.match(appSource, /retrieve_gaps/);
+  assert.match(appSource, /task\.summary = ""/);
+});

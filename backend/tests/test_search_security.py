@@ -217,8 +217,8 @@ def test_search_projection_keeps_distinct_safe_query_identities(
     assert "discard-second" not in f"{sources}\n{context}"
 
 
-def test_search_cache_is_opt_in_by_default(tmp_path: Path) -> None:
-    """Ordinary runtime searches must not create durable cache files implicitly."""
+def test_search_cache_is_enabled_by_default(tmp_path: Path) -> None:
+    """Ordinary searches use the configured 24-hour cache by default."""
     config = _config(tmp_path)
     query = "default cache behavior"
 
@@ -234,7 +234,40 @@ def test_search_cache_is_opt_in_by_default(tmp_path: Path) -> None:
     cache_file = (
         cache_dir / f"{search_service._cache_key(query, config)}.json"
     )
-    assert not cache_dir.exists()
+    assert cache_dir.exists()
+    assert cache_file.exists()
+
+    cached, *_rest = search_service.dispatch_search(
+        query,
+        config,
+        7,
+        search_adapter=_ForbiddenSearchRunner(),
+    )
+    assert cached is not None
+    assert cached["cache_hit"] is True
+    assert cached["original_query"] == query
+
+
+def test_freshness_sensitive_query_bypasses_default_cache(tmp_path: Path) -> None:
+    """Current-information intent bypasses both default cache reads and writes."""
+    config = _config(tmp_path)
+    query = "Redis latest version"
+
+    result, *_rest = search_service.dispatch_search(
+        query,
+        config,
+        0,
+        search_adapter=_MaliciousSearchRunner(),
+    )
+
+    assert result is not None
+    assert result["cache_hit"] is False
+    cache_file = (
+        Path(config.notes_workspace).parent
+        / "cache"
+        / "search"
+        / f"{search_service._cache_key(query, config)}.json"
+    )
     assert not cache_file.exists()
 
 
