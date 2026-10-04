@@ -8,7 +8,8 @@ from dataclasses import dataclass
 
 from models import TodoItem
 
-from .intelligence import ResearchIntelligenceBundle
+from .intelligence import ClaimRecord, EvidenceRecord, ResearchIntelligenceBundle
+from .report_document import StructuredSummaryDocument
 
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
@@ -31,6 +32,7 @@ _TRUNCATION_SUFFIXES = (
 _MIN_REPORT_CHARS = 160
 _MIN_SECTIONS = 2
 _EVIDENCE_ID_RE = re.compile(r"\b(?:ev|evidence)[_-][A-Za-z0-9][A-Za-z0-9._-]*\b")
+_SYSTEM_CITATION_MARKER_RE = re.compile(r"\[E\d+\]", re.IGNORECASE)
 
 
 def _citation_url(value: str) -> str:
@@ -68,6 +70,246 @@ class CitationGate:
 
 # Descriptive alias for callers that prefer the result-oriented name.
 CitationValidationResult = CitationGate
+
+
+@dataclass(frozen=True, slots=True)
+class ParagraphCitationValidation:
+    """Describe claim and citation validation for one structured paragraph."""
+
+    paragraph_id: str
+    required_citations: bool
+    claim_ids: tuple[str, ...] = ()
+    citation_ids: tuple[str, ...] = ()
+    allowed_evidence_ids: tuple[str, ...] = ()
+    unknown_claim_ids: tuple[str, ...] = ()
+    unknown_evidence_ids: tuple[str, ...] = ()
+    unbound_citation_ids: tuple[str, ...] = ()
+    illegal_urls: tuple[str, ...] = ()
+    failure_reasons: tuple[str, ...] = ()
+
+    @property
+    def valid(self) -> bool:
+        """Return whether the paragraph can be rendered safely."""
+        return not self.failure_reasons
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a detached JSON-ready paragraph decision."""
+        return {
+            "paragraph_id": self.paragraph_id,
+            "valid": self.valid,
+            "required_citations": self.required_citations,
+            "claim_ids": list(self.claim_ids),
+            "citation_ids": list(self.citation_ids),
+            "allowed_evidence_ids": list(self.allowed_evidence_ids),
+            "unknown_claim_ids": list(self.unknown_claim_ids),
+            "unknown_evidence_ids": list(self.unknown_evidence_ids),
+            "unbound_citation_ids": list(self.unbound_citation_ids),
+            "illegal_urls": list(self.illegal_urls),
+            "failure_reasons": list(self.failure_reasons),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredCitationGate:
+    """Fail-closed citation decision for a structured report document."""
+
+    valid: bool
+    paragraph_results: tuple[ParagraphCitationValidation, ...] = ()
+    allowed_claim_ids: tuple[str, ...] = ()
+    allowed_evidence_ids: tuple[str, ...] = ()
+    unknown_claim_ids: tuple[str, ...] = ()
+    unknown_evidence_ids: tuple[str, ...] = ()
+    illegal_urls: tuple[str, ...] = ()
+    failure_reasons: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a detached JSON-ready structured citation decision."""
+        return {
+            "valid": self.valid,
+            "paragraph_results": [
+                item.as_dict() for item in self.paragraph_results
+            ],
+            "allowed_claim_ids": list(self.allowed_claim_ids),
+            "allowed_evidence_ids": list(self.allowed_evidence_ids),
+            "unknown_claim_ids": list(self.unknown_claim_ids),
+            "unknown_evidence_ids": list(self.unknown_evidence_ids),
+            "illegal_urls": list(self.illegal_urls),
+            "failure_reasons": list(self.failure_reasons),
+        }
+
+
+def _unique_records(
+    records: Sequence[ClaimRecord] | Sequence[EvidenceRecord],
+    *,
+    identifier: str,
+) -> tuple[dict[str, ClaimRecord | EvidenceRecord], bool]:
+    """Index typed records while reporting duplicate stable identifiers."""
+    indexed: dict[str, ClaimRecord | EvidenceRecord] = {}
+    duplicated = False
+    for record in records:
+        key = getattr(record, identifier)
+        if key in indexed:
+            duplicated = True
+            continue
+        indexed[key] = record
+    return indexed, duplicated
+
+
+def validate_structured_citations(
+    document: StructuredSummaryDocument,
+    claims: Sequence[ClaimRecord],
+    evidence: Sequence[EvidenceRecord],
+    *,
+    evidence_frozen: bool = True,
+) -> StructuredCitationGate:
+    """Validate explicit paragraph-to-claim-to-evidence relationships.
+
+    Citation identity comes exclusively from ``citation_ids``. Free-form text
+    is inspected only to reject injected markers and URLs outside the exact
+    locator allowlist; it is never parsed to infer a citation.
+    """
+    if not isinstance(document, StructuredSummaryDocument):
+        raise TypeError("document must be a StructuredSummaryDocument.")
+    normalized_claims = tuple(claims)
+    normalized_evidence = tuple(evidence)
+    if any(not isinstance(item, ClaimRecord) for item in normalized_claims):
+        raise TypeError("claims must contain ClaimRecord objects.")
+    if any(not isinstance(item, EvidenceRecord) for item in normalized_evidence):
+        raise TypeError("evidence must contain EvidenceRecord objects.")
+    if not isinstance(evidence_frozen, bool):
+        raise TypeError("evidence_frozen must be boolean.")
+
+    raw_claims, duplicate_claims = _unique_records(
+        normalized_claims,
+        identifier="claim_id",
+    )
+    raw_evidence, duplicate_evidence = _unique_records(
+        normalized_evidence,
+        identifier="evidence_id",
+    )
+    claim_by_id = {
+        key: value for key, value in raw_claims.items() if isinstance(value, ClaimRecord)
+    }
+    evidence_by_id = {
+        key: value
+        for key, value in raw_evidence.items()
+        if isinstance(value, EvidenceRecord)
+    }
+    unknown_document_claims = tuple(
+        item for item in document.claim_ids if item not in claim_by_id
+    )
+    paragraph_results: list[ParagraphCitationValidation] = []
+    all_unknown_claims: list[str] = list(unknown_document_claims)
+    all_unknown_evidence: list[str] = []
+    all_illegal_urls: list[str] = []
+
+    for paragraph in document.paragraphs:
+        unknown_claims = tuple(
+            item for item in paragraph.claim_ids if item not in claim_by_id
+        )
+        unknown_evidence = tuple(
+            item for item in paragraph.citation_ids if item not in evidence_by_id
+        )
+        known_claims = tuple(
+            claim_by_id[item]
+            for item in paragraph.claim_ids
+            if item in claim_by_id
+        )
+        allowed_ids = tuple(
+            dict.fromkeys(
+                evidence_id
+                for claim in known_claims
+                for evidence_id in (
+                    *claim.evidence_ids,
+                    *claim.conflicting_evidence_ids,
+                )
+                if evidence_id in evidence_by_id
+            )
+        )
+        unbound_ids = tuple(
+            item
+            for item in paragraph.citation_ids
+            if item in evidence_by_id and item not in allowed_ids
+        )
+        allowed_urls = {
+            evidence_by_id[item].locator.url
+            for item in paragraph.citation_ids
+            if item in allowed_ids
+            if evidence_by_id[item].locator.url
+        }
+        raw_urls = tuple(
+            dict.fromkeys(
+                _citation_url(item) for item in _URL_RE.findall(paragraph.text)
+            )
+        )
+        illegal_urls = tuple(item for item in raw_urls if item not in allowed_urls)
+        citations_required = paragraph.paragraph_type == "factual" or (
+            paragraph.paragraph_type == "analysis" and bool(paragraph.claim_ids)
+        )
+        reasons: list[str] = []
+        if paragraph.paragraph_type == "factual" and not paragraph.claim_ids:
+            reasons.append("factual_claim_missing")
+        if citations_required and not paragraph.citation_ids:
+            reasons.append("paragraph_citation_missing")
+        if any(
+            not set(paragraph.citation_ids).intersection(
+                (*claim.evidence_ids, *claim.conflicting_evidence_ids)
+            )
+            for claim in known_claims
+        ):
+            reasons.append("claim_citation_missing")
+        if unknown_claims:
+            reasons.append("unknown_claim_id")
+        if unknown_evidence:
+            reasons.append("unknown_evidence_id")
+        if unbound_ids:
+            reasons.append("citation_not_bound_to_claim")
+        if illegal_urls:
+            reasons.append("illegal_locator_url")
+        if _SYSTEM_CITATION_MARKER_RE.search(paragraph.text):
+            reasons.append("system_citation_marker_in_text")
+        paragraph_results.append(
+            ParagraphCitationValidation(
+                paragraph_id=paragraph.paragraph_id,
+                required_citations=citations_required,
+                claim_ids=paragraph.claim_ids,
+                citation_ids=paragraph.citation_ids,
+                allowed_evidence_ids=allowed_ids,
+                unknown_claim_ids=unknown_claims,
+                unknown_evidence_ids=unknown_evidence,
+                unbound_citation_ids=unbound_ids,
+                illegal_urls=illegal_urls,
+                failure_reasons=tuple(dict.fromkeys(reasons)),
+            )
+        )
+        all_unknown_claims.extend(unknown_claims)
+        all_unknown_evidence.extend(unknown_evidence)
+        all_illegal_urls.extend(illegal_urls)
+
+    reasons = [
+        reason
+        for result in paragraph_results
+        for reason in result.failure_reasons
+    ]
+    if not evidence_frozen:
+        reasons.append("evidence_not_frozen")
+    if duplicate_claims:
+        reasons.append("duplicate_claim_id")
+    if duplicate_evidence:
+        reasons.append("duplicate_evidence_id")
+    if unknown_document_claims:
+        reasons.append("unknown_claim_id")
+    unique_reasons = tuple(dict.fromkeys(reasons))
+    return StructuredCitationGate(
+        valid=not unique_reasons,
+        paragraph_results=tuple(paragraph_results),
+        allowed_claim_ids=tuple(sorted(claim_by_id)),
+        allowed_evidence_ids=tuple(sorted(evidence_by_id)),
+        unknown_claim_ids=tuple(dict.fromkeys(all_unknown_claims)),
+        unknown_evidence_ids=tuple(dict.fromkeys(all_unknown_evidence)),
+        illegal_urls=tuple(dict.fromkeys(all_illegal_urls)),
+        failure_reasons=unique_reasons,
+    )
 
 
 def _bundle_from_value(value: object) -> ResearchIntelligenceBundle | None:
@@ -347,7 +589,10 @@ def validate_report(
 __all__ = [
     "CitationGate",
     "CitationValidationResult",
+    "ParagraphCitationValidation",
     "ReportValidationResult",
+    "StructuredCitationGate",
     "validate_citations",
     "validate_report",
+    "validate_structured_citations",
 ]

@@ -62,10 +62,11 @@ flowchart LR
 
 - 开放主题规划与并发任务执行
 - DuckDuckGo、Tavily、Perplexity、SearXNG、Advanced 搜索后端
-- 搜索重试、DuckDuckGo 降级和显式 opt-in 的安全投影缓存（默认关闭）
+- 搜索重试、DuckDuckGo 降级和默认启用的 24 小时安全投影缓存；实时意图自动绕过缓存
 - GitHub 仓库识别与仓库上下文研究
 - GitHub 固定 commit 快照、文件内容/行号级证据、覆盖率分析和可下载研究产物
 - 逐任务流式摘要与最终 Markdown 报告
+- 普通任务的动作导向质量控制：检索相关性、事实支持和引用完整性分别判定
 - 可选 NoteTool 任务笔记与结论笔记
 - 类型化运行事件、operation 审计和安全元数据
 - 版本化、脱敏、原子写入的运行快照
@@ -120,6 +121,9 @@ Copy-Item .env.example .env
 | `ENABLE_NOTES` | `true` | 是否启用 NoteTool |
 | `NOTES_WORKSPACE` | `./notes` | NoteTool 工作目录 |
 | `ENABLE_QUALITY_GATE` | `true` | 在线摘要质量检查与重试；不是离线整次运行 assessment |
+| `TASK_QUALITY_MODE` | `evidence` | `basic`、`evidence` 或 `strict`；控制普通任务验证强度和失败策略 |
+| `ENABLE_SEARCH_CACHE` | `true` | 默认启用安全搜索缓存；最新、当前、价格、版本等实时意图自动绕过 |
+| `SEARCH_CACHE_TTL_SECONDS` | `86400` | 搜索缓存 TTL，范围 60–604800 秒 |
 | `ENABLE_GITHUB_RESEARCH` | `true` | 是否自动识别并研究 GitHub 仓库 |
 | `GITHUB_TOKEN` | 空 | GitHub token；不会写入运行快照 |
 | `GITHUB_API_BASE_URL` | `https://api.github.com` | GitHub-compatible API 地址 |
@@ -237,6 +241,18 @@ validate terminal state
 
 `HelloAgentsSearchAdapter` 采用每线程懒加载，并在构造工具前检查真实 `sys.stdout`。必要时只把该流的编码错误策略调整为 `backslashreplace`；它不会临时替换、捕获或吞掉进程级 stdout，因此不会误截获并发 LLM 或日志输出。
 
+## 普通任务质量控制
+
+普通 Web 任务使用 `TaskQualityController.evaluate(TaskQualityInput)` 这一条接口。内部把质量拆为互不替代的三个维度：
+
+- `retrieval_relevance`：搜索结果是否回应 query/intent，由本地 ranking 基线或可替换 reranker 判断；
+- `claim_support`：证据是否蕴含关键 claim，由一次有界批量 judge 返回 `supported`、`unsupported`、`conflicting` 或 `uncertain`；
+- `citation_integrity`：evidence ID、绑定、覆盖、孤儿和重复引用，仅由确定性规则判断，不推断事实真假。
+
+Controller 根据原因选择 `ACCEPT`、`REPAIR_CITATIONS`、`REGENERATE_SUMMARY`、`RETRIEVE_GAPS`、`FLAG_CONFLICT`、`DEGRADE` 或 `BLOCK`。格式和引用问题优先复用当前 Evidence；只有检索不相关或明确缺少证据时才生成 `RetrievalGap` 并补检索。冲突不会通过反复搜索被静默覆盖。每个任务默认最多选择 3 个高风险 claim，每个 claim 最多携带 3 条有界证据，judge 调用和补检索均有预算。
+
+缓存命中的任务证据保留 `retrieved_at`、`cache_age_seconds`、provider、original query 和 content hash。缓存只影响证据新鲜度，不改变三个质量维度的含义。
+
 ## 离线质量 assessment
 
 `research.evaluation.OfflineEvaluationService.evaluate(snapshot)` 只读取持久化 `RunSnapshot.output` 和 `RunSnapshot.followup_context`，返回冻结的 `ResearchAssessment`。assessment 包含 `run_id`、带时区的 `evaluated_at`、0–1 分数、tuple findings 和 `schema_version=1`。
@@ -262,6 +278,7 @@ npm run build
 - `HarnessRunner`、`HarnessRunRequest`、`RunContext`、`SummaryStateOutput` 和旧 Agent `run()` / `run_stream()` 仍保留一个兼容周期；新代码应使用 `ResearchCommand`、`RunSession`、`ResearchApplicationService.execute()` 和 `/runs/{run_id}`。
 - 旧 `JsonlRunRecorder` 名称仍存在，但它已经委托 `FileRunRepository`，只写 canonical schema-v1 snapshot，不创建第二套索引或日志文件。
 - application run 的创建、checkpoint、completed、failed、cancelled、rejected 和 report_incomplete 终态都会尽力持久化；只有同时满足 `validated=true` 与 `resumable=true` 的 checkpoint 才允许恢复。
+- 证据研究的任务 checkpoint 会保存证据绑定、页面 artifact 与预算；恢复不会重新规划或重跑已完成任务。旧的缺失证据状态的任务 checkpoint 会明确拒绝恢复。具体边界见 [证据研究的保存与恢复](docs/EVIDENCE_RECOVERY.md)。
 - 文件仓库适合单进程本地运行；锁是进程内的，不是多进程数据库事务。
 - 默认 facade 同时只执行一个顶层运行；单次运行内的研究任务按 `MAX_CONCURRENT_TASKS` 有界并发。
 - `permission_mode="strict"` 中的 `ask` 目前直接阻断，因为尚无审批 UI。

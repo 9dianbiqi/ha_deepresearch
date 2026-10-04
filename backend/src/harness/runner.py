@@ -271,13 +271,14 @@ class HarnessRunner:
     @classmethod
     def build_default(cls, *, base_path: str | Path = "./runs") -> HarnessRunner:
         """Compose the production coordinator, application, policy, and repository."""
+        config = Configuration.from_env()
         repository = FileRunRepository(base_path)
         history_store = ResearchHistoryStore(repository)
         memory_store = UserMemoryStore(repository.root)
         policy = HarnessPolicy()
         artifact_store = FileArtifactStore(repository)
         coordinator = DeepResearchAgent(
-            config=Configuration.from_env(),
+            config=config,
             operation_authorizer=policy,
             artifact_store=artifact_store,
         )
@@ -288,13 +289,14 @@ class HarnessRunner:
             history_store=history_store,
             memory_store=memory_store,
         )
-        # Keep one top-level run active per shared coordinator. Task workers still
-        # use the configured bounded parallelism within that run, while this
-        # conservative boundary avoids interleaving stateful role-agent histories.
+        # Mirror MAX_CONCURRENT_RUNS here so the compatibility facade does not
+        # become a hidden lower cap behind the HTTP admission gate. The default
+        # remains one run, while explicit higher values are still non-queued.
         return cls(
             application=application,
             repository=repository,
-            max_workers=1,
+            max_workers=config.max_concurrent_runs,
+            admission_capacity=config.max_concurrent_runs,
             history_store=history_store,
             memory_store=memory_store,
             artifact_store=artifact_store,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -10,6 +11,9 @@ from typing import Any
 TESTS_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = TESTS_DIR.parent
 SRC_DIR = BACKEND_DIR / "src"
+
+# HTTP tests exercise the production fail-closed authentication boundary.
+os.environ["APP_API_KEY"] = "test-app-key"
 
 for path in (BACKEND_DIR, SRC_DIR):
     path_str = str(path)
@@ -26,20 +30,39 @@ except ModuleNotFoundError as exc:
     fake_loguru = ModuleType("loguru")
 
     class _FakeLogger:
-        def add(self, *args: Any, **kwargs: Any) -> None:
-            return None
+        def __init__(self) -> None:
+            self._sinks: dict[int, Any] = {}
+            self._next_sink_id = 0
+
+        def add(self, *args: Any, **kwargs: Any) -> int:
+            sink = args[0] if args else None
+            sink_id = self._next_sink_id
+            self._next_sink_id += 1
+            self._sinks[sink_id] = sink
+            return sink_id
+
+        def remove(self, *args: Any, **kwargs: Any) -> None:
+            if args:
+                self._sinks.pop(args[0], None)
+
+        def _emit(self, message: str) -> None:
+            for sink in list(self._sinks.values()):
+                if callable(sink):
+                    sink(message)
+                elif hasattr(sink, "write"):
+                    sink.write(message + "\n")
 
         def info(self, *args: Any, **kwargs: Any) -> None:
-            return None
+            self._emit(str(args[0]) if args else "")
 
         def warning(self, *args: Any, **kwargs: Any) -> None:
-            return None
+            self._emit(str(args[0]) if args else "")
 
         def exception(self, *args: Any, **kwargs: Any) -> None:
-            return None
+            self._emit(str(args[0]) if args else "")
 
         def debug(self, *args: Any, **kwargs: Any) -> None:
-            return None
+            self._emit(str(args[0]) if args else "")
 
     fake_loguru.logger = _FakeLogger()  # type: ignore[attr-defined]
     sys.modules["loguru"] = fake_loguru

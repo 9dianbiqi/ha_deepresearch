@@ -324,7 +324,10 @@ class HarnessApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
         self.runner = FakeRunner(base_path=Path(self.tmpdir.name))
-        self.client = TestClient(create_app(harness_runner=self.runner))
+        self.client = TestClient(
+            create_app(harness_runner=self.runner),
+            headers={"Authorization": "Bearer test-app-key"},
+        )
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
@@ -516,7 +519,10 @@ class HarnessApiTests(unittest.TestCase):
             )
         )
 
-        with TestClient(create_app(harness_runner=runner)) as client:
+        with TestClient(
+            create_app(harness_runner=runner),
+            headers={"Authorization": "Bearer test-app-key"},
+        ) as client:
             first = client.get(f"/runs/{run_id}/artifacts/{descriptor.artifact_id}")
             missing = client.get(f"/runs/{run_id}/artifacts/not-owned")
 
@@ -527,7 +533,10 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(missing.json()["detail"]["code"], "artifact_not_found")
 
-        with TestClient(create_app(harness_runner=PersistentRunner())) as client:
+        with TestClient(
+            create_app(harness_runner=PersistentRunner()),
+            headers={"Authorization": "Bearer test-app-key"},
+        ) as client:
             restarted = client.get(
                 f"/runs/{run_id}/artifacts/{descriptor.artifact_id}"
             )
@@ -590,7 +599,10 @@ class HarnessApiTests(unittest.TestCase):
 
         runner = BlockingRunner(base_path=Path(self.tmpdir.name))
         with patch.dict("os.environ", {"MAX_CONCURRENT_RUNS": "1"}, clear=False):
-            with TestClient(create_app(harness_runner=runner)) as client:
+            with TestClient(
+                create_app(harness_runner=runner),
+                headers={"Authorization": "Bearer test-app-key"},
+            ) as client:
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     first_future = executor.submit(
                         client.post,

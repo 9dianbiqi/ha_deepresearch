@@ -126,3 +126,37 @@ test("fetchArtifact uses the durable run artifact endpoint", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("protected API requests read the key from sessionStorage", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  let stored = "browser-session-key";
+  globalThis.window = {
+    sessionStorage: {
+      getItem: () => stored,
+      setItem: (_key, value) => {
+        stored = value;
+      },
+      removeItem: () => {
+        stored = "";
+      },
+    },
+  };
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "http://test/runs?limit=20");
+    assert.deepEqual(options, {
+      headers: {
+        Accept: "application/json",
+        Authorization: "Bearer browser-session-key",
+      },
+    });
+    return Response.json({ items: [], next_cursor: null });
+  };
+  try {
+    await api.listHistory();
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
+  assert.doesNotMatch(source, /VITE_[A-Z_]*API_KEY/);
+});

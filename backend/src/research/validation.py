@@ -44,6 +44,7 @@ _CHECKPOINT_PHASES = frozenset(
         "planning_completed",
         "research_tasks_progress",
         "evidence_completed",
+        "summary_quality_completed",
         "report_before_generation",
         "report_generated",
         "report_retry",
@@ -56,7 +57,11 @@ _TASK_STATUSES = frozenset(
 )
 _OPERATION_STATES = frozenset({"active", "completed", "failed", "rejected", "uncertain"})
 _CHECKPOINT_BLOCK_REASONS = frozenset(
-    {"operation_outcome_uncertain", "report_stream_incomplete"}
+    {
+        "operation_outcome_uncertain",
+        "report_stream_incomplete",
+        "evidence_recovery_unavailable",
+    }
 )
 
 
@@ -133,6 +138,13 @@ def validate_checkpoint_snapshot(snapshot: RunSnapshot) -> None:
         )
 
     task_state = state.get("task_state")
+    recovery = state.get("evidence_recovery")
+    if recovery is not None and phase in {"planning_completed", "research_tasks_progress"}:
+        from .evidence_recovery import EvidenceRecoveryError, validate_evidence_recovery
+        try:
+            validate_evidence_recovery(recovery, run_id=run_id, task_state=task_state)
+        except (EvidenceRecoveryError, TypeError, ValueError, KeyError) as exc:
+            raise CheckpointValidationError("Evidence recovery references are invalid.") from exc
     # RunSnapshot freezes nested arrays to tuples in memory; repository input
     # is a list.  Both are valid representations of the JSON array contract.
     if not isinstance(task_state, (list, tuple)):
@@ -207,6 +219,11 @@ def validate_checkpoint_snapshot(snapshot: RunSnapshot) -> None:
         if any(
             task.get("status") == "in_progress"
             and task.get("id") not in safe_replay_task_ids
+            # A validated evidence runtime also records queued/started task
+            # attempts before their first governed operation. Recovery charges
+            # that attempt; the independent uncertain-operation guard below
+            # still rejects every known unsafe side effect.
+            and recovery is None
             for task in task_state
         ):
             raise CheckpointValidationError(

@@ -19,6 +19,7 @@ from research.operations import (
     OperationRejectedError,
     OperationScope,
     OperationSpec,
+    operation_replay_safety,
 )
 from research.session import (
     CancellationRequestedError,
@@ -58,6 +59,12 @@ class RecordingPolicy:
             outcome=self.outcomes.get(capability, "allow"),
             reason=f"policy-secret reason for {capability}",
         )
+
+
+def test_quality_verifier_operations_are_safe_to_replay() -> None:
+    """Completed quality LLM calls must not invalidate recovery checkpoints."""
+    assert operation_replay_safety("quality_semantic.complete") == "safe_replay"
+    assert operation_replay_safety("quality_factual.complete") == "safe_replay"
 
 
 class ClosingIterator:

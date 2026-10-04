@@ -67,6 +67,8 @@ class ResearchState:
     research_intelligence: dict[str, Any] = field(default_factory=dict)
     github_context: dict[str, Any] = field(default_factory=dict)
     github_intelligence: dict[str, Any] = field(default_factory=dict)
+    structured_summary: dict[str, Any] = field(default_factory=dict)
+    quality_assessment: dict[str, Any] = field(default_factory=dict)
 
 
 SummaryState = ResearchState
@@ -84,3 +86,5 @@ class SummaryStateOutput:
     source_context: dict[str, Any] = field(default_factory=dict)
     research_intelligence: dict[str, Any] = field(default_factory=dict)
     github_intelligence: dict[str, Any] = field(default_factory=dict)
+    structured_summary: dict[str, Any] = field(default_factory=dict)
+    quality_assessment: dict[str, Any] = field(default_factory=dict)

@@ -253,6 +253,15 @@ class RetrievalBudgetTracker:
         with self._lock:
             return dict(self._used)
 
+    @classmethod
+    def restore(cls, budget: RetrievalBudget, used: Mapping[str, Any]) -> RetrievalBudgetTracker:
+        """Restore validated counters without charging the saved work again."""
+        tracker = cls(budget)
+        if not isinstance(used, Mapping) or set(used) != set(cls._FIELDS):
+            raise ValueError("Recovery budget counters are incomplete.")
+        tracker.reserve(**dict(used))
+        return tracker
+
     def remaining(self) -> dict[str, int]:
         """Return the currently available units in every budget dimension."""
         limits = {

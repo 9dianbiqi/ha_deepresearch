@@ -59,7 +59,7 @@ class EvidenceQualityGate:
                 blockers.append(f"missing_content_hash:{evidence.evidence_id}")
             if not evidence.source.captured_at:
                 blockers.append(f"missing_capture_time:{evidence.evidence_id}")
-            if profile.mode.value == "github" and not evidence.source.resolved_version:
+            if evidence.source.provider_id == "github" and not evidence.source.resolved_version:
                 blockers.append(f"missing_version:{evidence.evidence_id}")
             if profile.citation_policy.require_locator and not evidence.locator.url:
                 blockers.append(f"missing_locator:{evidence.evidence_id}")
@@ -74,6 +74,12 @@ class EvidenceQualityGate:
             referenced = claim.evidence_ids + claim.conflicting_evidence_ids
             if any(item not in evidence_ids for item in referenced):
                 blockers.append(f"unknown_evidence:{claim.claim_id}")
+            for limitation in claim.limitations:
+                if limitation in {
+                    "citation_not_in_current_binding",
+                    "no_accepted_binding",
+                }:
+                    blockers.append(f"claim_limitation:{claim.claim_id}:{limitation}")
             if claim.reportable and not claim.evidence_ids:
                 blockers.append(f"weak_claim:{claim.claim_id}")
             if claim.conflicting_evidence_ids:

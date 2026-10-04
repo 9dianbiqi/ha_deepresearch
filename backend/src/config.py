@@ -19,7 +19,16 @@ SAFE_CONFIGURATION_FIELDS = (
     "use_tool_calling",
     "enable_notes",
     "enable_quality_gate",
+    "task_quality_mode",
+    "enable_search_cache",
+    "search_cache_ttl_seconds",
     "enable_github_research",
+    "enable_evidence_web",
+    "enable_summary_quality_shadow",
+    "summary_semantic_threshold",
+    "summary_factual_threshold",
+    "summary_citation_threshold",
+    "summary_overall_threshold",
     "run_timeout_seconds",
     "max_concurrent_runs",
     "retention_days",
@@ -166,10 +175,62 @@ class Configuration(BaseModel):
         title="Enable Quality Gate",
         description="Whether to run summary quality checks and auto-retry on poor results",
     )
+    task_quality_mode: str = Field(
+        default="evidence",
+        pattern="^(basic|evidence|strict)$",
+        title="Task Quality Mode",
+        description="Validation strength for ordinary task summaries",
+    )
+    enable_search_cache: bool = Field(
+        default=True,
+        title="Enable Search Cache",
+        description="Use the safe local search cache unless freshness requires bypass",
+    )
+    search_cache_ttl_seconds: int = Field(
+        default=86400,
+        ge=60,
+        le=604800,
+        title="Search Cache TTL",
+        description="Maximum search-cache age in seconds",
+    )
     enable_github_research: bool = Field(
         default=True,
         title="Enable GitHub Research",
         description="Automatically use GitHub API context for repository topics",
+    )
+    enable_evidence_web: bool = Field(
+        default=False,
+        title="Enable Evidence Web",
+        description="Use the evidence-first Web profile for explicit Web mode requests",
+    )
+    enable_summary_quality_shadow: bool = Field(
+        default=True,
+        title="Enable Summary Quality Shadow",
+        description="Evaluate evidence quality without blocking compatibility Web reports",
+    )
+    summary_semantic_threshold: float = Field(
+        default=0.72,
+        ge=0.0,
+        le=1.0,
+        title="Summary Semantic Threshold",
+    )
+    summary_factual_threshold: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        title="Summary Factual Threshold",
+    )
+    summary_citation_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        title="Summary Citation Threshold",
+    )
+    summary_overall_threshold: float = Field(
+        default=0.78,
+        ge=0.0,
+        le=1.0,
+        title="Summary Overall Threshold",
     )
     github_token: str | None = Field(
         default=None,

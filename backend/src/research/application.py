@@ -24,7 +24,9 @@ from .contracts import (
     RunSnapshot,
     RunStatus,
 )
+from .evidence_recovery import EvidenceRecoveryError
 from .history import ResearchHistoryStore
+from .intelligence import ResearchIntelligenceBundle
 from .memory import UserMemoryStore
 from .observers import NULL_OBSERVER
 from .operations import OperationRejectedError
@@ -35,11 +37,13 @@ from .ports import (
     RunRepository,
 )
 from .quality import EvidenceGateBlockedError
+from .report_document import StructuredSummaryDocument, SummaryQualityAssessment
 from .report_validation import (
     CitationGate,
     ReportValidationResult,
     validate_citations,
     validate_report,
+    validate_structured_citations,
 )
 from .repository import (
     CorruptRunRecordError,
@@ -393,6 +397,36 @@ class ResearchApplicationService:
                 "checkpoint_not_found",
                 "This run has no recovery checkpoint.",
             )
+        checkpoint_phase = checkpoint.get("phase")
+        checkpoint_continuation = checkpoint.get("state")
+        checkpoint_profile_id = (
+            checkpoint_continuation.get("research_profile_id")
+            if isinstance(checkpoint_continuation, Mapping)
+            else None
+        )
+        is_kernel_task_checkpoint = (
+            checkpoint_phase in {"planning_completed", "research_tasks_progress"}
+            and isinstance(checkpoint_profile_id, str)
+            and checkpoint_profile_id not in {"", "web.default.v1"}
+        )
+        if (
+            is_kernel_task_checkpoint
+            and checkpoint.get("recovery_blocked_reason")
+            == "evidence_recovery_unavailable"
+        ):
+            raise RecoveryFailure(
+                "evidence_recovery_unavailable",
+                "This task checkpoint has no durable evidence recovery store.",
+            )
+        if (
+            is_kernel_task_checkpoint
+            and snapshot.recovery_resumable is True
+            and not isinstance(checkpoint.get("evidence_recovery"), Mapping)
+        ):
+            raise RecoveryFailure(
+                "evidence_recovery_missing",
+                "This evidence research checkpoint is missing its recovery data.",
+            )
         if snapshot.status in {RunStatus.COMPLETED, RunStatus.REJECTED}:
             raise RecoveryFailure(
                 "run_not_resumable",
@@ -477,6 +511,15 @@ class ResearchApplicationService:
                 kind=EventKind.RUN_FAILED,
                 code="checkpoint_persistence_failed",
                 message="A recovery checkpoint could not be persisted.",
+            )
+        except EvidenceRecoveryError as exc:
+            code = exc.code
+            return self._finish_started(
+                session,
+                status=RunStatus.FAILED,
+                kind=EventKind.RUN_FAILED,
+                code=code,
+                message="Saved evidence recovery data could not be restored.",
             )
         except EvidenceGateBlockedError:
             return self._finish_started(
@@ -814,6 +857,16 @@ class ResearchApplicationService:
         prior_context: FollowupContext | None,
     ) -> ReportValidationResult:
         """Validate the report and invoke at most one coordinator retry."""
+        structured_validation = self._validate_structured_report(session)
+        if structured_validation is not None:
+            session.metrics["report_validation"] = {
+                "attempts": [
+                    {"attempt": 1, **structured_validation.as_dict()}
+                ],
+                "retry_count": 0,
+                "final": structured_validation.as_dict(),
+            }
+            return structured_validation
         attempts: list[dict[str, object]] = []
         citation_gate = self._citation_gate(session)
         validation = validate_report(
@@ -899,6 +952,87 @@ class ResearchApplicationService:
             "final": validation.as_dict(),
         }
         return validation
+
+    @staticmethod
+    def _validate_structured_report(
+        session: RunSession,
+    ) -> ReportValidationResult | None:
+        """Validate the explicit structured path without legacy citation parsing."""
+        if not session.state.structured_summary:
+            return None
+        text = session.state.structured_report or ""
+        reasons: list[str] = []
+        try:
+            document = StructuredSummaryDocument.from_dict(
+                session.state.structured_summary
+            )
+            assessment = SummaryQualityAssessment.from_dict(
+                session.state.quality_assessment
+            )
+            bundle = ResearchIntelligenceBundle.from_dict(
+                session.state.research_intelligence
+            )
+            citation_gate = validate_structured_citations(
+                document,
+                bundle.claims,
+                bundle.evidence,
+                evidence_frozen=bundle.evidence_frozen,
+            )
+            if not citation_gate.valid:
+                reasons.extend(
+                    f"citation_{item}" for item in citation_gate.failure_reasons
+                )
+            if {item.paragraph_id for item in document.paragraphs} != {
+                item.paragraph_id for item in assessment.paragraph_assessments
+            }:
+                reasons.append("quality_paragraph_mismatch")
+        except (TypeError, ValueError):
+            document = None
+            assessment = None
+            citation_gate = None
+            reasons.append("structured_output_invalid")
+        if not text.strip():
+            reasons.append("empty_report")
+        if document is not None and not document.paragraphs:
+            reasons.append("empty_structured_document")
+        section_count = sum(
+            1 for line in text.splitlines() if line.startswith("## ")
+        )
+        has_title = next(
+            (line.startswith("# ") for line in text.splitlines() if line.strip()),
+            False,
+        )
+        if not has_title:
+            reasons.append("missing_title")
+        has_citations = "[E" in text
+        requires_citations = bool(
+            document
+            and any(
+                item.paragraph_type != "limitation" and item.claim_ids
+                for item in document.paragraphs
+            )
+        )
+        if requires_citations and not has_citations:
+            reasons.append("citations_missing")
+        return ReportValidationResult(
+            valid=not reasons,
+            output_chars=len(text),
+            has_title=has_title,
+            section_count=section_count,
+            completed_sections=section_count,
+            covered_tasks=len(session.state.todo_items),
+            total_tasks=len(session.state.todo_items),
+            requires_citations=requires_citations,
+            has_citations=has_citations,
+            finish_reason=session.latest_llm_finish_reason(
+                role="structured_reporter"
+            ),
+            failure_reasons=tuple(dict.fromkeys(reasons)),
+            citation_valid=bool(citation_gate and citation_gate.valid),
+            citation_failure_reasons=(
+                citation_gate.failure_reasons if citation_gate is not None else ()
+            ),
+        )
 
     @staticmethod
     def _citation_gate(session: RunSession) -> CitationGate | None:

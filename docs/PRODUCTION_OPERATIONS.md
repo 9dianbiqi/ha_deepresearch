@@ -52,8 +52,8 @@ python -m maintenance cleanup --data-dir ..\data --retention-days 30 --apply
 
 ## HTTP 保护
 
-- `APP_API_KEY` 配置后，除 `/healthz` 和 `/readyz` 外的 HTTP 路由都要求 `Authorization: Bearer <APP_API_KEY>`。
-- Compose 中前端使用 `/api` 反向代理，由 nginx 在服务端注入 `APP_API_KEY`；密钥不会编译进浏览器 JavaScript。直接开发模式才通过 `VITE_API_BASE_URL` 指向后端。
+- `APP_API_KEY` 是生产必填配置；除 `/healthz` 和 `/readyz` 外的 HTTP 路由都要求 `Authorization: Bearer <APP_API_KEY>`。未配置时受保护路由 fail closed，仍返回 `401 unauthorized`。
+- Compose 中前端使用 `/api` 反向代理，nginx 只透传浏览器输入的 `Authorization` 请求头；密钥不会编译进浏览器 JavaScript。页面首次使用时输入 API Key，直接开发模式仍通过 `VITE_API_BASE_URL` 指向后端。
 - `MAX_CONCURRENT_RUNS` 控制单进程活动 Run 数，超限返回 `429 capacity_exceeded`。
 - 主题长度上限为 4000 字符，Harness `metadata` 上限为 16 KiB。
 - SSE、Run JSON 和日志只保留受控投影，不写入 Token、Prompt 原文或完整模型响应。

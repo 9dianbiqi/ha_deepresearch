@@ -1,5 +1,31 @@
 <template>
   <main class="app-shell">
+    <section v-if="!apiKeyReady" class="auth-gate">
+      <div class="auth-card surface-card">
+        <p class="eyebrow">生产访问</p>
+        <h1>输入 API Key</h1>
+        <p class="muted-copy">
+          API Key 只保存在当前浏览器标签页的 sessionStorage，并通过 Bearer 请求头发送。
+        </p>
+        <form class="auth-form" @submit.prevent="submitApiKey">
+          <label class="field">
+            <span>API Key</span>
+            <input
+              v-model="apiKeyInput"
+              type="password"
+              autocomplete="current-password"
+              placeholder="请输入服务端 API Key"
+              required
+            />
+          </label>
+          <button class="primary-button full-button" type="submit" :disabled="authLoading">
+            {{ authLoading ? "正在验证" : "验证并进入" }}
+          </button>
+        </form>
+        <p v-if="authError" class="error-banner">{{ authError }}</p>
+      </div>
+    </section>
+    <template v-else>
     <header class="app-topbar">
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true">
@@ -20,6 +46,14 @@
           <span class="live-dot"></span>
           {{ loading ? "正在接收流式事件" : "后端接口 localhost:8000" }}
         </span>
+        <button
+          class="link-button"
+          type="button"
+          :disabled="loading"
+          @click="signOut"
+        >
+          切换 API Key
+        </button>
         <button
           class="icon-button"
           type="button"
@@ -91,6 +125,14 @@
             <label class="memory-toggle">
               <input v-model="form.useHistoryMemory" type="checkbox" />
               <span>自动参考相关历史（本次可关闭）</span>
+            </label>
+
+            <label class="memory-toggle evidence-mode-toggle">
+              <input v-model="form.evidenceResearch" type="checkbox" />
+              <span>
+                深度证据研究
+                <small>生成段落级引用、置信度和证据视图；后端未开启时自动使用普通研究。</small>
+              </span>
             </label>
 
             <button
@@ -473,7 +515,13 @@
               </div>
               <span class="status-tag completed">已生成</span>
             </div>
-            <div class="markdown-body report-body" v-html="renderedReport"></div>
+            <ResearchReport
+              :document="structuredSummary"
+              :assessment="qualityAssessment"
+              :fallback-html="renderedReport"
+              :selected-paragraph-id="selectedParagraphId"
+              @select-evidence="selectEvidenceFromReport"
+            />
           </section>
         </template>
       </section>
@@ -548,57 +596,19 @@
           <p v-else class="empty-copy">暂无工具调用。</p>
         </section>
 
-        <section v-if="githubIntelligence" class="surface-card evidence-drawer">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">GitHub Evidence Drawer</p>
-              <h2>证据与覆盖</h2>
-            </div>
-            <span class="status-tag completed">
-              {{ githubIntelligence.evidence?.length || 0 }} 条
-            </span>
-          </div>
-          <p class="muted-copy">
-            覆盖率 {{ formatCoverage(githubIntelligence.coverage?.coverage_score) }} ·
-            {{ githubIntelligence.snapshots?.length || 0 }} 个固定快照
-          </p>
-          <div v-if="githubIntelligence.coverage?.missing_dimensions?.length" class="notice-list">
-            <p class="eyebrow">待补证据</p>
-            <p>{{ githubIntelligence.coverage.missing_dimensions.join("、") }}</p>
-          </div>
-          <div v-if="githubIntelligence.claims?.length" class="claim-list">
-            <article v-for="claim in githubIntelligence.claims.slice(0, 4)" :key="String(claim.claim_id)" class="claim-item">
-              <strong>{{ claim.category || "claim" }}</strong>
-              <span>{{ claim.statement || "" }}</span>
-            </article>
-          </div>
-          <div v-if="sourceEvidence.length" class="source-evidence-list">
-            <p class="eyebrow">文件级引用</p>
-            <article v-for="evidence in sourceEvidence" :key="evidence.evidence_id" class="source-evidence-row">
-              <div>
-                <strong>{{ evidence.file_path || evidence.title }}</strong>
-                <span>{{ formatEvidenceLines(evidence) }}</span>
-              </div>
-              <a
-                v-if="evidenceHref(evidence)"
-                class="link-button"
-                :href="evidenceHref(evidence) || undefined"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                查看固定源码
-              </a>
-            </article>
-          </div>
-          <div v-if="(githubIntelligence.snapshots?.length || 0) > 1" class="comparison-list">
-            <p class="eyebrow">Comparison View</p>
-            <article v-for="snapshot in githubIntelligence.snapshots" :key="String(snapshot.snapshot_id)" class="comparison-row">
-              <strong>{{ snapshot.repository || "repository" }}</strong>
-              <span>{{ snapshot.commit_sha || "未取得 SHA" }}</span>
-              <span>{{ snapshot.collection_status || "partial" }}</span>
-            </article>
-          </div>
-        </section>
+        <EvidenceDrawer
+          v-if="genericEvidence.length || structuredSummary || qualityAssessment"
+          class="surface-card evidence-drawer"
+          :evidence="genericEvidence"
+          :claims="genericClaims"
+          :document="structuredSummary"
+          :assessment="qualityAssessment"
+          :selected-evidence-id="selectedEvidenceId"
+          :selected-paragraph-id="selectedParagraphId"
+          :coverage-score="genericCoverageScore"
+          :mode="activeResearchMode"
+          @select-evidence="selectEvidenceFromDrawer"
+        />
 
         <section v-if="artifactManifest.length" class="surface-card artifacts-panel">
           <div class="section-heading">
@@ -686,27 +696,73 @@
         </section>
       </aside>
     </div>
+    </template>
   </main>
 </template>
+
+<script lang="ts">
+export interface ResearchHydrationToken {
+  readonly runId: string;
+  readonly generation: number;
+}
+
+export interface ResearchHydrationGuard {
+  invalidate: () => number;
+  capture: (runId: string) => ResearchHydrationToken;
+  isGenerationCurrent: (generation: number) => boolean;
+  isCurrent: (token: ResearchHydrationToken, currentRunId: string | null) => boolean;
+}
+
+export function createResearchHydrationGuard(): ResearchHydrationGuard {
+  let generation = 0;
+
+  return {
+    invalidate() {
+      generation += 1;
+      return generation;
+    },
+    capture(runId) {
+      return { runId, generation };
+    },
+    isGenerationCurrent(candidate) {
+      return candidate === generation;
+    },
+    isCurrent(token, currentRunId) {
+      return token.generation === generation && token.runId === currentRunId;
+    },
+  };
+}
+</script>
 
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { marked } from "marked";
 
+import EvidenceDrawer from "./components/EvidenceDrawer.vue";
+import ResearchReport from "./components/ResearchReport.vue";
 import {
   confirmMemory,
   createMemoryCandidate,
   deleteMemory,
   fetchArtifact,
+  fetchJsonArtifact,
+  clearStoredApiKey,
+  getStoredApiKey,
   listMemories,
   runContinueStream,
   runResearchStream,
+  setStoredApiKey,
+  verifyApiKey,
+  ApiError,
   getRunRecord,
   listHistory,
   type GithubArtifact,
-  type GithubEvidenceItem,
   type GithubIntelligence,
+  type ResearchClaim,
+  type ResearchEvidence,
   type ResearchIntelligence,
+  type StructuredSummaryDocument,
+  type SummaryQualityAssessment,
   type ContinueRequest,
   type HistoryItem,
   type ResearchStreamEvent,
@@ -757,10 +813,15 @@ const form = reactive({
   followupTopic: "",
   searchApi: "",
   useHistoryMemory: true,
+  evidenceResearch: false,
 });
 
 const loading = ref(false);
 const error = ref("");
+const apiKey = ref("");
+const apiKeyInput = ref("");
+const authLoading = ref(false);
+const authError = ref("");
 const progressLogs = ref<string[]>([]);
 const logsCollapsed = ref(false);
 const todoTasks = ref<TodoTaskView[]>([]);
@@ -786,11 +847,19 @@ const sourcesHighlight = ref(false);
 const reportHighlight = ref(false);
 const toolHighlight = ref(false);
 const githubIntelligence = ref<GithubIntelligence | null>(null);
+const researchIntelligence = ref<ResearchIntelligence | null>(null);
+const structuredSummary = ref<StructuredSummaryDocument | null>(null);
+const qualityAssessment = ref<SummaryQualityAssessment | null>(null);
+const selectedEvidenceId = ref<string | null>(null);
+const selectedParagraphId = ref<string | null>(null);
 const artifactManifest = ref<GithubArtifact[]>([]);
 
 let currentController: AbortController | null = null;
 let pulseRaf = 0;
 let pulseTimer = 0;
+const researchHydrationGuard = createResearchHydrationGuard();
+
+const apiKeyReady = computed(() => Boolean(apiKey.value));
 
 const searchOptions = [
   "advanced",
@@ -830,10 +899,65 @@ const currentTask = computed(() => {
   return todoTasks.value[0] ?? null;
 });
 const currentTaskSources = computed(() => currentTask.value?.sourceItems ?? []);
-const sourceEvidence = computed<GithubEvidenceItem[]>(() =>
-  (githubIntelligence.value?.evidence ?? [])
-    .filter((item) => item.evidence_type === "source_code")
-    .slice(0, 6),
+const genericEvidence = computed<ResearchEvidence[]>(() => {
+  const current = researchIntelligence.value?.evidence;
+  if (Array.isArray(current) && current.length) {
+    return current;
+  }
+  return (githubIntelligence.value?.evidence ?? []).map((item) => ({
+    evidence_id: item.evidence_id,
+    source: {
+      provider_id: "github",
+      source_kind: item.evidence_type,
+      source_id: item.source_url || item.evidence_id,
+      canonical_url: item.source_url,
+      resolved_version: item.commit_sha ?? null,
+      captured_at: null,
+      content_hash: item.commit_sha ?? null,
+    },
+    evidence_type: item.evidence_type,
+    evidence_level: item.evidence_type === "source_code" ? "full_text" : "metadata",
+    title: item.title,
+    excerpt: item.excerpt,
+    locator: {
+      locator_type: item.file_path ? "line" : "metadata",
+      url: item.source_url,
+      file_path: item.file_path ?? null,
+      line_start: item.line_start ?? null,
+      line_end: item.line_end ?? null,
+    },
+  }));
+});
+const genericClaims = computed<ResearchClaim[]>(() => {
+  const current = researchIntelligence.value?.claims;
+  if (Array.isArray(current) && current.length) {
+    return current;
+  }
+  return (githubIntelligence.value?.claims ?? []).map((rawClaim, index) => {
+    const claim = ensureRecord(rawClaim);
+    return {
+      claim_id: extractOptionalString(claim.claim_id) ?? `legacy_claim_${index + 1}`,
+      dimension:
+        extractOptionalString(claim.dimension) ??
+        extractOptionalString(claim.category) ??
+        "overview",
+      statement: extractOptionalString(claim.statement) ?? "",
+      confidence: extractOptionalString(claim.confidence) ?? "unverified",
+      evidence_ids: stringArray(claim.evidence_ids),
+      conflicting_evidence_ids: stringArray(claim.conflicting_evidence_ids),
+      limitations: stringArray(claim.limitations),
+      reportable: claim.reportable !== false,
+    };
+  });
+});
+const genericCoverageScore = computed(() => {
+  const value =
+    researchIntelligence.value?.coverage?.coverage_score ??
+    githubIntelligence.value?.coverage?.coverage_score;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+});
+const activeResearchMode = computed(
+  () => researchIntelligence.value?.mode ?? (githubIntelligence.value ? "github" : "web"),
 );
 const currentTaskTitle = computed(() => currentTask.value?.title ?? "");
 const currentTaskIntent = computed(() => currentTask.value?.intent ?? "");
@@ -909,24 +1033,6 @@ function formatTaskStatus(status: string): string {
   return TASK_STATUS_LABEL[status] ?? status;
 }
 
-function formatCoverage(value: unknown): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? `${Math.round(value * 100)}%`
-    : "0%";
-}
-
-function formatEvidenceLines(evidence: GithubEvidenceItem): string {
-  if (typeof evidence.line_start !== "number") return "固定 commit 快照";
-  const end = typeof evidence.line_end === "number" ? evidence.line_end : evidence.line_start;
-  return `第 ${evidence.line_start}-${end} 行 · ${evidence.commit_sha || "固定快照"}`;
-}
-
-function evidenceHref(evidence: GithubEvidenceItem): string | null {
-  return evidence.source_url.startsWith("https://github.com/")
-    ? evidence.source_url
-    : null;
-}
-
 function artifactDescriptors(value: unknown): GithubArtifact[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return [];
@@ -947,7 +1053,37 @@ function artifactDescriptors(value: unknown): GithubArtifact[] {
     : [];
 }
 
-function setGithubIntelligence(value: unknown, researchValue?: unknown): void {
+function structuredSummaryFrom(value: unknown): StructuredSummaryDocument | null {
+  const record = ensureRecord(value);
+  return record.schema_version === 1 && Array.isArray(record.paragraphs)
+    ? (record as unknown as StructuredSummaryDocument)
+    : null;
+}
+
+function qualityAssessmentFrom(value: unknown): SummaryQualityAssessment | null {
+  const record = ensureRecord(value);
+  return record.schema_version === 1 &&
+    typeof record.passed === "boolean" &&
+    Array.isArray(record.paragraph_assessments) &&
+    Array.isArray(record.claim_assessments)
+    ? (record as unknown as SummaryQualityAssessment)
+    : null;
+}
+
+function setResearchData(
+  value: unknown,
+  researchValue?: unknown,
+  structuredValue?: unknown,
+  assessmentValue?: unknown,
+): void {
+  researchIntelligence.value =
+    researchValue && typeof researchValue === "object" && !Array.isArray(researchValue)
+      ? (researchValue as ResearchIntelligence)
+      : null;
+  structuredSummary.value = structuredSummaryFrom(structuredValue);
+  qualityAssessment.value = qualityAssessmentFrom(assessmentValue);
+  selectedEvidenceId.value = null;
+  selectedParagraphId.value = null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     githubIntelligence.value = null;
     artifactManifest.value = artifactDescriptors(researchValue);
@@ -956,6 +1092,52 @@ function setGithubIntelligence(value: unknown, researchValue?: unknown): void {
   const bundle = value as GithubIntelligence;
   githubIntelligence.value = bundle;
   artifactManifest.value = artifactDescriptors(researchValue);
+}
+
+async function hydrateEvidenceArtifacts(token: ResearchHydrationToken): Promise<void> {
+  if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
+
+  const manifest = [...artifactManifest.value];
+  const structuredArtifact = manifest.find((artifact) => {
+    const key = `${artifact.artifact_type} ${artifact.path}`.toLowerCase();
+    return key.includes("structured_summary") || key.includes("structured-summary");
+  });
+  const qualityArtifact = manifest.find((artifact) => {
+    const key = `${artifact.artifact_type} ${artifact.path}`.toLowerCase();
+    return key.includes("quality_assessment") || key.includes("quality-assessment");
+  });
+  if (!structuredSummary.value && structuredArtifact) {
+    try {
+      const value = structuredSummaryFrom(
+        await fetchJsonArtifact<unknown>(token.runId, structuredArtifact.artifact_id),
+      );
+      if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
+      structuredSummary.value = value;
+    } catch {
+      // The Markdown report remains available when an optional structured artifact is absent.
+    }
+  }
+  if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
+  if (!qualityAssessment.value && qualityArtifact) {
+    try {
+      const value = qualityAssessmentFrom(
+        await fetchJsonArtifact<unknown>(token.runId, qualityArtifact.artifact_id),
+      );
+      if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
+      qualityAssessment.value = value;
+    } catch {
+      // Quality details are optional and never invalidate a completed report view.
+    }
+  }
+}
+
+function selectEvidenceFromReport(evidenceId: string, paragraphId: string): void {
+  selectedEvidenceId.value = evidenceId;
+  selectedParagraphId.value = paragraphId;
+}
+
+function selectEvidenceFromDrawer(evidenceId: string): void {
+  selectedEvidenceId.value = evidenceId;
 }
 
 async function downloadArtifact(artifact: GithubArtifact): Promise<void> {
@@ -1006,6 +1188,72 @@ function formatHistoryDate(value: string): string {
   }).format(parsed);
 }
 
+function expireApiKey(): void {
+  clearStoredApiKey();
+  apiKey.value = "";
+  authError.value = "API Key 无效或已失效，请重新输入。";
+  if (currentController) {
+    currentController.abort();
+    currentController = null;
+  }
+}
+
+function isUnauthorized(errorValue: unknown): boolean {
+  return errorValue instanceof ApiError && errorValue.status === 401;
+}
+
+async function bootstrapApplication(): Promise<void> {
+  await loadHistory();
+  // Rehydrate the selected run after a browser refresh so the continuation
+  // anchor is available before the user starts the next follow-up.
+  let lastRunId = "";
+  try {
+    lastRunId = window.localStorage.getItem("helloagents:last-run-id") || "";
+  } catch {
+    // Local storage is optional; the history list remains authoritative.
+  }
+  if (lastRunId) {
+    const lastRun = historyItems.value.find((item) => item.run_id === lastRunId);
+    if (lastRun) {
+      await openHistory(lastRun);
+    }
+  }
+  await loadMemories();
+}
+
+async function submitApiKey(): Promise<void> {
+  const candidate = apiKeyInput.value.trim();
+  if (!candidate || authLoading.value) return;
+
+  authLoading.value = true;
+  authError.value = "";
+  setStoredApiKey(candidate);
+  try {
+    await verifyApiKey();
+    apiKey.value = candidate;
+    await bootstrapApplication();
+  } catch (errorValue) {
+    clearStoredApiKey();
+    apiKey.value = "";
+    authError.value = isUnauthorized(errorValue)
+      ? "API Key 错误，请检查后重试。"
+      : errorValue instanceof Error
+        ? errorValue.message
+        : "API Key 校验失败。";
+  } finally {
+    authLoading.value = false;
+  }
+}
+
+function signOut(): void {
+  expireApiKey();
+  apiKeyInput.value = "";
+  authError.value = "";
+  resetWorkflowState();
+  historyItems.value = [];
+  userMemories.value = [];
+}
+
 async function loadHistory(cursor?: string | null): Promise<void> {
   if (historyLoading.value) return;
   historyLoading.value = true;
@@ -1017,6 +1265,9 @@ async function loadHistory(cursor?: string | null): Promise<void> {
       : page.items;
     historyCursor.value = page.next_cursor;
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     historyError.value = err instanceof Error ? err.message : "无法加载研究历史";
   } finally {
     historyLoading.value = false;
@@ -1030,6 +1281,9 @@ async function loadMemories(): Promise<void> {
     const page = await listMemories("default", true, 50);
     userMemories.value = page.items;
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     memoryError.value = err instanceof Error ? err.message : "无法加载用户记忆";
   } finally {
     memoryLoading.value = false;
@@ -1082,12 +1336,14 @@ async function removeUserMemory(memory: UserMemory): Promise<void> {
 
 async function openHistory(item: HistoryItem): Promise<void> {
   if (loading.value || historyLoading.value) return;
+  const requestGeneration = researchHydrationGuard.invalidate();
   historyLoading.value = true;
   historyError.value = "";
   try {
     const record = await getRunRecord(item.run_id);
+    if (!researchHydrationGuard.isGenerationCurrent(requestGeneration)) return;
     const output = ensureRecord(record.output);
-    resetWorkflowState();
+    const generation = resetWorkflowState();
     currentRunId.value = record.run_id;
     resumableRunId.value =
       record.resumable === false
@@ -1096,6 +1352,8 @@ async function openHistory(item: HistoryItem): Promise<void> {
     currentTopic.value = record.topic || item.topic;
     form.topic = "";
     form.followupTopic = "";
+    form.evidenceResearch =
+      output.research_profile_id === "web.evidence.v1";
     todoTasks.value = normalizeTasks(output.todo_items);
     if (todoTasks.value.length) {
       activeTaskId.value = todoTasks.value[0].id;
@@ -1104,7 +1362,15 @@ async function openHistory(item: HistoryItem): Promise<void> {
       extractOptionalString(output.report_markdown) ??
       extractOptionalString(output.running_summary) ??
       "";
-    setGithubIntelligence(output.github_intelligence, output.research_intelligence);
+    setResearchData(
+      output.github_intelligence,
+      output.research_intelligence,
+      output.structured_summary,
+      output.quality_assessment,
+    );
+    const token: ResearchHydrationToken = { runId: record.run_id, generation };
+    await hydrateEvidenceArtifacts(token);
+    if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
     progressLogs.value = [`已恢复历史研究：${currentTopic.value}`];
     historyRecallCount.value = 0;
     try {
@@ -1119,12 +1385,21 @@ async function openHistory(item: HistoryItem): Promise<void> {
   }
 }
 
-async function hydrateRunArtifacts(runId: string | null): Promise<void> {
-  if (!runId) return;
+async function hydrateRunArtifacts(token: ResearchHydrationToken): Promise<void> {
+  if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
   try {
-    const record = await getRunRecord(runId);
+    const record = await getRunRecord(token.runId);
+    if (!researchHydrationGuard.isCurrent(token, currentRunId.value)) return;
     const output = ensureRecord(record.output);
-    setGithubIntelligence(output.github_intelligence, output.research_intelligence);
+    form.evidenceResearch =
+      output.research_profile_id === "web.evidence.v1";
+    setResearchData(
+      output.github_intelligence,
+      output.research_intelligence,
+      output.structured_summary,
+      output.quality_assessment,
+    );
+    await hydrateEvidenceArtifacts(token);
   } catch {
     // The SSE terminal event remains authoritative if the record is not yet readable.
   }
@@ -1255,6 +1530,12 @@ function ensureRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    : [];
+}
+
 function createTaskView(item: Record<string, unknown>, index: number): TodoTaskView {
   const rawId =
     typeof item.id === "number"
@@ -1365,12 +1646,18 @@ function resetWorkflowState(
     preserveRunId?: boolean;
     preserveResumableRunId?: boolean;
   } = {},
-) {
+): number {
+  const generation = researchHydrationGuard.invalidate();
   clearAnimations();
   todoTasks.value = [];
   activeTaskId.value = null;
   reportMarkdown.value = "";
   githubIntelligence.value = null;
+  researchIntelligence.value = null;
+  structuredSummary.value = null;
+  qualityAssessment.value = null;
+  selectedEvidenceId.value = null;
+  selectedParagraphId.value = null;
   artifactManifest.value = [];
   streamTelemetry.value = null;
   progressLogs.value = [];
@@ -1389,6 +1676,7 @@ function resetWorkflowState(
   if (!options.preserveResumableRunId) {
     resumableRunId.value = null;
   }
+  return generation;
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
@@ -1477,7 +1765,10 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     } else if (typeof event.last_resumable_parent === "string") {
       resumableRunId.value = event.last_resumable_parent;
     }
-    void hydrateRunArtifacts(currentRunId.value);
+    const completedRunId = currentRunId.value;
+    if (completedRunId) {
+      void hydrateRunArtifacts(researchHydrationGuard.capture(completedRunId));
+    }
     try {
       if (currentRunId.value) {
         window.localStorage.setItem("helloagents:last-run-id", currentRunId.value);
@@ -1595,6 +1886,34 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     return;
   }
 
+  if (event.type === "task_quality_evaluated") {
+    const task = findTask(payload.task_id);
+    const action = extractOptionalString(payload.action) ?? "unknown";
+    const reasons = Array.isArray(payload.reason_codes)
+      ? payload.reason_codes.filter((item): item is string => typeof item === "string")
+      : [];
+    const actionLabels: Record<string, string> = {
+      accept: "质量检查通过",
+      repair_citations: "修复引用绑定",
+      regenerate_summary: "基于现有证据重写摘要",
+      retrieve_gaps: "针对证据缺口补充检索",
+      flag_conflict: "保留并标记证据冲突",
+      degrade: "带质量限制降级输出",
+      block: "严格模式阻断输出",
+    };
+    if (
+      task &&
+      ["repair_citations", "regenerate_summary", "retrieve_gaps"].includes(action)
+    ) {
+      task.summary = "";
+    }
+    progressLogs.value.push(
+      `任务「${task?.title || "未知"}」${actionLabels[action] || action}` +
+        (reasons.length ? `（${reasons.join("、")}）` : ""),
+    );
+    return;
+  }
+
   if (event.type === "task_retry") {
     const task = findTask(payload.task_id);
     const refined = extractOptionalString(payload.refined_query) ?? "";
@@ -1672,7 +1991,7 @@ const handleSubmit = async () => {
     currentController = null;
   }
 
-  resetWorkflowState();
+  const streamGeneration = resetWorkflowState();
   currentTopic.value = topic;
   loading.value = true;
 
@@ -1685,8 +2004,16 @@ const handleSubmit = async () => {
         topic,
         search_api: form.searchApi || undefined,
         use_history_memory: form.useHistoryMemory,
+        research_mode: form.evidenceResearch ? "web" : undefined,
+        research_profile: form.evidenceResearch
+          ? "web.evidence.v1"
+          : undefined,
       },
-      handleStreamEvent,
+      (event) => {
+        if (researchHydrationGuard.isGenerationCurrent(streamGeneration)) {
+          handleStreamEvent(event);
+        }
+      },
       { signal: controller.signal }
     );
 
@@ -1694,6 +2021,9 @@ const handleSubmit = async () => {
       reportMarkdown.value = "暂无生成的报告";
     }
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     if (err instanceof DOMException && err.name === "AbortError") {
       progressLogs.value.push("已取消当前研究任务");
     } else {
@@ -1720,7 +2050,7 @@ const handleContinue = async () => {
 
   const topic = form.followupTopic.trim();
 
-  resetWorkflowState({
+  const streamGeneration = resetWorkflowState({
     preserveRunId: true,
     preserveResumableRunId: true,
   });
@@ -1735,17 +2065,28 @@ const handleContinue = async () => {
     parent_run_id: parentRunId,
     search_api: form.searchApi || undefined,
     use_history_memory: form.useHistoryMemory,
+    research_mode: form.evidenceResearch ? "web" : undefined,
+    research_profile: form.evidenceResearch ? "web.evidence.v1" : undefined,
   };
 
   try {
-    await runContinueStream(continuePayload, handleStreamEvent, {
-      signal: controller.signal,
-    });
+    await runContinueStream(
+      continuePayload,
+      (event) => {
+        if (researchHydrationGuard.isGenerationCurrent(streamGeneration)) {
+          handleStreamEvent(event);
+        }
+      },
+      { signal: controller.signal },
+    );
 
     if (!reportMarkdown.value) {
       reportMarkdown.value = "暂无生成的报告";
     }
   } catch (err) {
+    if (isUnauthorized(err)) {
+      expireApiKey();
+    }
     if (err instanceof DOMException && err.name === "AbortError") {
       progressLogs.value.push("已取消当前追问任务");
     } else {
@@ -1776,6 +2117,7 @@ const startNewResearch = () => {
   form.followupTopic = "";
   form.searchApi = "";
   form.useHistoryMemory = true;
+  form.evidenceResearch = false;
 };
 
 const downloadReport = () => {
@@ -1794,24 +2136,28 @@ const downloadReport = () => {
 };
 
 onMounted(() => {
+  const storedApiKey = getStoredApiKey();
+  apiKeyInput.value = storedApiKey;
+  if (!storedApiKey) return;
+
+  authLoading.value = true;
   void (async () => {
-    await loadHistory();
-    // Rehydrate the selected run after a browser refresh so the continuation
-    // anchor is available before the user starts the next follow-up.
-    let lastRunId = "";
     try {
-      lastRunId = window.localStorage.getItem("helloagents:last-run-id") || "";
-    } catch {
-      // Local storage is optional; the history list remains authoritative.
-    }
-    if (lastRunId) {
-      const lastRun = historyItems.value.find((item) => item.run_id === lastRunId);
-      if (lastRun) {
-        await openHistory(lastRun);
-      }
+      await verifyApiKey();
+      apiKey.value = storedApiKey;
+      await bootstrapApplication();
+    } catch (errorValue) {
+      clearStoredApiKey();
+      apiKey.value = "";
+      authError.value = isUnauthorized(errorValue)
+        ? "API Key 错误，请重新输入。"
+        : errorValue instanceof Error
+          ? errorValue.message
+          : "API Key 校验失败。";
+    } finally {
+      authLoading.value = false;
     }
   })();
-  void loadMemories();
 });
 
 onBeforeUnmount(() => {
@@ -1849,6 +2195,31 @@ onBeforeUnmount(() => {
   font-family: "Plus Jakarta Sans", "Noto Sans SC", "PingFang SC",
     "Microsoft YaHei", system-ui, sans-serif;
   letter-spacing: 0;
+}
+
+.auth-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--color-background);
+}
+
+.auth-card {
+  width: min(100%, 460px);
+  display: grid;
+  gap: 14px;
+  box-shadow: 0 18px 50px rgb(19 78 74 / 12%);
+}
+
+.auth-card h1 {
+  color: var(--color-foreground-strong);
+  font-size: 28px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 12px;
 }
 
 .app-topbar {
@@ -2108,6 +2479,26 @@ p {
   width: 15px;
   height: 15px;
   accent-color: var(--color-primary);
+}
+
+.evidence-mode-toggle {
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #d8e6e3;
+  border-radius: 12px;
+  background: #f7fbfa;
+}
+
+.evidence-mode-toggle input {
+  margin-top: 2px;
+}
+
+.evidence-mode-toggle small {
+  display: block;
+  margin-top: 2px;
+  color: #718783;
+  font-size: 11px;
 }
 
 .surface-card + .surface-card,

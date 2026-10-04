@@ -55,6 +55,7 @@ _DEFAULT_CORS_ORIGINS = (
 _MAX_TOPIC_LENGTH = 4000
 _MAX_METADATA_BYTES = 16 * 1024
 _PUBLIC_PROBE_PATHS = frozenset({"/healthz", "/readyz"})
+_UNCONFIGURED_API_KEY_SENTINEL = "\x00app-api-key-unconfigured\x00"
 
 # 添加控制台日志处理程序
 logger.add(
@@ -135,6 +136,8 @@ class ResearchResponse(BaseModel):
         default_factory=dict,
         description="Optional versioned GitHub evidence intelligence bundle",
     )
+    structured_summary: dict[str, Any] = Field(default_factory=dict)
+    quality_assessment: dict[str, Any] = Field(default_factory=dict)
 
 
 class ContinueRequest(BaseModel):
@@ -229,6 +232,8 @@ class HarnessResponse(BaseModel):
     source_context: dict[str, Any] = Field(default_factory=dict)
     research_intelligence: dict[str, Any] = Field(default_factory=dict)
     github_intelligence: dict[str, Any] = Field(default_factory=dict)
+    structured_summary: dict[str, Any] = Field(default_factory=dict)
+    quality_assessment: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
     findings: list[dict[str, Any]] = Field(default_factory=list)
     compressed_context: dict[str, Any] = Field(default_factory=dict)
@@ -242,6 +247,15 @@ class HarnessResponse(BaseModel):
 def _configuration_presence(value: str | None) -> str:
     """Describe whether a sensitive setting exists without returning its value."""
     return "configured" if value else "unset"
+
+
+def _configured_app_api_key() -> str | None:
+    """Read the HTTP API key without retaining it in application configuration."""
+    value = os.getenv("APP_API_KEY")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _configured_cors_origins(raw_value: str | None = None) -> list[str]:
@@ -361,6 +375,16 @@ def _build_harness_response(result: Any, *, mode: str) -> HarnessResponse:
         github_intelligence=(
             dict(output.github_intelligence)
             if output and getattr(output, "github_intelligence", None)
+            else {}
+        ),
+        structured_summary=(
+            dict(output.structured_summary)
+            if output and getattr(output, "structured_summary", None)
+            else {}
+        ),
+        quality_assessment=(
+            dict(output.quality_assessment)
+            if output and getattr(output, "quality_assessment", None)
             else {}
         ),
         metrics=result.metrics,
@@ -779,24 +803,21 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
     app = FastAPI(title="HelloAgents Deep Researcher")
     app.add_exception_handler(RequestValidationError, _request_validation_response)
     run_capacity = _RunCapacity(_configured_run_capacity())
-    configured_app_api_key = (os.getenv("APP_API_KEY") or "").strip()
+    configured_app_api_key = _configured_app_api_key()
 
     @app.middleware("http")
     async def authenticate_request(request: Request, call_next: Any) -> Any:
         """Require a configured bearer key for every non-probe HTTP route."""
-        if (
-            configured_app_api_key
-            and request.method != "OPTIONS"
-            and request.url.path not in _PUBLIC_PROBE_PATHS
-        ):
+        if request.method != "OPTIONS" and request.url.path not in _PUBLIC_PROBE_PATHS:
             authorization = request.headers.get("Authorization", "")
             scheme, separator, token = authorization.partition(" ")
-            if (
-                not separator
-                or scheme.casefold() != "bearer"
-                or not token
-                or not compare_digest(token, configured_app_api_key)
-            ):
+            candidate = token if separator and scheme.casefold() == "bearer" else ""
+            expected = configured_app_api_key or _UNCONFIGURED_API_KEY_SENTINEL
+            authorized = bool(configured_app_api_key) and compare_digest(
+                candidate,
+                expected,
+            )
+            if not authorized:
                 return JSONResponse(
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
@@ -820,7 +841,7 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=_configured_cors_origins(),
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "Accept", "Authorization"],
         expose_headers=["Content-Disposition"],
     )
@@ -843,13 +864,17 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
 
         logger.info(
             "DeepResearch configuration loaded: provider={} model={} endpoint={} search_api={} "
-            "max_loops={} fetch_full_page={} tool_calling={} strip_thinking={} api_key={}",
+            "max_loops={} fetch_full_page={} search_cache={} cache_ttl={} "
+            "task_quality_mode={} tool_calling={} strip_thinking={} api_key={}",
             config.llm_provider,
             config.resolved_model() or "unset",
             _configuration_presence(base_url),
             (config.search_api.value if isinstance(config.search_api, SearchAPI) else config.search_api),
             config.max_web_research_loops,
             config.fetch_full_page,
+            config.enable_search_cache,
+            config.search_cache_ttl_seconds,
+            config.task_quality_mode,
             config.use_tool_calling,
             config.strip_thinking_tokens,
             _configuration_presence(config.llm_api_key),
@@ -949,6 +974,16 @@ def create_app(harness_runner: HarnessRunner | None = None) -> FastAPI:
             github_intelligence=(
                 dict(output.github_intelligence)
                 if output and getattr(output, "github_intelligence", None)
+                else {}
+            ),
+            structured_summary=(
+                dict(output.structured_summary)
+                if output and getattr(output, "structured_summary", None)
+                else {}
+            ),
+            quality_assessment=(
+                dict(output.quality_assessment)
+                if output and getattr(output, "quality_assessment", None)
                 else {}
             ),
         )

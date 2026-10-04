@@ -103,6 +103,8 @@ class HarnessRunRecord:
             "source_context": dict(output.source_context),
             "research_intelligence": dict(output.research_intelligence),
             "github_intelligence": dict(output.github_intelligence),
+            "structured_summary": dict(output.structured_summary),
+            "quality_assessment": dict(output.quality_assessment),
         }
 
         return cls(

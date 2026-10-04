@@ -11,6 +11,7 @@ import re
 import stat
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, Tuple
 
@@ -55,6 +56,11 @@ _CACHE_TEMP_PATTERN = re.compile(
 )
 _SAFE_BACKEND_LABELS = frozenset(
     {backend.value for backend in SearchAPI} | {"hybrid", "none"}
+)
+_FRESH_QUERY_RE = re.compile(
+    r"(?:\b(?:today|latest|current|now|live|price|version)\b|"
+    r"今天|今日|最新|当前|实时|现价|价格|版本|政策)",
+    re.IGNORECASE,
 )
 
 
@@ -278,6 +284,7 @@ def _sweep_search_cache_entry(
     now: float,
     cache_path: Path,
     cache_identity: tuple[int, int],
+    ttl_seconds: int = CACHE_TTL,
 ) -> None:
     """Validate or remove one direct child of the cache directory."""
     if not _cache_directory_is_unchanged(cache_path, cache_identity):
@@ -309,7 +316,7 @@ def _sweep_search_cache_entry(
         return
     if not is_cache_file:
         return
-    if now - entry_status.st_mtime > CACHE_TTL:
+    if now - entry_status.st_mtime > ttl_seconds:
         _remove_cache_entry(
             entry,
             cache_path=cache_path,
@@ -392,6 +399,7 @@ def sweep_search_cache(config: Configuration) -> None:
                         now=now,
                         cache_path=cache_path,
                         cache_identity=cache_identity,
+                        ttl_seconds=config.search_cache_ttl_seconds,
                     )
                 except Exception:
                     logger.warning("Search cache sweep entry cleanup failed")
@@ -430,7 +438,7 @@ def _load_from_cache(query: str, config: Configuration) -> dict[str, Any] | None
             )
             return None
         if (
-            time.time() - entry_status.st_mtime > CACHE_TTL
+            time.time() - entry_status.st_mtime > config.search_cache_ttl_seconds
             or entry_status.st_size > CACHE_MAX_FILE_BYTES
         ):
             _remove_cache_entry(
@@ -463,6 +471,13 @@ def _load_from_cache(query: str, config: Configuration) -> dict[str, Any] | None
             )
             return None
         logger.info("Search cache hit: query_hash=%s", _query_hash(query))
+        projected["cache_hit"] = True
+        projected["cache_age_seconds"] = max(0.0, time.time() - entry_status.st_mtime)
+        projected["retrieved_at"] = datetime.fromtimestamp(
+            entry_status.st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+        projected["original_query"] = query
         return projected
     except (json.JSONDecodeError, UnicodeError, OSError, ValueError, RecursionError):
         logger.warning("Search cache read failed")
@@ -577,7 +592,7 @@ def dispatch_search(
     query: str,
     config: Configuration,
     loop_count: int,
-    use_cache: bool = False,
+    use_cache: bool | None = None,
     cancellation: CancellationWaiter | None = None,
     *,
     operation_scope: OperationScope | None = None,
@@ -591,6 +606,9 @@ def dispatch_search(
     runner = search_adapter or HelloAgentsSearchAdapter()
     query_hash = _query_hash(query)
     configured_capabilities = _search_capabilities(primary_api)
+    cache_enabled = (
+        config.enable_search_cache if use_cache is None else use_cache
+    ) and not _requires_fresh_search(query)
 
     # 构建降级链：主后端 → DuckDuckGo（免费，无需 API key）
     backends: list[str] = [primary_api]
@@ -598,8 +616,9 @@ def dispatch_search(
     if primary_api != ddg_value:
         backends.append(ddg_value)
 
-    # 缓存只在首次搜索时生效
-    if use_cache and loop_count == 0:
+    # Each unique query is independently cacheable. Freshness-sensitive queries
+    # bypass both reads and writes instead of validating stale evidence carefully.
+    if cache_enabled:
         if operation_scope is None:
             cached = _load_from_cache(query, config)
         else:
@@ -613,10 +632,20 @@ def dispatch_search(
                 lambda: _load_from_cache(query, config),
             )
         if cached is not None:
+            cached_metadata = {
+                key: cached.get(key)
+                for key in (
+                    "cache_hit",
+                    "cache_age_seconds",
+                    "retrieved_at",
+                    "original_query",
+                )
+            }
             cached = _sanitize_search_payload(
                 cached,
                 trusted_backend=primary_api,
             )
+            cached.update(cached_metadata)
             notices = list(cached.get("notices") or [])
             return cached, notices, cached.get("answer"), str(cached.get("backend") or primary_api)
 
@@ -690,8 +719,16 @@ def dispatch_search(
             notices = list(payload.get("notices") or [])
             backend_label = str(payload.get("backend") or backend)
             answer_text = payload.get("answer")
+            payload.update(
+                {
+                    "cache_hit": False,
+                    "cache_age_seconds": 0.0,
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "original_query": query,
+                }
+            )
 
-            if use_cache and loop_count == 0 and payload.get("results"):
+            if cache_enabled and payload.get("results"):
                 if operation_scope is None:
                     _save_to_cache(query, config, payload)
                 else:
@@ -727,6 +764,11 @@ def dispatch_search(
         "notice_codes": [SEARCH_UNAVAILABLE_CODE],
     }
     return fallback_payload, fallback_payload["notices"], None, "none"
+
+
+def _requires_fresh_search(query: str) -> bool:
+    """Return whether a query expresses a time-sensitive information need."""
+    return _FRESH_QUERY_RE.search(query) is not None
 
 
 def _search_capabilities(backend: str) -> tuple[str, ...]:

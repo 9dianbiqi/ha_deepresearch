@@ -45,6 +45,6 @@ https://github.com/pallets/markupsafe/blob/b2e4d9c7687be25695fffbe93a37622302b24
 ## 发布边界
 
 - 后端和前端版本均为 `1.1.0`。
-- 生产 Compose 使用 named volume `helloagents_data`，前端通过 nginx `/api` 反向代理注入 Bearer 密钥，密钥不编译进浏览器 JavaScript。
+- 生产 Compose 使用 named volume `helloagents_data`，前端通过 nginx `/api` 反向代理透传浏览器输入的 Bearer 密钥，密钥不编译进浏览器 JavaScript。
 - 备份、恢复、保留天数和安全清理步骤见 [生产运维说明](../PRODUCTION_OPERATIONS.md)。
 - 论文检索、论文全文/PDF、BibTeX 和 citation snowballing 仍明确不属于 v1.1.0。

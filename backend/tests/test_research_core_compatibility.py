@@ -163,7 +163,10 @@ class _FixtureRunner:
 
 def test_current_api_response_still_returns_github_intelligence() -> None:
     """The public research response keeps the established GitHub field."""
-    client = TestClient(create_app(harness_runner=_FixtureRunner()))
+    client = TestClient(
+        create_app(harness_runner=_FixtureRunner()),
+        headers={"Authorization": "Bearer test-app-key"},
+    )
 
     response = client.post("/research", json={"topic": "owner/repo"})
 

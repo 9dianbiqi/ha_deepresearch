@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -28,10 +31,19 @@ from research.adapters import (
     GovernedHelloAgentsLLM,
     HelloAgentsSearchAdapter,
 )
-from research.artifacts import ArtifactStore, persist_research_artifacts
+from research.artifacts import (
+    ArtifactPayload,
+    ArtifactStore,
+    persist_research_artifacts,
+)
+from research.claim_verifier import (
+    StructuredFactualSupportVerifier,
+    StructuredSemanticSupportScorer,
+)
 from research.context import FollowupContext, ResearchContextAssembler
 from research.contracts import EventKind, ResearchCommand, ResearchEvent, RunStatus
 from research.evidence import (
+    GitHubEvidenceBundle,
     build_github_evidence_bundle,
     canonicalize_github_report,
     freeze_github_evidence,
@@ -39,17 +51,33 @@ from research.evidence import (
     render_github_artifacts,
     supplement_github_evidence,
 )
-from research.intelligence import ResearchIntelligenceBundle
+from research.evidence_recovery import (
+    EvidenceRecoveryError,
+    persist_evidence_recovery,
+)
+from research.intelligence import (
+    ArtifactManifestV2,
+    ClaimRecord,
+    EvidenceRecord,
+    ResearchIntelligenceBundle,
+)
 from research.legacy_sse import project_legacy_event as _project_legacy_event
 from research.operations import (
     GovernedOperations,
     OperationRejectedError,
     OperationScope,
 )
-from research.pipeline import PreparedResearch, ResearchKernel
+from research.pipeline import PreparedResearch, ResearchKernel, TaskEvidenceBinding
 from research.profiles import ResearchMode, built_in_profile_registry
 from research.providers.github import GitHubSourceProvider
 from research.providers.web import WebSourceProvider
+from research.quality import EvidenceGateBlockedError
+from research.report_document import (
+    ParagraphQualityAssessment,
+    StructuredSummaryDocument,
+    SummaryParagraph,
+    SummaryQualityAssessment,
+)
 from research.report_validation import validate_citations
 from research.session import (
     CancellationRequestedError,
@@ -59,10 +87,28 @@ from research.session import (
     RunSession,
 )
 from research.sources import (
+    SourceCollection,
     SourceProviderRegistry,
     SourceSearchResult,
 )
+from research.summary_quality import (
+    SummaryQualityGateV1,
+    SummaryQualityThresholds,
+)
+from research.task_quality import (
+    JsonBatchClaimEvidenceJudge,
+    QualityAction,
+    QualityMode,
+    TaskEvidence,
+    TaskQualityBudget,
+    TaskQualityController,
+    TaskQualityInput,
+    TaskQualityResult,
+    document_from_markdown,
+    evidence_from_search_result,
+)
 from research.telemetry import TelemetryHelloAgentsLLM, llm_telemetry_scope
+from research.web_capture import WebCaptureResult
 from services.github_research import (
     GitHubRepositoryContext,
     GitHubRepositoryTarget,
@@ -71,7 +117,7 @@ from services.github_research import (
 )
 from services.note_agent import NoteSubAgent
 from services.planner import PlanningService
-from services.reporter import ReportingService
+from services.reporter import ReportingService, StructuredReportGenerationError
 from services.search import (
     SEARCH_NOTICE_CODE,
     SEARCH_NOTICE_MESSAGE,
@@ -160,6 +206,7 @@ class _WorkerMessageKind(str, Enum):
 
     SOURCES = "sources"
     SUMMARY_DELTA = "summary_delta"
+    QUALITY = "quality"
     RETRY = "retry"
     COMPLETED = "completed"
     SKIPPED = "skipped"
@@ -180,8 +227,10 @@ class _TaskWorkItem:
     note_content: str
     source_strategy: str | None
     repository: str | None
+    dimension: str
     github_markdown: str
     loop_offset: int
+    attempt_offset: int
     config: Configuration
     operations: GovernedOperations
     search_adapter: Any | None
@@ -256,6 +305,8 @@ class DeepResearchAgent:
         source_provider_registry: SourceProviderRegistry | None = None,
         research_kernel: ResearchKernel | None = None,
         artifact_store: ArtifactStore | None = None,
+        summary_quality_gate: SummaryQualityGateV1 | None = None,
+        task_quality_controller: TaskQualityController | None = None,
         operation_authorizer: Any | None = None,
         legacy_event_queue_capacity: int = 64,
     ) -> None:
@@ -266,6 +317,9 @@ class DeepResearchAgent:
         self._legacy_event_queue_capacity = legacy_event_queue_capacity
         self._last_session: RunSession | None = None
         self._last_session_lock = Lock()
+        # Quality agents are shared production dependencies.  Their conversation
+        # history must never be mutated by two concurrent runs at once.
+        self._quality_agent_lock = Lock()
         self._search_adapter = search_adapter or dispatch_search
         self._uses_default_search_adapter = search_adapter is None
         self._context_preparer = context_preparer or prepare_research_context
@@ -285,6 +339,8 @@ class DeepResearchAgent:
             self.todo_agent: SimpleAgent | None = None
             self.report_agent: SimpleAgent | None = None
             self._summarizer_factory: Callable[[], SimpleAgent] | None = None
+            self._quality_semantic_agent: SimpleAgent | None = None
+            self._quality_factual_agent: SimpleAgent | None = None
         else:
             self.llm = self._init_llm()
             if self.config.llm_reporter_model_id:
@@ -310,6 +366,22 @@ class DeepResearchAgent:
                 name="任务总结专家",
                 system_prompt=task_summarizer_instructions.strip(),
                 role="summarizer",
+            )
+            self._quality_semantic_agent = self._create_role_agent(
+                name="Evidence semantic scorer",
+                system_prompt=(
+                    "Score whether the supplied evidence is semantically relevant to "
+                    "the supplied claim. Return strict JSON only."
+                ),
+                role="quality_semantic",
+            )
+            self._quality_factual_agent = self._create_role_agent(
+                name="Evidence factual verifier",
+                system_prompt=(
+                    "Verify a claim only against supplied evidence. Return strict JSON "
+                    "only and copy support spans exactly from evidence excerpts."
+                ),
+                role="quality_factual",
             )
 
         if planner is not None:
@@ -380,6 +452,8 @@ class DeepResearchAgent:
                 provider_registry=effective_registry,
             )
         self._artifact_store = artifact_store
+        self._summary_quality_gate = summary_quality_gate
+        self._task_quality_controller = task_quality_controller
 
     @property
     def last_session(self) -> RunSession | None:
@@ -631,6 +705,7 @@ class DeepResearchAgent:
         phase = session.checkpoint_phase
         if phase in {
             "evidence_completed",
+            "summary_quality_completed",
             "report_before_generation",
             "report_retry",
             "report_retry_completed",
@@ -675,6 +750,14 @@ class DeepResearchAgent:
         session.raise_if_run_controlled()
         operations = GovernedOperations(session, self._operation_authorizer)
         root_scope = OperationScope(operations=operations)
+        if self._structured_reporting_enabled(session):
+            session.persist_checkpoint("report_retry")
+            self._generate_report(
+                session,
+                operations=operations,
+                root_scope=root_scope,
+            )
+            return
         session.persist_checkpoint("report_retry")
         notes_context = self._read_all_task_notes(
             session.state,
@@ -717,18 +800,30 @@ class DeepResearchAgent:
         root_scope: OperationScope,
     ) -> None:
         """Generate only the report after research evidence is durable."""
-        session.persist_checkpoint("report_before_generation")
+        quality_already_completed = (
+            session.checkpoint_phase == "summary_quality_completed"
+        )
+        if not quality_already_completed:
+            session.persist_checkpoint("report_before_generation")
         notes_context = self._read_all_task_notes(
             session.state,
             operation_scope=root_scope,
         )
         session.raise_if_run_controlled()
-        report = _call_with_operation_scope(
-            self.reporting.generate_report,
-            session.state,
-            notes_context,
-            operation_scope=root_scope,
-        )
+        if self._structured_reporting_enabled(session):
+            report = self._generate_quality_gated_report(
+                session,
+                notes_context=notes_context,
+                operation_scope=root_scope,
+                quality_already_completed=quality_already_completed,
+            )
+        else:
+            report = _call_with_operation_scope(
+                self.reporting.generate_report,
+                session.state,
+                notes_context,
+                operation_scope=root_scope,
+            )
         report = self._canonicalize_github_report(session, report)
         session.raise_if_run_controlled()
         note_metadata = self._save_conclusion_note(
@@ -751,6 +846,674 @@ class DeepResearchAgent:
         self._refresh_github_artifacts(session, report)
         session.persist_checkpoint("report_generated")
 
+    def _structured_reporting_enabled(self, session: RunSession) -> bool:
+        """Return whether this run can use the gated structured boundary."""
+        if not callable(getattr(self.reporting, "generate_structured_document", None)):
+            return False
+        if not callable(getattr(self.reporting, "render_structured_document", None)):
+            return False
+        raw_bundle = session.state.research_intelligence
+        if not isinstance(raw_bundle, Mapping) or raw_bundle.get("schema_version") != 2:
+            return False
+        profile_id = session.state.research_profile_id
+        if profile_id == "web.evidence.v1":
+            return session.command.config.enable_evidence_web
+        return session.state.research_mode == ResearchMode.GITHUB.value
+
+    def _generate_quality_gated_report(
+        self,
+        session: RunSession,
+        *,
+        notes_context: dict[str, Any],
+        operation_scope: OperationScope,
+        quality_already_completed: bool,
+    ) -> str:
+        """Generate, verify, persist, and deterministically render one report."""
+        bundle = ResearchIntelligenceBundle.from_dict(
+            session.state.research_intelligence
+        )
+        if not bundle.evidence_frozen:
+            raise EvidenceGateBlockedError(
+                replace(
+                    bundle.coverage,
+                    allow_report=False,
+                    blockers=tuple(
+                        dict.fromkeys((*bundle.coverage.blockers, "evidence_not_frozen"))
+                    ),
+                )
+            )
+
+        document: StructuredSummaryDocument | None = None
+        assessment: SummaryQualityAssessment | None = None
+        if quality_already_completed:
+            document = StructuredSummaryDocument.from_dict(
+                session.state.structured_summary
+            )
+            assessment = SummaryQualityAssessment.from_dict(
+                session.state.quality_assessment
+            )
+            if not self._quality_binding_is_valid(
+                session,
+                bundle=bundle,
+                document=document,
+                assessment=assessment,
+            ):
+                raise EvidenceGateBlockedError(
+                    replace(
+                        bundle.coverage,
+                        allow_report=False,
+                        blockers=tuple(
+                            dict.fromkeys(
+                                (
+                                    *bundle.coverage.blockers,
+                                    "summary_quality_binding_invalid",
+                                )
+                            )
+                        ),
+                    )
+                )
+            if self._strict_summary_quality(session) and not assessment.passed:
+                raise EvidenceGateBlockedError(
+                    replace(
+                        bundle.coverage,
+                        allow_report=False,
+                        blockers=tuple(
+                            dict.fromkeys(
+                                (
+                                    *bundle.coverage.blockers,
+                                    "summary_quality_failed",
+                                )
+                            )
+                        ),
+                    )
+                )
+        else:
+            gate = self._summary_quality_gate_for_scope(operation_scope)
+            feedback: tuple[str, ...] = ()
+            for attempt in range(2):
+                try:
+                    with llm_telemetry_scope(
+                        session,
+                        role="structured_reporter",
+                        retry_count=attempt,
+                    ):
+                        generated = _call_with_operation_scope(
+                            self.reporting.generate_structured_document,
+                            session.state,
+                            notes_context,
+                            quality_feedback=feedback,
+                            operation_scope=operation_scope,
+                        )
+                    if not isinstance(generated, StructuredSummaryDocument):
+                        raise StructuredReportGenerationError(
+                            "Structured reporter returned an invalid document."
+                        )
+                    document = generated
+                except StructuredReportGenerationError:
+                    if attempt == 0:
+                        feedback = ("structured_generation_failed",)
+                        continue
+                    document = self._deterministic_summary_document(bundle)
+                assessment = gate.evaluate(document, bundle)
+                if assessment.passed:
+                    break
+                feedback = self._quality_feedback(assessment)
+
+            if document is None or assessment is None:  # pragma: no cover - loop invariant
+                raise RuntimeError("Structured quality generation did not produce output.")
+
+            if not assessment.passed:
+                document = self._align_verified_citations(document, assessment)
+                assessment = gate.evaluate(document, bundle)
+
+            if not assessment.passed and self._strict_summary_quality(session):
+                self._record_structured_quality(
+                    session,
+                    bundle=bundle,
+                    document=document,
+                    assessment=assessment,
+                )
+                session.persist_checkpoint("summary_quality_completed")
+                raise EvidenceGateBlockedError(
+                    replace(
+                        bundle.coverage,
+                        allow_report=False,
+                        blockers=tuple(
+                            dict.fromkeys(
+                                (
+                                    *bundle.coverage.blockers,
+                                    "summary_quality_failed",
+                                )
+                            )
+                        ),
+                    )
+                )
+            if not assessment.passed:
+                document, assessment = self._degrade_structured_document(
+                    document,
+                    assessment,
+                )
+
+            self._record_structured_quality(
+                session,
+                bundle=bundle,
+                document=document,
+                assessment=assessment,
+            )
+            session.persist_checkpoint("summary_quality_completed")
+
+        rendered = self.reporting.render_structured_document(
+            session.state,
+            document,
+            notes_context,
+        )
+        markdown = getattr(rendered, "markdown", None)
+        if not isinstance(markdown, str) or not markdown.strip():
+            raise StructuredReportGenerationError(
+                "Structured renderer returned no Markdown."
+            )
+        return markdown
+
+    def _summary_quality_gate_for_scope(
+        self,
+        operation_scope: OperationScope,
+    ) -> SummaryQualityGateV1:
+        """Build one run-scoped, cached production verifier boundary."""
+        if self._summary_quality_gate is not None:
+            return self._summary_quality_gate
+        run_config = operation_scope.operations.session.command.config
+        thresholds = SummaryQualityThresholds(
+            semantic=run_config.summary_semantic_threshold,
+            factual=run_config.summary_factual_threshold,
+            citation=run_config.summary_citation_threshold,
+            overall=run_config.summary_overall_threshold,
+        )
+        semantic_agent = self._quality_semantic_agent
+        factual_agent = self._quality_factual_agent
+        if semantic_agent is None or factual_agent is None:
+            return SummaryQualityGateV1(thresholds=thresholds)
+        semantic_cache: dict[str, str] = {}
+        factual_cache: dict[str, str] = {}
+
+        def cache_key(
+            claim: ClaimRecord,
+            evidence: tuple[EvidenceRecord, ...],
+        ) -> str:
+            return "|".join((claim.claim_id, *(item.evidence_id for item in evidence)))
+
+        def run_agent(agent: SimpleAgent, prompt: str, *, role: str) -> str:
+            quality_session = operation_scope.operations.session
+            with self._quality_agent_lock:
+                try:
+                    with llm_telemetry_scope(quality_session, role=role):
+                        response = agent.run(
+                            prompt,
+                            _research_operation_scope=operation_scope,
+                        )
+                finally:
+                    agent.clear_history()
+            return response if isinstance(response, str) else ""
+
+        def semantic_invoker(
+            claim: ClaimRecord,
+            evidence: tuple[EvidenceRecord, ...],
+        ) -> str:
+            key = cache_key(claim, evidence)
+            if key not in semantic_cache:
+                semantic_cache[key] = run_agent(
+                    semantic_agent,
+                    self._semantic_quality_prompt(claim, evidence),
+                    role="quality_semantic",
+                )
+            return semantic_cache[key]
+
+        def factual_invoker(
+            claim: ClaimRecord,
+            evidence: tuple[EvidenceRecord, ...],
+        ) -> str:
+            key = cache_key(claim, evidence)
+            if key not in factual_cache:
+                factual_cache[key] = run_agent(
+                    factual_agent,
+                    self._factual_quality_prompt(claim, evidence),
+                    role="quality_factual",
+                )
+            return factual_cache[key]
+
+        model_name = self.config.resolved_model() or "configured-llm"
+        return SummaryQualityGateV1(
+            semantic_scorer=StructuredSemanticSupportScorer(
+                semantic_invoker,
+                name=model_name,
+                version="semantic-support-v1",
+            ),
+            factual_verifier=StructuredFactualSupportVerifier(
+                factual_invoker,
+                name=model_name,
+                version="factual-support-v1",
+                prompt_version="claim-evidence-v1",
+            ),
+            thresholds=thresholds,
+        )
+
+    def _task_quality_controller_for_scope(
+        self,
+        operation_scope: OperationScope,
+    ) -> TaskQualityController:
+        """Build one run-scoped ordinary-task quality controller."""
+        if self._task_quality_controller is not None:
+            return self._task_quality_controller
+        factual_agent = self._quality_factual_agent
+        if factual_agent is None:
+            return TaskQualityController()
+
+        def invoke(prompt: str) -> str:
+            quality_session = operation_scope.operations.session
+            with self._quality_agent_lock:
+                try:
+                    with llm_telemetry_scope(
+                        quality_session,
+                        role="task_quality_judge",
+                    ):
+                        response = factual_agent.run(
+                            prompt,
+                            _research_operation_scope=operation_scope,
+                        )
+                finally:
+                    factual_agent.clear_history()
+            return response.strip() if isinstance(response, str) else ""
+
+        return TaskQualityController(
+            judge=JsonBatchClaimEvidenceJudge(invoke),
+        )
+
+    @staticmethod
+    def _semantic_quality_prompt(
+        claim: ClaimRecord,
+        evidence: tuple[EvidenceRecord, ...],
+    ) -> str:
+        """Build a strict bounded semantic scorer prompt."""
+        payload = {
+            "claim": claim.statement,
+            "evidence": [
+                {"evidence_id": item.evidence_id, "excerpt": item.excerpt}
+                for item in evidence
+            ],
+        }
+        return (
+            "Return exactly one JSON object with only semantic_score (0.0 to 1.0). "
+            "Score whether the evidence discusses the same factual proposition.\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+
+    @staticmethod
+    def _factual_quality_prompt(
+        claim: ClaimRecord,
+        evidence: tuple[EvidenceRecord, ...],
+    ) -> str:
+        """Build a strict bounded factual verifier prompt."""
+        payload = {
+            "claim_id": claim.claim_id,
+            "claim": claim.statement,
+            "supporting_candidates": list(claim.evidence_ids),
+            "conflicting_candidates": list(claim.conflicting_evidence_ids),
+            "evidence": [
+                {"evidence_id": item.evidence_id, "excerpt": item.excerpt}
+                for item in evidence
+            ],
+        }
+        return (
+            "Return exactly one JSON object with only these fields: verdict, "
+            "factual_score, supporting_evidence_ids, conflicting_evidence_ids, "
+            "support_spans, reasons. verdict must be supported, partial, "
+            "unsupported, contradicted, or unverified. Every support_spans item "
+            "must contain only evidence_id and exact_text copied verbatim from its "
+            "excerpt. Never cite an ID outside its candidate list.\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+
+    @staticmethod
+    def _quality_feedback(
+        assessment: SummaryQualityAssessment,
+    ) -> tuple[str, ...]:
+        """Return bounded internal feedback for the single structured rewrite."""
+        feedback = [
+            blocker
+            for item in assessment.paragraph_assessments
+            for blocker in item.blockers
+        ]
+        feedback.extend(
+            f"{item.claim_id}:verified_support={','.join(item.supporting_evidence_ids)}"
+            for item in assessment.claim_assessments
+            if item.supporting_evidence_ids
+        )
+        return tuple(dict.fromkeys(feedback))[:32]
+
+    @staticmethod
+    def _align_verified_citations(
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> StructuredSummaryDocument:
+        """Replace model-selected citations with verifier-selected positive support."""
+        support_by_claim = {
+            item.claim_id: item.supporting_evidence_ids
+            for item in assessment.claim_assessments
+        }
+        paragraphs: list[SummaryParagraph] = []
+        for paragraph in document.paragraphs:
+            if paragraph.paragraph_type == "limitation":
+                paragraphs.append(paragraph)
+                continue
+            citations = tuple(
+                dict.fromkeys(
+                    evidence_id
+                    for claim_id in paragraph.claim_ids
+                    for evidence_id in support_by_claim.get(claim_id, ())
+                )
+            )
+            paragraphs.append(
+                SummaryParagraph(
+                    section_id=paragraph.section_id,
+                    paragraph_type=paragraph.paragraph_type,
+                    text=paragraph.text,
+                    claim_ids=paragraph.claim_ids,
+                    citation_ids=citations,
+                )
+            )
+        return StructuredSummaryDocument(
+            task_id=document.task_id,
+            paragraphs=tuple(paragraphs),
+            claim_ids=document.claim_ids,
+        )
+
+    @staticmethod
+    def _deterministic_summary_document(
+        bundle: ResearchIntelligenceBundle,
+    ) -> StructuredSummaryDocument:
+        """Create a safe fallback document from bounded atomic claims only."""
+        paragraphs = tuple(
+            SummaryParagraph(
+                section_id=claim.dimension,
+                paragraph_type="factual",
+                text=claim.statement,
+                claim_ids=(claim.claim_id,),
+                citation_ids=claim.evidence_ids,
+            )
+            for claim in bundle.claims[:12]
+            if claim.reportable and claim.evidence_ids
+        )
+        return StructuredSummaryDocument(
+            task_id="report",
+            paragraphs=paragraphs,
+            claim_ids=tuple(
+                claim_id
+                for paragraph in paragraphs
+                for claim_id in paragraph.claim_ids
+            ),
+        )
+
+    @staticmethod
+    def _degrade_structured_document(
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> tuple[StructuredSummaryDocument, SummaryQualityAssessment]:
+        """Remove blocked paragraphs and append one explicit limitation."""
+        assessment_by_id = {
+            item.paragraph_id: item for item in assessment.paragraph_assessments
+        }
+        kept = tuple(
+            paragraph
+            for paragraph in document.paragraphs
+            if not assessment_by_id.get(paragraph.paragraph_id)
+            or not assessment_by_id[paragraph.paragraph_id].blockers
+        )
+        limitation = SummaryParagraph(
+            section_id="limitations",
+            paragraph_type="limitation",
+            text=(
+                "Some factual paragraphs were omitted because their evidence did "
+                "not pass the configured semantic, factual, and citation gates."
+            ),
+        )
+        final_paragraphs = (*kept, limitation)
+        claim_ids = tuple(
+            dict.fromkeys(
+                claim_id
+                for paragraph in kept
+                for claim_id in paragraph.claim_ids
+            )
+        )
+        final_document = StructuredSummaryDocument(
+            task_id=document.task_id,
+            paragraphs=final_paragraphs,
+            claim_ids=claim_ids,
+        )
+        retained_assessments = tuple(
+            assessment_by_id[item.paragraph_id]
+            for item in kept
+            if item.paragraph_id in assessment_by_id
+        )
+        limitation_assessment = ParagraphQualityAssessment(
+            paragraph_id=limitation.paragraph_id,
+            semantic_score=0.0,
+            factual_score=0.0,
+            citation_score=0.0,
+            support_confidence=0.0,
+            level="unverified",
+            warnings=("quality_gate_degraded",),
+        )
+        claim_assessments = tuple(
+            item
+            for item in assessment.claim_assessments
+            if item.claim_id in claim_ids
+        )
+        overall_score = (
+            sum(item.support_confidence for item in retained_assessments)
+            / len(retained_assessments)
+            if retained_assessments
+            else 0.0
+        )
+        return (
+            final_document,
+            SummaryQualityAssessment(
+                passed=False,
+                overall_score=overall_score,
+                thresholds=assessment.thresholds,
+                paragraph_assessments=(
+                    *retained_assessments,
+                    limitation_assessment,
+                ),
+                claim_assessments=claim_assessments,
+                verifier=assessment.verifier,
+                verifier_version=assessment.verifier_version,
+                prompt_version=assessment.prompt_version,
+            ),
+        )
+
+    @staticmethod
+    def _strict_summary_quality(session: RunSession) -> bool:
+        """Use fail-closed reporting only when the caller explicitly requests it."""
+        return session.command.permission_mode == "strict"
+
+    def _record_structured_quality(
+        self,
+        session: RunSession,
+        *,
+        bundle: ResearchIntelligenceBundle,
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> None:
+        """Persist quality output, binding hashes, and external JSON artifacts."""
+        document_payload = document.as_dict()
+        assessment_payload = assessment.as_dict()
+        document_hash = self._json_hash(document_payload)
+        evidence_hash = self._json_hash(
+            [item.as_dict() for item in bundle.evidence]
+        )
+        session.metrics["summary_quality_binding"] = {
+            "task_id": document.task_id,
+            "document_hash": document_hash,
+            "evidence_hash": evidence_hash,
+            "claims_hash": self._json_hash(
+                [item.as_dict() for item in bundle.claims]
+            ),
+            "assessment_hash": self._json_hash(assessment_payload),
+            "passed": assessment.passed,
+            "threshold_keys": sorted(assessment.thresholds),
+        }
+        descriptors = []
+        if self._artifact_store is not None:
+            payloads = (
+                ArtifactPayload(
+                    artifact_id="artifact_structured_summary_json",
+                    artifact_type="structured_summary",
+                    mime_type="application/json",
+                    title="Structured research summary",
+                    content=json.dumps(
+                        document_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    source_ids=tuple(item.source_id for item in bundle.sources),
+                ),
+                ArtifactPayload(
+                    artifact_id="artifact_quality_assessment_json",
+                    artifact_type="quality_assessment",
+                    mime_type="application/json",
+                    title="Summary quality assessment",
+                    content=json.dumps(
+                        assessment_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    source_ids=tuple(item.source_id for item in bundle.sources),
+                ),
+            )
+            descriptors = [
+                self._artifact_store.put(session.run_id, payload)
+                for payload in payloads
+            ]
+            merged = {
+                item.artifact_id: item
+                for item in (*bundle.artifact_manifest.artifacts, *descriptors)
+            }
+            bundle = replace(
+                bundle,
+                artifact_manifest=ArtifactManifestV2(
+                    artifacts=tuple(merged.values())
+                ),
+            )
+            session.replace_research_intelligence(bundle.as_dict())
+        session.record_summary_quality(document_payload, assessment_payload)
+        recorded = {
+            event.payload.get("artifact_id")
+            for event in session.events
+            if event.kind is EventKind.ARTIFACT_READY
+        }
+        for descriptor in descriptors:
+            if descriptor.artifact_id not in recorded:
+                session.record_artifact(descriptor.as_dict())
+                recorded.add(descriptor.artifact_id)
+
+    def _quality_binding_is_valid(
+        self,
+        session: RunSession,
+        *,
+        bundle: ResearchIntelligenceBundle,
+        document: StructuredSummaryDocument,
+        assessment: SummaryQualityAssessment,
+    ) -> bool:
+        """Fail closed when restored quality output is stale or inconsistent."""
+        expected_thresholds = {
+            "semantic_score": session.command.config.summary_semantic_threshold,
+            "factual_score": session.command.config.summary_factual_threshold,
+            "citation_score": session.command.config.summary_citation_threshold,
+            "overall_score": session.command.config.summary_overall_threshold,
+        }
+        if dict(assessment.thresholds) != expected_thresholds:
+            return False
+        paragraph_ids = {item.paragraph_id for item in document.paragraphs}
+        assessed_paragraph_ids = {
+            item.paragraph_id for item in assessment.paragraph_assessments
+        }
+        if paragraph_ids != assessed_paragraph_ids:
+            return False
+        if {item.claim_id for item in assessment.claim_assessments} != set(
+            document.claim_ids
+        ):
+            return False
+        claim_by_id = {item.claim_id: item for item in bundle.claims}
+        for item in assessment.claim_assessments:
+            claim = claim_by_id.get(item.claim_id)
+            if claim is None:
+                return False
+            if item.verdict == "unverified" and (
+                item.factual_score != 0.0 or item.support_confidence != 0.0
+            ):
+                return False
+            if item.verdict in {"supported", "partial"} and not item.supporting_evidence_ids:
+                return False
+            if item.verdict == "contradicted" and not item.conflicting_evidence_ids:
+                return False
+            if not set(item.supporting_evidence_ids).issubset(claim.evidence_ids):
+                return False
+            if not set(item.conflicting_evidence_ids).issubset(
+                claim.conflicting_evidence_ids
+            ):
+                return False
+        paragraph_by_id = {
+            item.paragraph_id: item for item in document.paragraphs
+        }
+        scorable = tuple(
+            item
+            for item in assessment.paragraph_assessments
+            if paragraph_by_id[item.paragraph_id].paragraph_type != "limitation"
+            and paragraph_by_id[item.paragraph_id].claim_ids
+        )
+        recomputed_overall = (
+            sum(item.support_confidence for item in scorable) / len(scorable)
+            if scorable
+            else 0.0
+        )
+        if not math.isclose(
+            assessment.overall_score,
+            recomputed_overall,
+            abs_tol=1e-9,
+        ):
+            return False
+        if assessment.passed and (
+            not scorable
+            or assessment.overall_score < expected_thresholds["overall_score"]
+            or any(item.blockers for item in assessment.paragraph_assessments)
+        ):
+            return False
+        binding = session.metrics.get("summary_quality_binding")
+        if not isinstance(binding, Mapping):
+            return False
+        return bool(
+            binding.get("task_id") == document.task_id
+            and binding.get("document_hash") == self._json_hash(document.as_dict())
+            and binding.get("evidence_hash")
+            == self._json_hash([item.as_dict() for item in bundle.evidence])
+            and binding.get("claims_hash")
+            == self._json_hash([item.as_dict() for item in bundle.claims])
+            and binding.get("assessment_hash")
+            == self._json_hash(assessment.as_dict())
+            and binding.get("passed") is assessment.passed
+            and binding.get("threshold_keys") == sorted(expected_thresholds)
+        )
+
+    @staticmethod
+    def _json_hash(value: object) -> str:
+        """Return one deterministic SHA-256 JSON binding."""
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
     @staticmethod
     def _canonicalize_github_report(session: RunSession, report: str) -> str:
         """Keep report URLs and citations bound to the evidence ledger."""
@@ -758,7 +1521,7 @@ class DeepResearchAgent:
         if isinstance(raw_generic, dict) and raw_generic.get("schema_version") == 2:
             try:
                 bundle = ResearchIntelligenceBundle.from_dict(raw_generic)
-                if not bundle.evidence_frozen:
+                if not bundle.evidence_frozen and bundle.coverage.allow_report:
                     bundle = replace(bundle, evidence_frozen=True)
                 return validate_citations(report, bundle).sanitized_report or report
             except (TypeError, ValueError):
@@ -782,8 +1545,36 @@ class DeepResearchAgent:
         if isinstance(raw_generic, dict) and raw_generic.get("schema_version") == 2:
             try:
                 bundle = ResearchIntelligenceBundle.from_dict(raw_generic)
-                if not bundle.evidence_frozen:
+                if not bundle.evidence_frozen and bundle.coverage.allow_report:
                     bundle = replace(bundle, evidence_frozen=True)
+                raw_legacy = session.state.github_intelligence
+                legacy_bundle = github_evidence_bundle_from_dict(raw_legacy)
+                if legacy_bundle is not None:
+                    task_sources = [
+                        str(task.sources_summary or "")
+                        for task in session.state.todo_items
+                        if task.sources_summary
+                    ]
+                    if (
+                        legacy_bundle.coverage.gap_queries
+                        and legacy_bundle.coverage.retry_count < 1
+                    ):
+                        legacy_bundle = supplement_github_evidence(
+                            legacy_bundle,
+                            task_sources,
+                        )
+                    legacy_bundle = render_github_artifacts(
+                        freeze_github_evidence(legacy_bundle),
+                        report_markdown=report,
+                    )
+                    session.replace_legacy_github_intelligence(
+                        legacy_bundle.as_dict()
+                    )
+                    bundle = self._persist_legacy_github_artifacts(
+                        session,
+                        bundle=bundle,
+                        legacy_bundle=legacy_bundle,
+                    )
                 if self._artifact_store is not None:
                     bundle = persist_research_artifacts(
                         self._artifact_store,
@@ -801,29 +1592,6 @@ class DeepResearchAgent:
                     if artifact.artifact_id in recorded_artifacts:
                         continue
                     session.record_artifact(artifact.as_dict())
-
-                raw_legacy = session.state.github_intelligence
-                legacy_bundle = github_evidence_bundle_from_dict(raw_legacy)
-                if legacy_bundle is not None:
-                    task_sources = [
-                        str(task.sources_summary or "")
-                        for task in session.state.todo_items
-                        if task.sources_summary
-                    ]
-                    if (
-                        legacy_bundle.coverage.gap_queries
-                        and legacy_bundle.coverage.retry_count < 1
-                    ):
-                        legacy_bundle = supplement_github_evidence(
-                            legacy_bundle,
-                            task_sources,
-                        )
-                    session.replace_legacy_github_intelligence(
-                        render_github_artifacts(
-                            freeze_github_evidence(legacy_bundle),
-                            report_markdown=report,
-                        ).as_dict()
-                    )
             except (TypeError, ValueError, OSError):
                 logger.warning("Unable to persist generic research artifacts")
             return
@@ -856,6 +1624,41 @@ class DeepResearchAgent:
         except (TypeError, ValueError):
             logger.warning("Unable to refresh GitHub artifacts")
 
+    def _persist_legacy_github_artifacts(
+        self,
+        session: RunSession,
+        *,
+        bundle: ResearchIntelligenceBundle,
+        legacy_bundle: GitHubEvidenceBundle,
+    ) -> ResearchIntelligenceBundle:
+        """Write every GitHub v1 inline artifact represented by a v2 descriptor."""
+        if self._artifact_store is None or not legacy_bundle.artifacts:
+            return bundle
+        descriptors_by_id = {
+            item.artifact_id: item for item in bundle.artifact_manifest.artifacts
+        }
+        for artifact in legacy_bundle.artifacts:
+            mapped = descriptors_by_id.get(artifact.artifact_id)
+            descriptor = self._artifact_store.put(
+                session.run_id,
+                ArtifactPayload(
+                    artifact_id=artifact.artifact_id,
+                    artifact_type=artifact.artifact_type,
+                    mime_type=artifact.mime_type,
+                    title=artifact.title or artifact.artifact_type,
+                    description=artifact.description,
+                    content=artifact.content,
+                    source_ids=mapped.source_ids if mapped is not None else (),
+                ),
+            )
+            descriptors_by_id[descriptor.artifact_id] = descriptor
+        return replace(
+            bundle,
+            artifact_manifest=ArtifactManifestV2(
+                artifacts=tuple(descriptors_by_id.values())
+            ),
+        )
+
     def _execute_governed(
         self,
         session: RunSession,
@@ -868,6 +1671,16 @@ class DeepResearchAgent:
     ) -> None:
         """Execute the workflow without storing run scope on the coordinator."""
         session.raise_if_run_controlled()
+        if (
+            session.command.research_profile_id == "web.evidence.v1"
+            and not session.command.config.enable_evidence_web
+        ):
+            session.state.research_profile_id = "web.default.v1"
+            session.metrics["evidence_web"] = {
+                "enabled": False,
+                "outcome": "compatibility_fallback",
+                "reason": "feature_disabled",
+            }
 
         planning_state = session.state
         checkpoint_phase = session.checkpoint_phase
@@ -879,6 +1692,29 @@ class DeepResearchAgent:
         )
         prepared_research: PreparedResearch | None = None
         if resuming_tasks:
+            if self._is_kernel_recovery_checkpoint(session):
+                evidence_recovery = session.checkpoint_state.get(
+                    "evidence_recovery"
+                )
+                if not isinstance(evidence_recovery, Mapping):
+                    raise EvidenceRecoveryError(
+                        "evidence_recovery_missing",
+                        "The evidence recovery checkpoint is missing.",
+                    )
+                from research.evidence_recovery import validate_evidence_recovery
+                validate_evidence_recovery(
+                    evidence_recovery, run_id=session.run_id,
+                    task_state=session.checkpoint_state.get("task_state"),
+                )
+                if evidence_recovery["request"]["topic"] != session.command.topic:
+                    raise EvidenceRecoveryError("evidence_recovery_invalid", "Saved research topic does not match.")
+                prepared_research = self._research_kernel.restore_prepared(
+                    evidence_recovery,
+                    run_id=session.run_id,
+                    cancellation=session.cancellation,
+                    operation_scope=root_scope,
+                    artifact_store=self._artifact_store,
+                )
             planned = [TodoItem(**task.to_dict()) for task in session.state.todo_items]
             pending_tasks = [
                 task
@@ -910,6 +1746,10 @@ class DeepResearchAgent:
                     )
                     for item in prepared_research.tasks
                 ]
+                if not tasks and prepared_research.profile.profile_id == "web.evidence.v1":
+                    tasks = self._plan_research_tasks(
+                        session, prior_context, root_scope=root_scope,
+                    )
             else:
                 github_contexts = self._prepare_github_contexts(
                     planning_state,
@@ -941,28 +1781,19 @@ class DeepResearchAgent:
                         comparison_targets=[context.target for context in github_contexts[1:]],
                     )
                 else:
-                    assembled_prior = ResearchContextAssembler().assemble(prior_context)
-                    related_history = session.related_history_context or None
-                    user_memories = session.user_memory_context or None
-                    session.raise_if_run_controlled()
-                    planner_kwargs: dict[str, object] = {
-                        "prior_context": assembled_prior,
-                    }
-                    if related_history:
-                        planner_kwargs["related_history"] = related_history
-                    if user_memories:
-                        planner_kwargs["user_memories"] = user_memories
-                    tasks = _call_with_operation_scope(
-                        self.planner.plan_todo_list,
-                        planning_state,
-                        **planner_kwargs,
-                        operation_scope=root_scope,
+                    tasks = self._plan_research_tasks(
+                        session, prior_context, root_scope=root_scope,
                     )
-                    session.raise_if_run_controlled()
 
             if not tasks:
                 logger.info("No TODO items generated; falling back to single task")
                 tasks = [self.planner.create_fallback_task(planning_state)]
+
+            if (
+                prepared_research is not None
+                and len(tasks) > prepared_research.profile.retrieval_budget.max_tasks
+            ):
+                raise ValueError("Planned tasks exceed the profile retrieval budget.")
 
             planned = [TodoItem(**task.to_dict()) for task in tasks]
             for task in planned:
@@ -979,7 +1810,11 @@ class DeepResearchAgent:
             )
             session.raise_if_run_controlled()
             session.install_plan(planned)
-            session.persist_checkpoint("planning_completed")
+            self._persist_research_checkpoint(
+                session,
+                "planning_completed",
+                prepared_research,
+            )
         work_items = self._prepare_work_items(
             session,
             operations=operations,
@@ -987,17 +1822,140 @@ class DeepResearchAgent:
             research_kernel=self._research_kernel if prepared_research else None,
             prepared_research=prepared_research,
         )
-        self._execute_work_items(session, work_items)
+        search_results = self._execute_work_items(session, work_items)
         session.raise_if_run_controlled()
         if prepared_research is not None:
-            self._finalize_kernel_research(session, prepared_research)
+            self._finalize_kernel_research(
+                session,
+                prepared_research,
+                search_results=search_results,
+            )
             session.raise_if_run_controlled()
+        elif session.command.config.enable_summary_quality_shadow:
+            session.metrics["summary_quality_shadow"] = {
+                "enabled": True,
+                "blocking": False,
+                "outcome": "not_applicable",
+                "reason": "no_evidence_bundle",
+            }
         session.persist_checkpoint("evidence_completed")
         self._generate_report(
             session,
             operations=operations,
             root_scope=root_scope,
         )
+
+    @staticmethod
+    def _is_kernel_recovery_checkpoint(session: RunSession) -> bool:
+        """Return whether the saved task plan belongs to a kernel profile."""
+        profile_id = session.state.research_profile_id or session.command.research_profile_id
+        return (isinstance(profile_id, str) and profile_id not in {"", "web.default.v1"}) or session.state.research_mode == "github"
+
+    def _persist_research_checkpoint(
+        self,
+        session: RunSession,
+        phase: str,
+        prepared: PreparedResearch | None,
+    ) -> None:
+        """Commit kernel runtime artifacts before making their checkpoint visible."""
+        if prepared is None:
+            session.persist_checkpoint(phase)
+            return
+        if self._artifact_store is None:
+            session.persist_checkpoint(
+                phase,
+                evidence_recovery_unavailable=True,
+            )
+            return
+        payload = persist_evidence_recovery(
+            prepared,
+            run_id=session.run_id,
+            artifact_store=self._artifact_store,
+        )
+        session.persist_checkpoint(
+            phase,
+            evidence_recovery=payload,
+        )
+
+    @staticmethod
+    def _task_attempt_high_water(
+        session: RunSession,
+        task_id: int,
+        prepared: PreparedResearch | None,
+    ) -> int:
+        """Find the highest retrieval attempt already consumed at the checkpoint."""
+        task = next(
+            (item for item in session.state.todo_items if item.id == task_id),
+            None,
+        )
+        high_water = (
+            task.retry_count
+            if task is not None
+            and isinstance(task.retry_count, int)
+            and not isinstance(task.retry_count, bool)
+            else 0
+        )
+        if prepared is not None:
+            high_water = max(high_water, prepared.attempt_high_water(task_id))
+            read_binding = getattr(prepared, "read", None)
+            if callable(read_binding):
+                binding = read_binding(task_id=task_id)
+                attempt = getattr(binding, "task_attempt", None)
+                if isinstance(attempt, int) and not isinstance(attempt, bool):
+                    high_water = max(high_water, attempt)
+            bindings = getattr(prepared, "_task_bindings", None)
+            if isinstance(bindings, Mapping):
+                for key in bindings:
+                    if (
+                        isinstance(key, tuple)
+                        and len(key) == 2
+                        and key[0] == task_id
+                        and isinstance(key[1], int)
+                        and not isinstance(key[1], bool)
+                    ):
+                        high_water = max(high_water, key[1])
+        operation_state = session.checkpoint_state.get("operation_state")
+        if isinstance(operation_state, (list, tuple)):
+            for operation in operation_state:
+                if not isinstance(operation, Mapping):
+                    continue
+                if operation.get("task_id") != task_id:
+                    continue
+                if str(operation.get("operation_name", "")).startswith("notes."):
+                    continue
+                pairing_key = operation.get("pairing_key")
+                if (
+                    isinstance(pairing_key, (list, tuple))
+                    and len(pairing_key) == 4
+                    and isinstance(pairing_key[1], int)
+                    and not isinstance(pairing_key[1], bool)
+                ):
+                    high_water = max(high_water, pairing_key[1])
+        return high_water
+
+    def _plan_research_tasks(
+        self,
+        session: RunSession,
+        prior_context: FollowupContext | None,
+        *,
+        root_scope: OperationScope,
+    ) -> list[TodoItem]:
+        """Plan tasks with the same history and operation scope on both Web paths."""
+        assembled_prior = ResearchContextAssembler().assemble(prior_context)
+        planner_kwargs: dict[str, object] = {"prior_context": assembled_prior}
+        if session.related_history_context:
+            planner_kwargs["related_history"] = session.related_history_context
+        if session.user_memory_context:
+            planner_kwargs["user_memories"] = session.user_memory_context
+        session.raise_if_run_controlled()
+        tasks = _call_with_operation_scope(
+            self.planner.plan_todo_list,
+            session.state,
+            **planner_kwargs,
+            operation_scope=root_scope,
+        )
+        session.raise_if_run_controlled()
+        return tasks
 
     def _prepare_work_items(
         self,
@@ -1012,7 +1970,16 @@ class DeepResearchAgent:
         github_markdown = str(
             (session.state.github_context or {}).get("markdown") or ""
         )
+        if prepared_research is not None:
+            # Canonical kernel summaries receive facts only through their bound
+            # EvidenceRecords.  Legacy runs retain their historical note and
+            # GitHub context inputs below.
+            github_markdown = ""
         items: list[_TaskWorkItem] = []
+        dimension_by_task = {
+            item.id: item.dimension
+            for item in (prepared_research.tasks if prepared_research else ())
+        }
         for index, task in enumerate(session.state.todo_items):
             session.raise_if_run_controlled()
             if task.status in {"completed", "failed", "skipped", "cancelled"}:
@@ -1032,6 +1999,8 @@ class DeepResearchAgent:
                     candidate = note_data.get("content")
                     if isinstance(candidate, str):
                         note_content = candidate
+            if prepared_research is not None:
+                note_content = ""
             items.append(
                 _TaskWorkItem(
                     task_id=task.id,
@@ -1044,8 +2013,14 @@ class DeepResearchAgent:
                     note_content=note_content,
                     source_strategy=task.source_strategy,
                     repository=task.repository,
+                    dimension=dimension_by_task.get(task.id, "overview"),
                     github_markdown=github_markdown,
                     loop_offset=index * 3,
+                    attempt_offset=self._task_attempt_high_water(
+                        session,
+                        task.id,
+                        prepared_research,
+                    ),
                     config=session.command.config,
                     operations=operations,
                     search_adapter=search_adapter,
@@ -1059,10 +2034,11 @@ class DeepResearchAgent:
         self,
         session: RunSession,
         work_items: list[_TaskWorkItem],
-    ) -> None:
+    ) -> list[SourceSearchResult]:
         """Run detached workers with bounded submissions and coordinator-only merges."""
         if not work_items:
-            return
+            return []
+        search_results: list[SourceSearchResult] = []
         operations = work_items[0].operations
         max_workers = min(
             session.command.config.max_concurrent_tasks,
@@ -1110,13 +2086,21 @@ class DeepResearchAgent:
                         session,
                         message,
                         operations=operations,
+                        search_results=search_results,
+                        prepared_research=(
+                            work_items[0].prepared_research if work_items else None
+                        ),
                     )
                     if message.kind in {
                         _WorkerMessageKind.COMPLETED,
                         _WorkerMessageKind.SKIPPED,
                         _WorkerMessageKind.FAILED,
                     }:
-                        session.persist_checkpoint("research_tasks_progress")
+                        self._persist_research_checkpoint(
+                            session,
+                            "research_tasks_progress",
+                            work_items[0].prepared_research if work_items else None,
+                        )
 
                 completed = [future for future in active if future.done()]
                 for future in completed:
@@ -1144,7 +2128,11 @@ class DeepResearchAgent:
                                 task_id=item.task_id,
                             ),
                         )
-                        session.persist_checkpoint("research_tasks_progress")
+                        self._persist_research_checkpoint(
+                            session,
+                            "research_tasks_progress",
+                            work_items[0].prepared_research if work_items else None,
+                        )
                 fill_active_slots()
 
             while True:
@@ -1157,6 +2145,10 @@ class DeepResearchAgent:
                     session,
                     message,
                     operations=operations,
+                    search_results=search_results,
+                    prepared_research=(
+                        work_items[0].prepared_research if work_items else None
+                    ),
                 )
             session.raise_if_run_controlled()
         except _OPERATION_CONTROL_ERRORS:
@@ -1166,6 +2158,7 @@ class DeepResearchAgent:
         finally:
             stop_event.set()
             executor.shutdown(wait=True, cancel_futures=True)
+        return search_results
 
     def _run_task_worker(
         self,
@@ -1222,7 +2215,26 @@ class DeepResearchAgent:
         )
         latest_sources: str | None = None
 
-        for attempt in range(max_attempts):
+        if item.attempt_offset >= max_attempts:
+            self._put_worker_message(
+                result_queue,
+                _WorkerMessage(
+                    kind=_WorkerMessageKind.FAILED,
+                    task_id=item.task_id,
+                    payload={
+                        "message": "Task retrieval attempt budget was exhausted.",
+                        "code": "task_attempt_budget_exhausted",
+                        "original_query": item.original_query,
+                    },
+                ),
+                cancellation,
+                stop_event,
+            )
+            return
+
+        for attempt in range(item.attempt_offset, max_attempts):
+            if item.prepared_research is not None:
+                item.prepared_research.start_attempt(item.task_id, attempt + 1)
             operation_scope = OperationScope(
                 operations=item.operations,
                 task_id=item.task_id,
@@ -1239,7 +2251,7 @@ class DeepResearchAgent:
                     topic=item.topic,
                     config=item.config,
                     loop_count=item.loop_offset + attempt,
-                    use_cache=False,
+                    use_cache=item.config.enable_search_cache,
                     operation_scope=operation_scope,
                 )
                 if not isinstance(typed_search, SourceSearchResult):
@@ -1288,7 +2300,40 @@ class DeepResearchAgent:
                 search_result["notices"] = safe_notices
                 search_result["notice_codes"] = safe_notice_codes
 
-            if not search_result or not search_result.get("results"):
+            raw_results = search_result.get("results") if isinstance(search_result, dict) else None
+            typed_results = (
+                [result for result in raw_results if isinstance(result, Mapping)]
+                if isinstance(raw_results, list)
+                else []
+            )
+            binding = None
+            task_evidence: tuple[TaskEvidence, ...] = ()
+            canonical_kernel = (
+                item.research_kernel is not None
+                and item.prepared_research is not None
+            )
+            if canonical_kernel:
+                assert item.research_kernel is not None and item.prepared_research is not None
+                binding = item.research_kernel.bind_task_evidence(
+                    item.prepared_research,
+                    task_id=item.task_id,
+                    task_attempt=attempt + 1,
+                    query=query,
+                    intent=item.intent,
+                    dimension=item.dimension,
+                    search_results=tuple(dict(result) for result in typed_results),
+                    operation_scope=operation_scope,
+                )
+                task_evidence = tuple(
+                    TaskEvidence.from_record(record, query)
+                    for record in binding.evidence
+                )
+            no_search_or_evidence = (
+                not task_evidence
+                if canonical_kernel
+                else (not search_result or not typed_results)
+            )
+            if no_search_or_evidence:
                 if attempt < max_attempts - 1:
                     previous_query = query
                     local_task.query = query
@@ -1324,14 +2369,27 @@ class DeepResearchAgent:
                 )
                 return
 
-            latest_sources, context = self._context_preparer(
-                search_result,
-                answer_text,
-                item.config,
-            )
-            if item.github_markdown:
+            if canonical_kernel:
+                latest_sources = None
                 context = (
-                    f"{item.github_markdown}\n\n## Web Search Context\n{context}"
+                    "本任务只能依据下方绑定的、带 evidence ID 的证据作答；"
+                    "未绑定的搜索摘要、仓库原文和任务笔记不属于事实来源。"
+                )
+            else:
+                latest_sources, context = self._context_preparer(
+                    search_result,
+                    answer_text,
+                    item.config,
+                )
+                if item.github_markdown:
+                    context = (
+                        f"{item.github_markdown}\n\n## Web Search Context\n{context}"
+                    )
+                task_evidence = evidence_from_search_result(
+                    search_result,
+                    task_id=item.task_id,
+                    query=query,
+                    backend=backend if isinstance(backend, str) else "none",
                 )
             self._put_worker_message(
                 result_queue,
@@ -1344,6 +2402,28 @@ class DeepResearchAgent:
                         "backend": backend,
                         "notices": safe_notices,
                         "notice_codes": safe_notice_codes,
+                        "_source_search_result": SourceSearchResult(
+                            provider_id=(
+                                typed_search.provider_id
+                                if item.research_kernel is not None
+                                and item.prepared_research is not None
+                                else "web"
+                            ),
+                            results=tuple(
+                                {
+                                    **dict(result),
+                                    "dimension": item.dimension,
+                                }
+                                for result in typed_results
+                                if isinstance(result, Mapping)
+                            ),
+                            answer=(
+                                answer_text if isinstance(answer_text, str) else None
+                            ),
+                            backend=(backend if isinstance(backend, str) else "none"),
+                            notices=tuple(safe_notices),
+                            notice_codes=tuple(safe_notice_codes),
+                        ),
                     },
                 ),
                 cancellation,
@@ -1353,43 +2433,8 @@ class DeepResearchAgent:
                 return
             item.operations.session.raise_if_cancelled()
 
-            request = TaskSummaryInput(
-                topic=item.topic,
-                title=item.title,
-                intent=item.intent,
-                query=query,
-                context=context,
-                note_id=item.note_id,
-                note_content=item.note_content,
-            )
-            summary_stream, summary_getter = _call_with_operation_scope(
-                self.summarizer.stream_summary,
-                request,
-                operation_scope=operation_scope,
-            )
-            try:
-                for chunk in summary_stream:
-                    cancellation.raise_if_cancelled()
-                    if chunk:
-                        self._put_worker_message(
-                            result_queue,
-                            _WorkerMessage(
-                                kind=_WorkerMessageKind.SUMMARY_DELTA,
-                                task_id=item.task_id,
-                                payload={"chunk": chunk},
-                            ),
-                            cancellation,
-                            stop_event,
-                        )
-            finally:
-                close = getattr(summary_stream, "close", None)
-                if callable(close):
-                    close()
-
-            summary = summary_getter().strip() or "暂无可用信息"
-            if item.config.enable_quality_gate:
-                quality = self._check_summary_quality(summary)
-                if not quality["passed"] and attempt < max_attempts - 1:
+            if not task_evidence:
+                if attempt < max_attempts - 1:
                     previous_query = query
                     local_task.query = query
                     query = self._refine_query(local_task, attempt)
@@ -1402,13 +2447,146 @@ class DeepResearchAgent:
                                 "previous_query": previous_query,
                                 "refined_query": query,
                                 "attempt": attempt + 1,
-                                "reason": ",".join(quality["reasons"]),
+                                "reason": "no_usable_evidence",
                             },
                         ),
                         cancellation,
                         stop_event,
                     )
                     continue
+                self._put_worker_message(
+                    result_queue,
+                    _WorkerMessage(
+                        kind=_WorkerMessageKind.SKIPPED,
+                        task_id=item.task_id,
+                        payload={
+                            "reason": "no_usable_evidence",
+                            "original_query": item.original_query,
+                        },
+                    ),
+                    cancellation,
+                    stop_event,
+                )
+                return
+            request = TaskSummaryInput(
+                topic=item.topic,
+                title=item.title,
+                intent=item.intent,
+                query=query,
+                context=context,
+                note_id=item.note_id,
+                note_content=item.note_content,
+                evidence=task_evidence,
+            )
+            summary = self._stream_task_summary(
+                request,
+                operation_scope,
+                item=item,
+                result_queue=result_queue,
+                cancellation=cancellation,
+                stop_event=stop_event,
+            )
+            if item.config.enable_quality_gate:
+                quality = self._evaluate_task_quality(
+                    item=item,
+                    query=query,
+                    summary=summary,
+                    evidence=task_evidence,
+                    retrieval_attempt=attempt,
+                    operation_scope=operation_scope,
+                )
+                self._emit_task_quality(
+                    item.task_id,
+                    quality,
+                    result_queue=result_queue,
+                    cancellation=cancellation,
+                    stop_event=stop_event,
+                )
+                if quality.action in {
+                    QualityAction.REPAIR_CITATIONS,
+                    QualityAction.REGENERATE_SUMMARY,
+                }:
+                    revised_request = replace(
+                        request,
+                        quality_feedback=quality.repair_instructions,
+                    )
+                    summary = self._stream_task_summary(
+                        revised_request,
+                        operation_scope,
+                        item=item,
+                        result_queue=result_queue,
+                        cancellation=cancellation,
+                        stop_event=stop_event,
+                    )
+                    quality = self._evaluate_task_quality(
+                        item=item,
+                        query=query,
+                        summary=summary,
+                        evidence=task_evidence,
+                        retrieval_attempt=attempt,
+                        operation_scope=operation_scope,
+                        judge_calls_used=(
+                            1 if quality.assessment.judgments else 0
+                        ),
+                    )
+                    self._emit_task_quality(
+                        item.task_id,
+                        quality,
+                        result_queue=result_queue,
+                        cancellation=cancellation,
+                        stop_event=stop_event,
+                    )
+
+                if (
+                    quality.action is QualityAction.RETRIEVE_GAPS
+                    and attempt < max_attempts - 1
+                ):
+                    previous_query = query
+                    local_task.query = query
+                    query = self._refine_query_from_gaps(local_task, quality, attempt)
+                    self._put_worker_message(
+                        result_queue,
+                        _WorkerMessage(
+                            kind=_WorkerMessageKind.RETRY,
+                            task_id=item.task_id,
+                            payload={
+                                "previous_query": previous_query,
+                                "refined_query": query,
+                                "attempt": attempt + 1,
+                                "reason": ",".join(quality.reason_codes),
+                            },
+                        ),
+                        cancellation,
+                        stop_event,
+                    )
+                    continue
+                if quality.action is QualityAction.BLOCK:
+                    self._put_worker_message(
+                        result_queue,
+                        _WorkerMessage(
+                            kind=_WorkerMessageKind.SKIPPED,
+                            task_id=item.task_id,
+                            payload={
+                                "reason": "task_quality_blocked",
+                                "original_query": item.original_query,
+                            },
+                        ),
+                        cancellation,
+                        stop_event,
+                    )
+                    return
+                if quality.action in {
+                    QualityAction.FLAG_CONFLICT,
+                    QualityAction.DEGRADE,
+                    QualityAction.REPAIR_CITATIONS,
+                    QualityAction.REGENERATE_SUMMARY,
+                    QualityAction.RETRIEVE_GAPS,
+                }:
+                    warning = ", ".join(quality.reason_codes) or quality.action.value
+                    summary = (
+                        f"{summary}\n\n### 质量限制\n"
+                        f"- 本任务以 `{quality.action.value}` 状态输出：{warning}。"
+                    )
 
             self._put_worker_message(
                 result_queue,
@@ -1419,12 +2597,126 @@ class DeepResearchAgent:
                         "summary": summary,
                         "sources_summary": latest_sources,
                         "original_query": item.original_query,
+                        "task_attempt": attempt + 1,
+                        "dimension": item.dimension,
+                        "query": query,
+                        "binding": binding,
                     },
                 ),
                 cancellation,
                 stop_event,
             )
             return
+
+    def _stream_task_summary(
+        self,
+        request: TaskSummaryInput,
+        operation_scope: OperationScope,
+        *,
+        item: _TaskWorkItem,
+        result_queue: Queue[_WorkerMessage],
+        cancellation: CancellationToken,
+        stop_event: Event,
+    ) -> str:
+        """Stream one summary candidate and return its collected text."""
+        summary_stream, summary_getter = _call_with_operation_scope(
+            self.summarizer.stream_summary,
+            request,
+            operation_scope=operation_scope,
+        )
+        try:
+            for chunk in summary_stream:
+                cancellation.raise_if_cancelled()
+                if chunk:
+                    self._put_worker_message(
+                        result_queue,
+                        _WorkerMessage(
+                            kind=_WorkerMessageKind.SUMMARY_DELTA,
+                            task_id=item.task_id,
+                            payload={"chunk": chunk},
+                        ),
+                        cancellation,
+                        stop_event,
+                    )
+        finally:
+            close = getattr(summary_stream, "close", None)
+            if callable(close):
+                close()
+        return summary_getter().strip() or "暂无可用信息"
+
+    def _evaluate_task_quality(
+        self,
+        *,
+        item: _TaskWorkItem,
+        query: str,
+        summary: str,
+        evidence: tuple[TaskEvidence, ...],
+        retrieval_attempt: int,
+        operation_scope: OperationScope,
+        judge_calls_used: int = 0,
+    ) -> TaskQualityResult:
+        """Evaluate one ordinary task through the deep quality module."""
+        document = document_from_markdown(
+            summary,
+            task_id=item.task_id,
+            known_evidence_ids=tuple(record.evidence_id for record in evidence),
+        )
+        controller = self._task_quality_controller_for_scope(operation_scope)
+        return controller.evaluate(
+            TaskQualityInput(
+                task_id=item.task_id,
+                task_intent=item.intent,
+                current_query=query,
+                document=document,
+                evidence=evidence,
+                mode=QualityMode(item.config.task_quality_mode),
+                budget=TaskQualityBudget(
+                    max_judge_calls=2,
+                    judge_calls_used=judge_calls_used,
+                    retrieval_attempts_used=retrieval_attempt,
+                    max_retrieval_attempts=2,
+                ),
+            )
+        )
+
+    @classmethod
+    def _refine_query_from_gaps(
+        cls,
+        task: TodoItem,
+        quality: TaskQualityResult,
+        attempt: int,
+    ) -> str:
+        """Build a query from explicit evidence gaps, with a stable fallback."""
+        if not quality.retrieval_gaps:
+            return cls._refine_query(task, attempt)
+        gap = quality.retrieval_gaps[0]
+        source_hint = " ".join(gap.preferred_source_types)
+        refined = f"{gap.topic} {source_hint}".strip()
+        if refined.casefold() == task.query.strip().casefold():
+            return cls._refine_query(task, attempt)
+        return refined
+
+    @classmethod
+    def _emit_task_quality(
+        cls,
+        task_id: int,
+        quality: TaskQualityResult,
+        *,
+        result_queue: Queue[_WorkerMessage],
+        cancellation: CancellationToken,
+        stop_event: Event,
+    ) -> None:
+        """Send one detached quality decision to the coordinator thread."""
+        cls._put_worker_message(
+            result_queue,
+            _WorkerMessage(
+                kind=_WorkerMessageKind.QUALITY,
+                task_id=task_id,
+                payload=quality.as_event_payload(),
+            ),
+            cancellation,
+            stop_event,
+        )
 
     @staticmethod
     def _put_worker_message(
@@ -1448,12 +2740,17 @@ class DeepResearchAgent:
         message: _WorkerMessage,
         *,
         operations: GovernedOperations,
+        search_results: list[SourceSearchResult] | None = None,
+        prepared_research: PreparedResearch | None = None,
     ) -> None:
         """Apply one worker result through canonical transitions on this thread."""
         session.raise_if_run_controlled()
         payload = dict(message.payload)
         if message.kind is _WorkerMessageKind.SOURCES:
             context = payload.pop("context", None)
+            typed_search = payload.pop("_source_search_result", None)
+            if isinstance(typed_search, SourceSearchResult) and search_results is not None:
+                search_results.append(typed_search)
             session.record_sources(
                 message.task_id,
                 context=context if isinstance(context, str) else None,
@@ -1462,6 +2759,9 @@ class DeepResearchAgent:
             return
         if message.kind is _WorkerMessageKind.SUMMARY_DELTA:
             session.append_task_summary(message.task_id, str(payload["chunk"]))
+            return
+        if message.kind is _WorkerMessageKind.QUALITY:
+            session.record_task_quality(message.task_id, payload)
             return
         if message.kind is _WorkerMessageKind.RETRY:
             session.record_retry(
@@ -1483,6 +2783,15 @@ class DeepResearchAgent:
                 ),
                 original_query=str(payload["original_query"]),
             )
+            if prepared_research is not None:
+                raw_attempt = payload.get("task_attempt")
+                if isinstance(raw_attempt, int) and not isinstance(raw_attempt, bool):
+                    binding = payload.get("binding")
+                    if isinstance(binding, TaskEvidenceBinding):
+                        prepared_research.accept(
+                            task_id=message.task_id,
+                            task_attempt=raw_attempt,
+                        )
         elif message.kind is _WorkerMessageKind.SKIPPED:
             session.skip_task(
                 message.task_id,
@@ -1517,34 +2826,8 @@ class DeepResearchAgent:
         raise KeyError(f"Unknown task ID: {task_id}")
 
     # ------------------------------------------------------------------
-    # Summary quality & query refinement
+    # Query-refinement fallback
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _check_summary_quality(summary: str) -> dict[str, Any]:
-        """Rule-based quality check for a task summary.
-
-        Returns a dict with ``passed`` (bool) and ``reasons`` (list[str]).
-        """
-        passed = True
-        reasons: list[str] = []
-
-        if not summary or summary.strip() == "暂无可用信息":
-            passed = False
-            reasons.append("empty_or_fallback")
-
-        if len(summary.strip()) < 30:
-            passed = False
-            reasons.append("too_short")
-
-        has_structure = any(
-            marker in summary for marker in ("###", "- ", "* ", "1. ", "2. ")
-        )
-        if not has_structure:
-            passed = False
-            reasons.append("no_structure")
-
-        return {"passed": passed, "reasons": reasons}
 
     @staticmethod
     def _refine_query(task: TodoItem, attempt: int) -> str:
@@ -1569,8 +2852,6 @@ class DeepResearchAgent:
     def _should_use_research_kernel(self, session: RunSession) -> bool:
         """Resolve the explicit-mode-first boundary for the shared kernel."""
         command = session.command
-        if command.research_mode is not None:
-            return command.research_mode is not ResearchMode.WEB
         if command.research_profile_id is not None:
             try:
                 profile = self._research_kernel.profile_registry.get(
@@ -1578,7 +2859,13 @@ class DeepResearchAgent:
                 )
             except KeyError:
                 return True
+            if profile.profile_id == "web.evidence.v1":
+                return command.config.enable_evidence_web
             return profile.mode is not ResearchMode.WEB
+        if command.research_mode is not None:
+            if command.research_mode is ResearchMode.WEB:
+                return command.config.enable_evidence_web
+            return True
         if not command.config.enable_github_research:
             return False
         return bool(parse_github_repositories(command.topic))
@@ -1599,6 +2886,8 @@ class DeepResearchAgent:
             mode = ResearchMode.GITHUB
         if profile_id is None and mode is ResearchMode.GITHUB:
             profile_id = "github.repository.v1"
+        if profile_id is None and mode is ResearchMode.WEB:
+            profile_id = "web.evidence.v1"
         return self._research_kernel.prepare(
             command.topic,
             mode=mode,
@@ -1620,21 +2909,34 @@ class DeepResearchAgent:
         serialized = self._serialize_kernel_contexts(prepared)
         primary = serialized[0]
         source_context = dict(prepared.source_context)
-        source_context["repositories"] = serialized
         source_context["target"] = dict(primary.get("target") or {})
-        source_context["markdown"] = "\n\n".join(
-            str(item.get("markdown") or "")
-            for item in serialized
-            if item.get("markdown")
+        if prepared.profile.mode is ResearchMode.GITHUB:
+            source_context["repositories"] = serialized
+            source_context["markdown"] = "\n\n".join(
+                str(item.get("markdown") or "")
+                for item in serialized
+                if item.get("markdown")
+            )
+            repository_event = self._kernel_repository_event(primary)
+            session.record_repository(
+                github_context=source_context,
+                repository=repository_event["repository"],
+                notices=repository_event["notices"],
+                notice_codes=repository_event["notice_codes"],
+            )
+        else:
+            session.record_source_context(
+                source_context,
+                provider_ids=(prepared.provider.provider_id,),
+                source_count=len(prepared.targets),
+                research_mode=prepared.profile.mode,
+                profile_id=prepared.profile.profile_id,
+            )
+        baseline = self._research_kernel.finalize(
+            prepared,
+            allow_enrichment=False,
+            freeze=False,
         )
-        repository_event = self._kernel_repository_event(primary)
-        session.record_repository(
-            github_context=source_context,
-            repository=repository_event["repository"],
-            notices=repository_event["notices"],
-            notice_codes=repository_event["notice_codes"],
-        )
-        baseline = self._research_kernel.finalize(prepared)
         session.replace_research_intelligence(baseline.as_dict())
         legacy_bundle = self._legacy_bundle_for_kernel(prepared)
         if legacy_bundle is not None:
@@ -1644,28 +2946,118 @@ class DeepResearchAgent:
         self,
         session: RunSession,
         prepared: PreparedResearch,
+        *,
+        search_results: Sequence[SourceSearchResult] = (),
     ) -> None:
         """Finalize provider evidence after workers and emit the canonical events."""
-        task_results: list[str] = []
+        task_results: list[object] = []
+        legacy_task_sources: list[str] = []
+        dimension_by_task = {item.id: item.dimension for item in prepared.tasks}
         for task in session.state.todo_items:
             if task.summary:
-                task_results.append(task.summary)
+                legacy_task_sources.append(task.summary)
+            binding = prepared.read_accepted(task_id=task.id)
+            if binding is not None and task.summary:
+                task_results.append(
+                    {
+                        "task_id": task.id,
+                        "attempt": binding.task_attempt,
+                        "dimension": binding.dimension,
+                        "query": binding.query,
+                        "summary": task.summary,
+                    }
+                )
+            else:
+                latest = prepared.read(task_id=task.id)
+                task_results.append(
+                    {
+                        "task_id": task.id,
+                        "attempt": latest.task_attempt if latest is not None else 1,
+                        "dimension": (
+                            dimension_by_task.get(task.id)
+                            or (latest.dimension if latest is not None else "overview")
+                        ),
+                        "query": latest.query if latest is not None else task.query,
+                        "summary": "",
+                    }
+                )
             if task.sources_summary:
-                task_results.append(task.sources_summary)
+                legacy_task_sources.append(task.sources_summary)
+        captured_collections: tuple[SourceCollection, ...] = prepared.web_evidence.collections()
+        snapshot_descriptors = self._persist_web_snapshots(
+            session,
+            captured_collections,
+        )
         bundle = self._research_kernel.finalize(
             prepared,
             task_results=task_results,
+            collections=captured_collections,
+            allow_enrichment=True,
+            freeze=True,
         )
+        if snapshot_descriptors:
+            bundle = replace(
+                bundle,
+                artifact_manifest=ArtifactManifestV2(
+                    artifacts=tuple(
+                        {
+                            item.artifact_id: item
+                            for item in (
+                                *bundle.artifact_manifest.artifacts,
+                                *snapshot_descriptors,
+                            )
+                        }.values()
+                    )
+                ),
+            )
         session.record_research_intelligence(
             bundle.as_dict(),
             provider_ids=(prepared.provider.provider_id,),
         )
         legacy_bundle = self._legacy_bundle_for_kernel(
             prepared,
-            task_sources=tuple(task_results),
+            task_sources=tuple(legacy_task_sources),
         )
         if legacy_bundle is not None:
             session.replace_legacy_github_intelligence(legacy_bundle.as_dict())
+
+    def _persist_web_snapshots(
+        self,
+        session: RunSession,
+        collections: Sequence[SourceCollection],
+    ) -> tuple[Any, ...]:
+        """Write captured Web snapshot bodies and emit descriptor-only events."""
+        if self._artifact_store is None:
+            return ()
+        descriptors = []
+        recorded = {
+            event.payload.get("artifact_id")
+            for event in session.events
+            if event.kind is EventKind.ARTIFACT_READY
+        }
+        for collection in collections:
+            capture = collection.provider_payload
+            if not isinstance(capture, WebCaptureResult) or capture.snapshot is None:
+                continue
+            snapshot = capture.snapshot
+            artifact_id = f"artifact_web_snapshot_{snapshot.content_hash[:24]}"
+            descriptor = self._artifact_store.put(
+                session.run_id,
+                ArtifactPayload(
+                    artifact_id=artifact_id,
+                    artifact_type="web_page_snapshot",
+                    mime_type=snapshot.mime_type,
+                    title=snapshot.page_title,
+                    description="Normalized captured Web page.",
+                    content=snapshot.content,
+                    source_ids=(snapshot.source_id,),
+                ),
+            )
+            descriptors.append(descriptor)
+            if descriptor.artifact_id not in recorded:
+                session.record_artifact(descriptor.as_dict())
+                recorded.add(descriptor.artifact_id)
+        return tuple(descriptors)
 
     @staticmethod
     def _serialize_kernel_contexts(

@@ -27,6 +27,7 @@ from .contracts import (
     canonicalize_github_report,
     deterministic_citation_block,
 )
+from .evidence_normalization import normalize_collections
 from .history import HistoryCursorError, HistoryPage, ResearchHistoryStore
 from .intelligence import (
     INTELLIGENCE_SCHEMA_VERSION,
@@ -51,7 +52,7 @@ from .memory import (
     UserMemory,
     UserMemoryStore,
 )
-from .pipeline import PreparedResearch, ResearchKernel
+from .pipeline import PreparedResearch, ResearchKernel, TaskEvidenceBinding
 from .profiles import (
     CitationPolicy,
     CoveragePolicy,
@@ -66,6 +67,19 @@ from .profiles import (
     built_in_profile_registry,
 )
 from .quality import EvidenceGateBlockedError, EvidenceQualityGate
+from .report_document import (
+    CLAIM_VERDICTS,
+    CONFIDENCE_LEVELS,
+    PARAGRAPH_TYPES,
+    SUMMARY_DOCUMENT_SCHEMA_VERSION,
+    SUMMARY_QUALITY_SCHEMA_VERSION,
+    ClaimSupportAssessment,
+    ParagraphQualityAssessment,
+    StructuredSummaryDocument,
+    SummaryParagraph,
+    SummaryQualityAssessment,
+    stable_paragraph_id,
+)
 from .session import (
     NEVER_CANCELLED,
     CancellationRequestedError,
@@ -73,6 +87,16 @@ from .session import (
     CheckpointPersistenceError,
     InvalidTransitionError,
     RunSession,
+)
+from .task_quality import (
+    ClaimJudgment,
+    ClaimVerdict,
+    QualityAction,
+    QualityMode,
+    RetrievalGap,
+    TaskQualityController,
+    TaskQualityInput,
+    TaskQualityResult,
 )
 
 __all__ = [
@@ -93,6 +117,11 @@ __all__ = [
     "GitHubEvidenceV1Adapter",
     "EvidenceGateBlockedError",
     "EvidenceQualityGate",
+    "CLAIM_VERDICTS",
+    "CONFIDENCE_LEVELS",
+    "PARAGRAPH_TYPES",
+    "SUMMARY_DOCUMENT_SCHEMA_VERSION",
+    "SUMMARY_QUALITY_SCHEMA_VERSION",
     "FileArtifactStore",
     "HistoryCursorError",
     "HistoryPage",
@@ -103,17 +132,25 @@ __all__ = [
     "ArtifactDescriptorV2",
     "ArtifactManifestV2",
     "ClaimRecord",
+    "ClaimSupportAssessment",
     "CoverageDecision",
     "EvidenceLocator",
     "EvidenceRecord",
     "GenericReportSpec",
     "ResearchIntelligenceBundle",
     "PreparedResearch",
+    "TaskEvidenceBinding",
+    "ParagraphQualityAssessment",
     "ResearchKernel",
+    "normalize_collections",
     "SourceReference",
+    "StructuredSummaryDocument",
+    "SummaryParagraph",
+    "SummaryQualityAssessment",
     "stable_claim_id",
     "stable_evidence_id",
     "stable_source_id",
+    "stable_paragraph_id",
     "persist_research_artifacts",
     "ResearchCommand",
     "ResearchEvent",
@@ -124,6 +161,14 @@ __all__ = [
     "RunSession",
     "RunSnapshot",
     "RunStatus",
+    "ClaimJudgment",
+    "ClaimVerdict",
+    "QualityAction",
+    "QualityMode",
+    "RetrievalGap",
+    "TaskQualityController",
+    "TaskQualityInput",
+    "TaskQualityResult",
     "ResearchHistoryStore",
     "MemoryNotFoundError",
     "MemoryStateError",
