@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .Python
 .pytest_cache/
+pytest-of-*/
 .mypy_cache/
 .ruff_cache/
 .coverage

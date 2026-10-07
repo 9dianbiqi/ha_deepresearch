@@ -5,9 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Deterministic planner plan gate** with a strict fail-open plan schema boundary, near-verbatim duplicate task repair, lexical topic-coverage re-plan with bounded feedback, and query-complexity task sizing. Observations are recorded in `metrics.plan_quality`. See [planner plan gate](docs/PLAN_QUALITY_GATE.md).
 - **GitHub line-addressable evidence** with bounded commit-pinned source file excerpts, deterministic line ranges, citation sanitization, and Evidence Drawer links.
 - **GitHub evidence acceptance record** covering authenticated collection, rate-limit degradation, artifact round-trip, and SSE compatibility.
 - **Production single-instance MVP closure** with fail-closed Bearer authentication, session-scoped frontend key entry, shared non-blocking run admission, non-root backend images, internal-only backend networking, and persistent Compose operations. See [production deployment](docs/PRODUCTION_MVP.md) and the [MVP acceptance checklist](docs/acceptance/MVP_PRODUCTION_CHECKLIST.md).
+
+### Changed
+- Planned tasks that exceed a profile's retrieval budget now trim to the budget and continue, instead of aborting the run. The budget outcome and the `plan_budget_exceeded` reason code are recorded in `metrics.plan_quality`.
 
 ## [1.1.0] — 2026-08-12
 

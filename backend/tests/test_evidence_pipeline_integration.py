@@ -794,24 +794,39 @@ def test_evidence_web_empty_plan_uses_fallback_once(monkeypatch):
     assert [task.title for task in session.state.todo_items] == ["Fallback"]
 
 
-def test_evidence_web_plan_budget_fails_before_task_side_effects(monkeypatch):
+def test_evidence_web_plan_budget_trims_before_task_side_effects(monkeypatch):
     config = _config()
     agent, _ = _agent(config)
     monkeypatch.setattr(agent.planner, "plan_todo_list", lambda *args, **kwargs: [
-        TodoItem(id=index, title="Task", intent="Overview", query="Alpha")
+        TodoItem(id=index, title="Task", intent="Overview", query=f"Alpha {index}")
         for index in range(1, 10)
     ])
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("Task side effects must not run before plan budget validation")
+    executed = []
+    noted = []
 
-    monkeypatch.setattr(agent, "_create_task_notes_for_tasks", forbidden)
-    monkeypatch.setattr(agent, "_execute_work_items", forbidden)
+    def execute(session, items):
+        executed.extend(item.task_id for item in items)
+        return []
+
+    def create_notes(tasks, **kwargs):
+        noted.extend(task.id for task in tasks)
+        return None
+
+    monkeypatch.setattr(agent, "_execute_work_items", execute)
+    monkeypatch.setattr(agent, "_create_task_notes_for_tasks", create_notes)
+    monkeypatch.setattr(agent, "_generate_report", lambda *args, **kwargs: None)
     session = _session(config, mode=ResearchMode.WEB)
-    with pytest.raises(ValueError, match="Planned tasks exceed"):
-        agent.execute(session, None)
-    assert session.state.todo_items == []
-    assert session.checkpoint_phase != "planning_completed"
+    agent.execute(session, None)
+    assert len(session.state.todo_items) == 8
+    assert noted == list(range(1, 9))
+    assert executed == list(range(1, 9))
+    plan_metrics = session.metrics["plan_quality"]
+    assert plan_metrics["trimmed"] is True
+    assert plan_metrics["max_tasks"] == 8
+    assert plan_metrics["planned_count"] == 9
+    assert plan_metrics["reason_code"] == "plan_budget_exceeded"
+    assert plan_metrics["task_count"] == 8
 
 
 @pytest.mark.parametrize("error_type", [CancellationRequestedError, DeadlineExceededError])
