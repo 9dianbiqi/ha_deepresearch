@@ -68,6 +68,11 @@ from research.operations import (
     OperationScope,
 )
 from research.pipeline import PreparedResearch, ResearchKernel, TaskEvidenceBinding
+from research.plan_quality import (
+    PlanValidationVerdict,
+    PlanValidator,
+    estimate_complexity,
+)
 from research.profiles import ResearchMode, built_in_profile_registry
 from research.providers.github import GitHubSourceProvider
 from research.providers.web import WebSourceProvider
@@ -144,6 +149,20 @@ _OPERATION_CONTROL_ERRORS = (
     DeadlineExceededError,
     CancellationRequestedError,
 )
+
+
+def _callback_accepts_kwarg(callback: Callable[..., Any], name: str) -> bool:
+    """Return whether a callback can consume one optional keyword argument."""
+    try:
+        parameters = tuple(signature(callback).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == name
+        and parameter.kind is not Parameter.POSITIONAL_ONLY
+        or parameter.kind is Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
 
 
 def _call_with_operation_scope(
@@ -1788,12 +1807,36 @@ class DeepResearchAgent:
             if not tasks:
                 logger.info("No TODO items generated; falling back to single task")
                 tasks = [self.planner.create_fallback_task(planning_state)]
+                session.metrics["plan_quality"] = {
+                    "task_count": len(tasks),
+                    "fallback": True,
+                    "reason_code": "no_planned_tasks",
+                }
 
             if (
                 prepared_research is not None
                 and len(tasks) > prepared_research.profile.retrieval_budget.max_tasks
             ):
-                raise ValueError("Planned tasks exceed the profile retrieval budget.")
+                max_tasks = prepared_research.profile.retrieval_budget.max_tasks
+                logger.warning(
+                    "Planned %d tasks exceed the profile budget %d; trimming",
+                    len(tasks),
+                    max_tasks,
+                )
+                plan_metrics = session.metrics.get("plan_quality")
+                if not isinstance(plan_metrics, dict):
+                    plan_metrics = {}
+                    session.metrics["plan_quality"] = plan_metrics
+                plan_metrics.update(
+                    {
+                        "trimmed": True,
+                        "planned_count": len(tasks),
+                        "max_tasks": max_tasks,
+                        "reason_code": "plan_budget_exceeded",
+                        "task_count": max_tasks,
+                    }
+                )
+                tasks = tasks[:max_tasks]
 
             planned = [TodoItem(**task.to_dict()) for task in tasks]
             for task in planned:
@@ -1801,6 +1844,16 @@ class DeepResearchAgent:
                 task.summary = None
                 task.sources_summary = None
                 task.stream_token = f"task_{task.id}"
+
+            plan_metrics = session.metrics.get("plan_quality")
+            if not isinstance(plan_metrics, dict):
+                plan_metrics = {"fallback": False}
+            plan_metrics["task_count"] = len(planned)
+            plan_metrics.setdefault(
+                "complexity_tier",
+                estimate_complexity(session.command.topic).value,
+            )
+            session.metrics["plan_quality"] = plan_metrics
 
             session.raise_if_run_controlled()
             self._create_task_notes_for_tasks(
@@ -1940,22 +1993,91 @@ class DeepResearchAgent:
         *,
         root_scope: OperationScope,
     ) -> list[TodoItem]:
-        """Plan tasks with the same history and operation scope on both Web paths."""
+        """Plan tasks with the same history and operation scope on both Web paths.
+
+        The plan gate validates and repairs the planner output before it
+        reaches the run.  A bounded re-plan with feedback happens only when
+        the injected planner signature accepts ``validation_feedback``;
+        injected fakes without that parameter keep the single-call contract
+        and receive deterministic repairs only.  Coverage is judged on the
+        pre-trim task set, so a budget trim may reduce realized coverage
+        below the recorded ratio (fail-open by design).
+        """
         assembled_prior = ResearchContextAssembler().assemble(prior_context)
         planner_kwargs: dict[str, object] = {"prior_context": assembled_prior}
         if session.related_history_context:
             planner_kwargs["related_history"] = session.related_history_context
         if session.user_memory_context:
             planner_kwargs["user_memories"] = session.user_memory_context
+        config = session.command.config
+        validator = self._plan_validator_for(config)
         session.raise_if_run_controlled()
-        tasks = _call_with_operation_scope(
-            self.planner.plan_todo_list,
-            session.state,
-            **planner_kwargs,
-            operation_scope=root_scope,
+        with llm_telemetry_scope(session, role="planner"):
+            tasks = _call_with_operation_scope(
+                self.planner.plan_todo_list,
+                session.state,
+                **planner_kwargs,
+                operation_scope=root_scope,
+            )
+        session.raise_if_run_controlled()
+        if validator is None:
+            session.metrics["plan_quality"] = {
+                "task_count": len(tasks),
+                "fallback": False,
+            }
+            return tasks
+        result = validator.validate(session.command.topic, tasks)
+        accepts_feedback = _callback_accepts_kwarg(
+            self.planner.plan_todo_list, "validation_feedback"
         )
-        session.raise_if_run_controlled()
-        return tasks
+        retries_used = 0
+        while (
+            result.verdict is PlanValidationVerdict.RETRY
+            and accepts_feedback
+            and retries_used < config.plan_validation_retries
+        ):
+            retries_used += 1
+            session.raise_if_run_controlled()
+            with llm_telemetry_scope(
+                session,
+                role="planner",
+                retry_count=retries_used,
+            ):
+                tasks = _call_with_operation_scope(
+                    self.planner.plan_todo_list,
+                    session.state,
+                    **planner_kwargs,
+                    validation_feedback=result.retry_feedback,
+                    operation_scope=root_scope,
+                )
+            session.raise_if_run_controlled()
+            result = validator.validate(session.command.topic, tasks)
+        plan_metrics: dict[str, object] = {
+            "fallback": False,
+            "validation_retries": retries_used,
+            "validation_verdict": result.verdict.value,
+            **result.metrics.as_dict(),
+        }
+        reason_codes = list(result.reason_codes)
+        if result.verdict is PlanValidationVerdict.RETRY:
+            if not accepts_feedback:
+                reason_codes.append("plan_retry_unavailable")
+            elif retries_used >= config.plan_validation_retries:
+                reason_codes.append("plan_retry_exhausted")
+        if reason_codes:
+            plan_metrics["reason_codes"] = reason_codes
+        session.metrics["plan_quality"] = plan_metrics
+        return list(result.tasks)
+
+    @staticmethod
+    def _plan_validator_for(config: Configuration) -> PlanValidator | None:
+        """Build the deterministic plan gate from run configuration."""
+        if not config.plan_validation:
+            return None
+        return PlanValidator(
+            overlap_threshold=config.plan_overlap_threshold,
+            coverage_threshold=config.plan_coverage_threshold,
+        )
 
     def _prepare_work_items(
         self,

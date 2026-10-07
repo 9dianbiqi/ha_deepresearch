@@ -57,10 +57,12 @@ flowchart LR
 
 - [集成架构说明](docs/ARCHITECTURE_OPTIMIZED.md)
 - [技术实现详解](docs/TECHNICAL_DEEP_DIVE.md)
+- [规划校验门（Plan Gate）](docs/PLAN_QUALITY_GATE.md)
 
 ## 功能
 
 - 开放主题规划与并发任务执行
+- 确定性规划校验门：解析边界有界且失败开放，去重近似重复任务，按复杂度分级确定任务规模，覆盖率不足时带反馈重规划一次
 - DuckDuckGo、Tavily、Perplexity、SearXNG、Advanced 搜索后端
 - 搜索重试、DuckDuckGo 降级和默认启用的 24 小时安全投影缓存；实时意图自动绕过缓存
 - GitHub 仓库识别与仓库上下文研究
@@ -279,6 +281,7 @@ npm run build
 - 旧 `JsonlRunRecorder` 名称仍存在，但它已经委托 `FileRunRepository`，只写 canonical schema-v1 snapshot，不创建第二套索引或日志文件。
 - application run 的创建、checkpoint、completed、failed、cancelled、rejected 和 report_incomplete 终态都会尽力持久化；只有同时满足 `validated=true` 与 `resumable=true` 的 checkpoint 才允许恢复。
 - 证据研究的任务 checkpoint 会保存证据绑定、页面 artifact 与预算；恢复不会重新规划或重跑已完成任务。旧的缺失证据状态的任务 checkpoint 会明确拒绝恢复。具体边界见 [证据研究的保存与恢复](docs/EVIDENCE_RECOVERY.md)。
+- 规划校验门是确定性词法层：只按 query 词面重叠判定重复，不做语义判重；覆盖率按显著词元的词法覆盖率计算，不足时最多重规划一次，仍不足则失败开放继续执行。计划任务数超过 profile 检索预算时截断而非报错，且覆盖率按截断前的任务集判定。具体边界见 [规划校验门](docs/PLAN_QUALITY_GATE.md)。
 - 文件仓库适合单进程本地运行；锁是进程内的，不是多进程数据库事务。
 - 默认 facade 同时只执行一个顶层运行；单次运行内的研究任务按 `MAX_CONCURRENT_TASKS` 有界并发。
 - `permission_mode="strict"` 中的 `ask` 目前直接阻断，因为尚无审批 UI。
