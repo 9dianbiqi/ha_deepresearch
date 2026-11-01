@@ -1,5 +1,7 @@
 # HelloAgents Deep Research
 
+> Historical planner/calibration archive. Do not merge this branch as the Lite V1 feature. Current scoped implementation: [PR #5](https://github.com/9dianbiqi/ha_deepresearch/pull/5). See [archive scope](docs/PLANNER_CALIBRATION_ARCHIVE.md).
+
 基于 `hello-agents==0.2.9`、FastAPI 与 Vue 3 的本地深度研究应用。输入一个主题后，系统会规划任务、检索 Web 或 GitHub、生成逐项摘要，并汇总为 Markdown 报告。
 
 > English: This project uses one canonical `ResearchApplicationService` / `RunSession` lifecycle. `HarnessRunner` and SSE are compatibility adapters, not a second runtime layer. See [Architecture](docs/ARCHITECTURE_OPTIMIZED.md) and [Technical Deep Dive](docs/TECHNICAL_DEEP_DIVE.md).
@@ -58,6 +60,17 @@ flowchart LR
 - [集成架构说明](docs/ARCHITECTURE_OPTIMIZED.md)
 - [技术实现详解](docs/TECHNICAL_DEEP_DIVE.md)
 - [规划校验门（Plan Gate）](docs/PLAN_QUALITY_GATE.md)
+- [Planner 固定评估集与标注规范](docs/PLANNER_EVALUATION.md)
+- [Planner 真实采集与人工复核流程](docs/PLANNER_REVIEW_WORKFLOW.md)
+- [六个计划的复核草稿](docs/PLANNER_SIX_PLAN_REVIEW.md)与[标注一致性和裁决](docs/PLANNER_REVIEW_AGREEMENT.md)
+- [GLM-4.7-Flash 真实计划的 AI 评审](docs/GLM47FLASH_AI_REVIEW.md)
+- [Planner 语义反馈实验结果](docs/acceptance/PLANNER_SEMANTIC_FEEDBACK_2026-10-08.md)
+- [不同模型的反馈与独立评审](docs/INDEPENDENT_PLAN_REVIEW.md)
+- [组分与原文证据校准 V2](docs/acceptance/GROUNDED_CALIBRATION_V2_2026-10-09.md)
+- [下一阶段：拒判诊断与人工金标校准](docs/SEMANTIC_CALIBRATION_NEXT_STAGE.md)
+- [轻量 Semantic Gate 第一版（当前离线方案）](docs/SEMANTIC_GATE_LITE_V1.md)
+- [轻量第一版验收结果](docs/acceptance/SEMANTIC_GATE_LITE_V1_2026-10-12.md)
+- [后续：Shadow Evaluation（尚未接入）](docs/SEMANTIC_GATE_SHADOW_NEXT.md)
 
 ## 功能
 

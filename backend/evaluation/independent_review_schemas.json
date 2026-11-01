@@ -1,0 +1,232 @@
+{
+  "feedback": {
+    "$defs": {
+      "Finding": {
+        "additionalProperties": false,
+        "description": "One bounded, evidence-linked feedback finding.",
+        "properties": {
+          "task_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Task Ids",
+            "type": "array"
+          },
+          "dimension_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dimension Ids",
+            "type": "array"
+          },
+          "feedback": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Feedback",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_ids",
+          "dimension_ids",
+          "feedback",
+          "reason"
+        ],
+        "title": "Finding",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Keep uncertain findings from becoming forced replanning.",
+    "properties": {
+      "action": {
+        "enum": [
+          "replan",
+          "keep",
+          "uncertain"
+        ],
+        "title": "Action",
+        "type": "string"
+      },
+      "findings": {
+        "items": {
+          "$ref": "#/$defs/Finding"
+        },
+        "maxItems": 8,
+        "title": "Findings",
+        "type": "array"
+      }
+    },
+    "required": [
+      "action",
+      "findings"
+    ],
+    "title": "FeedbackOutput",
+    "type": "object"
+  },
+  "judge": {
+    "$defs": {
+      "DimensionLabel": {
+        "additionalProperties": false,
+        "description": "Require explicit dimension status and supporting task references.",
+        "properties": {
+          "dimension_id": {
+            "title": "Dimension Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "covered",
+              "partial",
+              "missing",
+              "uncertain"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Task Ids",
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dimension_id",
+          "status",
+          "task_ids",
+          "reason"
+        ],
+        "title": "DimensionLabel",
+        "type": "object"
+      },
+      "PairLabel": {
+        "additionalProperties": false,
+        "description": "Distinguish uncertainty from a negative duplicate label.",
+        "properties": {
+          "task_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Task Ids",
+            "type": "array"
+          },
+          "label": {
+            "enum": [
+              "redundant",
+              "complementary",
+              "uncertain"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_ids",
+          "label",
+          "reason"
+        ],
+        "title": "PairLabel",
+        "type": "object"
+      },
+      "TaskLabel": {
+        "additionalProperties": false,
+        "description": "Separate per-task relevance and grain judgments.",
+        "properties": {
+          "task_id": {
+            "title": "Task Id",
+            "type": "integer"
+          },
+          "relevance": {
+            "enum": [
+              0,
+              1,
+              2,
+              "uncertain"
+            ],
+            "title": "Relevance"
+          },
+          "granularity": {
+            "enum": [
+              "too_coarse",
+              "appropriate",
+              "too_fine",
+              "uncertain"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "relevance",
+          "granularity",
+          "reason"
+        ],
+        "title": "TaskLabel",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "One anonymous plan assessment without a model-generated total score.",
+    "properties": {
+      "task_labels": {
+        "items": {
+          "$ref": "#/$defs/TaskLabel"
+        },
+        "maxItems": 16,
+        "title": "Task Labels",
+        "type": "array"
+      },
+      "dimension_labels": {
+        "items": {
+          "$ref": "#/$defs/DimensionLabel"
+        },
+        "title": "Dimension Labels",
+        "type": "array"
+      },
+      "pair_relations": {
+        "items": {
+          "$ref": "#/$defs/PairLabel"
+        },
+        "maxItems": 120,
+        "title": "Pair Relations",
+        "type": "array"
+      }
+    },
+    "required": [
+      "task_labels",
+      "dimension_labels",
+      "pair_relations"
+    ],
+    "title": "JudgeOutput",
+    "type": "object"
+  }
+}

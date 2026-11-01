@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "annotation_status": "ai_draft",
+  "annotation_author_type": "ai",
+  "generator_model": "glm-4.7-flash",
+  "source_provenance": "llm_samples",
+  "source_sha256": "5f7899353685f3e5ece102bc6994ff1540d51ea7c464f68585d3c250267c545d",
+  "request_options": {
+    "extra_body": {
+      "thinking": {
+        "type": "disabled"
+      }
+    }
+  },
+  "unique_sample_count": 1,
+  "snapshot_count": 2,
+  "snapshots_identical": true,
+  "observed_replan_count": 0,
+  "reference_granularity": "whole required dimension; partial coverage does not bind the full dimension",
+  "partial_dimensions": {
+    "pricing": "price and pricing present; profitability pressure absent",
+    "growth": "current drivers present; future uncertainty absent"
+  },
+  "pair_label_counts": {
+    "complementary": 10,
+    "redundant": 0,
+    "uncertain": 0
+  },
+  "snapshots": [
+    {
+      "review_id": "630ac01d1e55107b",
+      "quality": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.5,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "pricing",
+          "growth"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "review_id": "a64962003175bbd2",
+      "quality": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.5,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "pricing",
+          "growth"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    }
+  ],
+  "interpretation": "case-level AI opinion, not human gold, aggregate accuracy, or demonstrated replanning improvement"
+}

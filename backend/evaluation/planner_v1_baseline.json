@@ -1,0 +1,2328 @@
+{
+  "evaluator_version": 2,
+  "dataset_version": "planner-seed-v1.1.0",
+  "dataset_sha256": "80fcc8c81ef983d1c81f6a198c8ed679f0d8d88c362cd38abd742f3cfb96afc5",
+  "gate_implementation_sha256": "633e837e8fd1fa2e488e58c180513fb91c1ac0ce90c8b385cc57b1dd648d8a8e",
+  "annotation_status": "ai_draft",
+  "evaluation_scope": "single_gate_pass_no_llm_retry_no_profile_trim",
+  "configuration": {
+    "overlap_threshold": 0.75,
+    "coverage_threshold": 0.4,
+    "split": "development"
+  },
+  "summary": {
+    "candidate_count": 36,
+    "core_candidate_count": 35,
+    "boundary_candidate_count": 1,
+    "uncertain_plan_ratio": 0.027777777777777776,
+    "reference_bad_count": 29,
+    "reference_good_count": 6,
+    "true_alerts": 13,
+    "missed_bad_plans": 16,
+    "false_alerts": 0,
+    "correct_no_action": 6,
+    "alert_precision": 1.0,
+    "alert_recall": 0.4482758620689655,
+    "bad_plan_no_action_rate": 0.5517241379310345,
+    "good_plan_intervention_rate": 0.0,
+    "bad_plans_repaired_to_acceptable": 6,
+    "reference_bad_retained_without_retry": 16,
+    "repairs_losing_dimensions": 0,
+    "issues": {
+      "relevance": {
+        "reference_plan_count": 10,
+        "no_action_count": 4,
+        "retained_issue_count": 10
+      },
+      "redundancy": {
+        "reference_plan_count": 11,
+        "no_action_count": 5,
+        "retained_issue_count": 5
+      },
+      "coverage": {
+        "reference_plan_count": 14,
+        "no_action_count": 7,
+        "retained_issue_count": 14
+      },
+      "granularity": {
+        "reference_plan_count": 4,
+        "no_action_count": 4,
+        "retained_issue_count": 4
+      }
+    }
+  },
+  "boundary_candidates": [
+    {
+      "topic_id": "ev-market",
+      "candidate_id": "paraphrase-duplicate",
+      "domain": "market",
+      "split": "development",
+      "kind": "boundary",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 5,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4242,
+        "coverage_ratio": 0.6842
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "reference_before": {
+        "acceptable": null,
+        "evaluation_set": "boundary",
+        "uncertain_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": null,
+        "evaluation_set": "boundary",
+        "uncertain_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "topic_id": "ev-market",
+      "candidate_id": "acceptable",
+      "domain": "market",
+      "split": "development",
+      "kind": "acceptable",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4242,
+        "coverage_ratio": 0.6842
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "ev-market",
+      "candidate_id": "omit-last-dimension",
+      "domain": "market",
+      "split": "development",
+      "kind": "missing_dimension",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4242,
+        "coverage_ratio": 0.4737
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.75,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "growth"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.75,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "growth"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "ev-market",
+      "candidate_id": "paraphrase-duplicate",
+      "domain": "market",
+      "split": "development",
+      "kind": "boundary",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 5,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4242,
+        "coverage_ratio": 0.6842
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "reference_before": {
+        "acceptable": null,
+        "evaluation_set": "boundary",
+        "uncertain_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": null,
+        "evaluation_set": "boundary",
+        "uncertain_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "ev-market",
+      "candidate_id": "off-topic-extra",
+      "domain": "market",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 5,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4242,
+        "coverage_ratio": 0.6842
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance"
+        ],
+        "relevance_mean": 1.6,
+        "relevance_problem_task_ids": [
+          5
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance"
+        ],
+        "relevance_mean": 1.6,
+        "relevance_problem_task_ids": [
+          5
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "ev-market",
+      "candidate_id": "exact-duplicate-control",
+      "domain": "market",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass_with_repairs",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 1,
+        "max_pairwise_overlap": 0.4242,
+        "coverage_ratio": 0.6842
+      },
+      "gate_reason_codes": [
+        "plan_duplicate_tasks_dropped"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "ev-market",
+      "candidate_id": "unrelated-plan-control",
+      "domain": "market",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "complex",
+      "gate_verdict": "retry",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.2,
+        "coverage_ratio": 0.0
+      },
+      "gate_reason_codes": [
+        "plan_coverage_below_threshold"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "share",
+          "pricing",
+          "policy",
+          "growth"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "share",
+          "pricing",
+          "policy",
+          "growth"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "framework-comparison",
+      "candidate_id": "acceptable",
+      "domain": "technical_comparison",
+      "split": "development",
+      "kind": "acceptable",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1034,
+        "coverage_ratio": 0.7692
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "framework-comparison",
+      "candidate_id": "omit-last-dimension",
+      "domain": "technical_comparison",
+      "split": "development",
+      "kind": "missing_dimension",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 2,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.069,
+        "coverage_ratio": 0.5385
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "cost"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "cost"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "framework-comparison",
+      "candidate_id": "paraphrase-duplicate",
+      "domain": "technical_comparison",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1034,
+        "coverage_ratio": 0.7692
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "framework-comparison",
+      "candidate_id": "all-in-one",
+      "domain": "technical_comparison",
+      "split": "development",
+      "kind": "too_coarse",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 1,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.0,
+        "coverage_ratio": 1.0
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "granularity"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": true
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "granularity"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": true
+      }
+    },
+    {
+      "topic_id": "framework-comparison",
+      "candidate_id": "exact-duplicate-control",
+      "domain": "technical_comparison",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass_with_repairs",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 1,
+        "max_pairwise_overlap": 0.1034,
+        "coverage_ratio": 0.7692
+      },
+      "gate_reason_codes": [
+        "plan_duplicate_tasks_dropped"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "framework-comparison",
+      "candidate_id": "unrelated-plan-control",
+      "domain": "technical_comparison",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "complex",
+      "gate_verdict": "retry",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1905,
+        "coverage_ratio": 0.0
+      },
+      "gate_reason_codes": [
+        "plan_coverage_below_threshold"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "rag",
+          "ecosystem",
+          "cost"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "rag",
+          "ecosystem",
+          "cost"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "python-features",
+      "candidate_id": "acceptable",
+      "domain": "factual_lookup",
+      "split": "development",
+      "kind": "acceptable",
+      "complexity_tier": "simple",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 2,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1481,
+        "coverage_ratio": 0.7059
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2
+      ],
+      "reference_before": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "python-features",
+      "candidate_id": "omit-last-dimension",
+      "domain": "factual_lookup",
+      "split": "development",
+      "kind": "missing_dimension",
+      "complexity_tier": "simple",
+      "gate_verdict": "retry",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 1,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.0,
+        "coverage_ratio": 0.2941
+      },
+      "gate_reason_codes": [
+        "plan_coverage_below_threshold"
+      ],
+      "retained_task_ids": [
+        1
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.5,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "migration"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.5,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "migration"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "python-features",
+      "candidate_id": "paraphrase-duplicate",
+      "domain": "factual_lookup",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "simple",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1481,
+        "coverage_ratio": 0.7059
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            3
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            3
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "python-features",
+      "candidate_id": "navigation-step",
+      "domain": "factual_lookup",
+      "split": "development",
+      "kind": "too_fine",
+      "complexity_tier": "simple",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 2,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.439,
+        "coverage_ratio": 1.0
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage",
+          "granularity"
+        ],
+        "relevance_mean": 1.5,
+        "relevance_problem_task_ids": [
+          1
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.5,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "features"
+        ],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage",
+          "granularity"
+        ],
+        "relevance_mean": 1.5,
+        "relevance_problem_task_ids": [
+          1
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.5,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "features"
+        ],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "python-features",
+      "candidate_id": "exact-duplicate-control",
+      "domain": "factual_lookup",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "simple",
+      "gate_verdict": "pass_with_repairs",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 2,
+        "dropped_duplicate_count": 1,
+        "max_pairwise_overlap": 0.1481,
+        "coverage_ratio": 0.7059
+      },
+      "gate_reason_codes": [
+        "plan_duplicate_tasks_dropped"
+      ],
+      "retained_task_ids": [
+        1,
+        2
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            3
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "python-features",
+      "candidate_id": "unrelated-plan-control",
+      "domain": "factual_lookup",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "simple",
+      "gate_verdict": "retry",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 2,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1364,
+        "coverage_ratio": 0.0
+      },
+      "gate_reason_codes": [
+        "plan_coverage_below_threshold"
+      ],
+      "retained_task_ids": [
+        1,
+        2
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "features",
+          "migration"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "features",
+          "migration"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "rag-design",
+      "candidate_id": "acceptable",
+      "domain": "architecture",
+      "split": "development",
+      "kind": "acceptable",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.3056,
+        "coverage_ratio": 0.7083
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "rag-design",
+      "candidate_id": "omit-last-dimension",
+      "domain": "architecture",
+      "split": "development",
+      "kind": "missing_dimension",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.3056,
+        "coverage_ratio": 0.5833
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.75,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "permissions"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.75,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "permissions"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "rag-design",
+      "candidate_id": "paraphrase-duplicate",
+      "domain": "architecture",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 5,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.3056,
+        "coverage_ratio": 0.7083
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "rag-design",
+      "candidate_id": "off-topic-extra",
+      "domain": "architecture",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 5,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.3056,
+        "coverage_ratio": 0.7083
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance"
+        ],
+        "relevance_mean": 1.6,
+        "relevance_problem_task_ids": [
+          5
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance"
+        ],
+        "relevance_mean": 1.6,
+        "relevance_problem_task_ids": [
+          5
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "rag-design",
+      "candidate_id": "exact-duplicate-control",
+      "domain": "architecture",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "complex",
+      "gate_verdict": "pass_with_repairs",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 1,
+        "max_pairwise_overlap": 0.3056,
+        "coverage_ratio": 0.7083
+      },
+      "gate_reason_codes": [
+        "plan_duplicate_tasks_dropped"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            5
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "rag-design",
+      "candidate_id": "unrelated-plan-control",
+      "domain": "architecture",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "complex",
+      "gate_verdict": "retry",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.2,
+        "coverage_ratio": 0.0
+      },
+      "gate_reason_codes": [
+        "plan_coverage_below_threshold"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "ingestion",
+          "retrieval",
+          "evaluation",
+          "permissions"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "ingestion",
+          "retrieval",
+          "evaluation",
+          "permissions"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "database-choice",
+      "candidate_id": "acceptable",
+      "domain": "technology_selection",
+      "split": "development",
+      "kind": "acceptable",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.3,
+        "coverage_ratio": 0.8947
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "database-choice",
+      "candidate_id": "omit-last-dimension",
+      "domain": "technology_selection",
+      "split": "development",
+      "kind": "missing_dimension",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 2,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.3,
+        "coverage_ratio": 0.6316
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "durability"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "durability"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "database-choice",
+      "candidate_id": "paraphrase-duplicate",
+      "domain": "technology_selection",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.3,
+        "coverage_ratio": 0.8947
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "database-choice",
+      "candidate_id": "all-in-one",
+      "domain": "technology_selection",
+      "split": "development",
+      "kind": "too_coarse",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 1,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.0,
+        "coverage_ratio": 1.0
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "granularity"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": true
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "granularity"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": true
+      }
+    },
+    {
+      "topic_id": "database-choice",
+      "candidate_id": "exact-duplicate-control",
+      "domain": "technology_selection",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass_with_repairs",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 1,
+        "max_pairwise_overlap": 0.3,
+        "coverage_ratio": 0.8947
+      },
+      "gate_reason_codes": [
+        "plan_duplicate_tasks_dropped"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "database-choice",
+      "candidate_id": "unrelated-plan-control",
+      "domain": "technology_selection",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "medium",
+      "gate_verdict": "retry",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1905,
+        "coverage_ratio": 0.0
+      },
+      "gate_reason_codes": [
+        "plan_coverage_below_threshold"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "roles",
+          "performance",
+          "durability"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "roles",
+          "performance",
+          "durability"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "privacy-study",
+      "candidate_id": "acceptable",
+      "domain": "policy_research",
+      "split": "development",
+      "kind": "acceptable",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4,
+        "coverage_ratio": 0.64
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "privacy-study",
+      "candidate_id": "omit-last-dimension",
+      "domain": "policy_research",
+      "split": "development",
+      "kind": "missing_dimension",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 2,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4,
+        "coverage_ratio": 0.52
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "deletion"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "deletion"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "privacy-study",
+      "candidate_id": "paraphrase-duplicate",
+      "domain": "policy_research",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 4,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.4,
+        "coverage_ratio": 0.64
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "privacy-study",
+      "candidate_id": "navigation-step",
+      "domain": "policy_research",
+      "split": "development",
+      "kind": "too_fine",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass",
+      "gate_action": false,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.371,
+        "coverage_ratio": 1.0
+      },
+      "gate_reason_codes": [],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage",
+          "granularity"
+        ],
+        "relevance_mean": 1.6666666666666667,
+        "relevance_problem_task_ids": [
+          1
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "inventory"
+        ],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage",
+          "granularity"
+        ],
+        "relevance_mean": 1.6666666666666667,
+        "relevance_problem_task_ids": [
+          1
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.6666666666666666,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "inventory"
+        ],
+        "granularity_problem_task_ids": [
+          1
+        ],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "privacy-study",
+      "candidate_id": "exact-duplicate-control",
+      "domain": "policy_research",
+      "split": "development",
+      "kind": "redundant",
+      "complexity_tier": "medium",
+      "gate_verdict": "pass_with_repairs",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 1,
+        "max_pairwise_overlap": 0.4,
+        "coverage_ratio": 0.64
+      },
+      "gate_reason_codes": [
+        "plan_duplicate_tasks_dropped"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "redundancy"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [
+          [
+            1,
+            4
+          ]
+        ],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    },
+    {
+      "topic_id": "privacy-study",
+      "candidate_id": "unrelated-plan-control",
+      "domain": "policy_research",
+      "split": "development",
+      "kind": "irrelevant",
+      "complexity_tier": "medium",
+      "gate_verdict": "retry",
+      "gate_action": true,
+      "gate_metrics": {
+        "task_count": 3,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.1905,
+        "coverage_ratio": 0.0
+      },
+      "gate_reason_codes": [
+        "plan_coverage_below_threshold"
+      ],
+      "retained_task_ids": [
+        1,
+        2,
+        3
+      ],
+      "reference_before": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "inventory",
+          "consent",
+          "deletion"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "reference_after": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "relevance",
+          "coverage"
+        ],
+        "relevance_mean": 0.0,
+        "relevance_problem_task_ids": [
+          1,
+          2,
+          3
+        ],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "inventory",
+          "consent",
+          "deletion"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      }
+    }
+  ]
+}

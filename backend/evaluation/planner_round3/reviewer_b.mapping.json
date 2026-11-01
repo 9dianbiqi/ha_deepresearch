@@ -1,0 +1,35 @@
+{
+  "source_sha256": "4c4be649abca767bfdd0528a1e1de997d985042a359971046271384e101e9d0d",
+  "items": [
+    {
+      "review_id": "2fb06c6edac439cf",
+      "sample_id": "ev-market:acceptable",
+      "phase": "initial"
+    },
+    {
+      "review_id": "2977f559d0b0697a",
+      "sample_id": "ev-market:omit-last-dimension",
+      "phase": "initial"
+    },
+    {
+      "review_id": "4ee47a78e50c810f",
+      "sample_id": "ev-market:paraphrase-duplicate",
+      "phase": "initial"
+    },
+    {
+      "review_id": "39807bece74efb41",
+      "sample_id": "ev-market:off-topic-extra",
+      "phase": "initial"
+    },
+    {
+      "review_id": "510cdbb49cf34538",
+      "sample_id": "ev-market:exact-duplicate-control",
+      "phase": "initial"
+    },
+    {
+      "review_id": "8b4ac22abf89afa2",
+      "sample_id": "ev-market:unrelated-plan-control",
+      "phase": "initial"
+    }
+  ]
+}

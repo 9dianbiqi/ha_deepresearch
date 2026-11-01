@@ -1,0 +1,557 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-09",
+  "prompt_version": "component-quote-calibration-v2",
+  "case_count": 2,
+  "topic_count": 1,
+  "api_calls": 4,
+  "all_completed": true,
+  "total_tokens": 6898,
+  "primary_accuracy_reported": false,
+  "coordination_core_cases": 0,
+  "coordination_boundary_cases": 2,
+  "semantic_accuracy_established": false,
+  "new_planning_performed": false,
+  "cases": [
+    {
+      "case": "original",
+      "source_calibration_sha256": "b949362303eb4e9123f7f75058e38d870c44af6f7e60bfbb9af5f17dbbc3eb1f",
+      "packet_sha256": "0bf8f54be207f0138b4012533fbecba8981b49ca357223d8e57f314dda51e528",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "2026年市场份额与格局",
+          "intent": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。",
+          "query": "2026年中国新能源汽车市场份额 比亚迪 特斯拉 市占率"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争与定价策略",
+          "intent": "分析2026年主流车型的价格区间变化、价格战现状及各品牌针对不同细分市场的定价策略。",
+          "query": "2026年新能源汽车价格战 车型定价策略 降价趋势"
+        },
+        {
+          "id": 3,
+          "title": "政策环境与法规",
+          "intent": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。",
+          "query": "2026年新能源汽车补贴政策 购置税优惠 路权政策"
+        },
+        {
+          "id": 4,
+          "title": "增长驱动因素分析",
+          "intent": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。",
+          "query": "2026年新能源汽车增长驱动因素 固态电池 智能化 出口"
+        },
+        {
+          "id": 5,
+          "title": "竞争格局与品牌动向",
+          "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+          "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局"
+        }
+      ],
+      "coordination_set": "boundary",
+      "component_disagreements": [
+        "pricing.profit_pressure",
+        "growth.future_uncertainty"
+      ],
+      "reviews": [
+        {
+          "role": "feedback",
+          "actual_model_id": "openai/gpt-oss-20b",
+          "parameters": {
+            "temperature": 0.0,
+            "max_tokens": 2000,
+            "reasoning_effort": "low",
+            "thinking": "provider_default"
+          },
+          "assessment": {
+            "components": [
+              {
+                "component_id": "share.brand_share",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 1,
+                    "field": "title",
+                    "quote": "2026年市场份额与格局"
+                  }
+                ],
+                "reason": "Task 1 explicitly requests 2026 market share and brand market‑share distribution."
+              },
+              {
+                "component_id": "pricing.price_competition",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 2,
+                    "field": "title",
+                    "quote": "价格竞争与定价策略"
+                  }
+                ],
+                "reason": "Task 2 focuses on price competition, price ranges, and pricing strategies."
+              },
+              {
+                "component_id": "pricing.profit_pressure",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No task explicitly mentions profit, margin, cost or profitability pressure."
+              },
+              {
+                "component_id": "policy.policy_impact",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 3,
+                    "field": "title",
+                    "quote": "政策环境与法规"
+                  }
+                ],
+                "reason": "Task 3 covers subsidy, tax, road‑right, and dual‑credit policies impacting the market."
+              },
+              {
+                "component_id": "growth.drivers",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 4,
+                    "field": "title",
+                    "quote": "增长驱动因素分析"
+                  }
+                ],
+                "reason": "Task 4 investigates core growth drivers such as technology breakthroughs, smart upgrades, and export performance."
+              },
+              {
+                "component_id": "growth.future_uncertainty",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No task explicitly addresses future scenarios, downside risks, or uncertainties beyond current drivers."
+              }
+            ]
+          },
+          "projection": {
+            "evaluation_set": "boundary",
+            "dimension_statuses": {
+              "share": "covered",
+              "pricing": "uncertain",
+              "policy": "covered",
+              "growth": "uncertain"
+            },
+            "dimension_coverage": null,
+            "missing_components": [],
+            "uncertain_components": [
+              "pricing.profit_pressure",
+              "growth.future_uncertainty"
+            ],
+            "exact_quote_count": 4,
+            "quote_identity_validated": true,
+            "semantic_quote_support_verified": false,
+            "scope": "coverage only; does not validate relevance, redundancy or granularity"
+          },
+          "usage": {
+            "completion_tokens": 473,
+            "prompt_tokens": 1103,
+            "total_tokens": 1576,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 166,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": null,
+            "queue_time": 0.381232821,
+            "prompt_time": 0.072319243,
+            "completion_time": 0.507878755,
+            "total_time": 0.580197998
+          },
+          "elapsed_ms": 4313.0
+        },
+        {
+          "role": "judge",
+          "actual_model_id": "openai/gpt-oss-120b",
+          "parameters": {
+            "temperature": 0.0,
+            "max_tokens": 4096,
+            "reasoning_effort": "low",
+            "thinking": "provider_default"
+          },
+          "assessment": {
+            "components": [
+              {
+                "component_id": "share.brand_share",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 1,
+                    "field": "intent",
+                    "quote": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。"
+                  }
+                ],
+                "reason": "任务明确要求获取主要品牌的市场份额，满足share.brand_share的要求。"
+              },
+              {
+                "component_id": "pricing.price_competition",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 2,
+                    "field": "intent",
+                    "quote": "分析2026年主流车型的价格区间变化、价格战现状及各品牌针对不同细分市场的定价策略。"
+                  }
+                ],
+                "reason": "任务直接涉及价格竞争及定价策略，符合pricing.price_competition。"
+              },
+              {
+                "component_id": "pricing.profit_pressure",
+                "status": "missing",
+                "evidence": [],
+                "reason": "任务中未出现对利润、毛利、成本或盈利能力压力的明确研究，仅提及价格战，未满足profit_pressure要求。"
+              },
+              {
+                "component_id": "policy.policy_impact",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 3,
+                    "field": "intent",
+                    "quote": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。"
+                  }
+                ],
+                "reason": "任务明确要求分析政策对市场的影响，符合policy.policy_impact。"
+              },
+              {
+                "component_id": "growth.drivers",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 4,
+                    "field": "intent",
+                    "quote": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。"
+                  }
+                ],
+                "reason": "任务列出技术、智能化、出口等增长驱动，满足growth.drivers。"
+              },
+              {
+                "component_id": "growth.future_uncertainty",
+                "status": "missing",
+                "evidence": [],
+                "reason": "任务未明确研究未来预测、情景、下行风险或不确定性，仅描述增长动力，未满足future_uncertainty要求。"
+              }
+            ]
+          },
+          "projection": {
+            "evaluation_set": "core",
+            "dimension_statuses": {
+              "share": "covered",
+              "pricing": "partial",
+              "policy": "covered",
+              "growth": "partial"
+            },
+            "dimension_coverage": 0.5,
+            "missing_components": [
+              "pricing.profit_pressure",
+              "growth.future_uncertainty"
+            ],
+            "uncertain_components": [],
+            "exact_quote_count": 4,
+            "quote_identity_validated": true,
+            "semantic_quote_support_verified": false,
+            "scope": "coverage only; does not validate relevance, redundancy or granularity"
+          },
+          "usage": {
+            "completion_tokens": 685,
+            "prompt_tokens": 1131,
+            "total_tokens": 1816,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 249,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": null,
+            "queue_time": 0.316704847,
+            "prompt_time": 0.08357356,
+            "completion_time": 1.4336658789999999,
+            "total_time": 1.517239439
+          },
+          "elapsed_ms": 2984.0
+        }
+      ]
+    },
+    {
+      "case": "positive_candidate",
+      "source_calibration_sha256": "a0596342d9dcc8362a258a08ab4d2891c2b660341de4f0305055dbbb441e6aab",
+      "packet_sha256": "508db581c25d4541b3785b4d2fc1d4613b4ea00cdd7895cdd8d8c341c7387755",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "市场份额与格局",
+          "intent": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。",
+          "query": "2026年中国新能源汽车市场份额 比亚迪 特斯拉 市占率"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争与盈利压力",
+          "intent": "分析2026年主流车型的价格区间变化、价格战现状，并重点研究价格竞争对车企利润、毛利率及整体盈利能力的影响。",
+          "query": "2026年新能源汽车价格战 利润率 毛利率 盈利能力"
+        },
+        {
+          "id": 3,
+          "title": "政策环境与法规",
+          "intent": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。",
+          "query": "2026年新能源汽车补贴政策 购置税优惠 路权政策"
+        },
+        {
+          "id": 4,
+          "title": "增长驱动因素",
+          "intent": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。",
+          "query": "2026年新能源汽车增长驱动因素 固态电池 智能化 出口"
+        },
+        {
+          "id": 5,
+          "title": "未来增长情景与风险",
+          "intent": "预测2026-2027年市场需求趋势，识别市场下行风险及不确定性因素，评估增长情景。",
+          "query": "2026-2027年新能源汽车需求预测 下行风险 不确定性"
+        },
+        {
+          "id": 6,
+          "title": "竞争格局与品牌动向",
+          "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+          "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局"
+        }
+      ],
+      "coordination_set": "boundary",
+      "component_disagreements": [
+        "share.brand_share",
+        "pricing.price_competition",
+        "pricing.profit_pressure",
+        "policy.policy_impact",
+        "growth.drivers",
+        "growth.future_uncertainty"
+      ],
+      "reviews": [
+        {
+          "role": "feedback",
+          "actual_model_id": "openai/gpt-oss-20b",
+          "parameters": {
+            "temperature": 0.0,
+            "max_tokens": 2000,
+            "reasoning_effort": "low",
+            "thinking": "provider_default"
+          },
+          "assessment": {
+            "components": [
+              {
+                "component_id": "share.brand_share",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No explicit evidence of brand share data provided."
+              },
+              {
+                "component_id": "pricing.price_competition",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No explicit evidence of price competition details provided."
+              },
+              {
+                "component_id": "pricing.profit_pressure",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No explicit evidence of profit or margin pressure provided."
+              },
+              {
+                "component_id": "policy.policy_impact",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No explicit evidence of policy impact analysis provided."
+              },
+              {
+                "component_id": "growth.drivers",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No explicit evidence of growth drivers analysis provided."
+              },
+              {
+                "component_id": "growth.future_uncertainty",
+                "status": "uncertain",
+                "evidence": [],
+                "reason": "No explicit evidence of future uncertainty or risk analysis provided."
+              }
+            ]
+          },
+          "projection": {
+            "evaluation_set": "boundary",
+            "dimension_statuses": {
+              "share": "uncertain",
+              "pricing": "uncertain",
+              "policy": "uncertain",
+              "growth": "uncertain"
+            },
+            "dimension_coverage": null,
+            "missing_components": [],
+            "uncertain_components": [
+              "share.brand_share",
+              "pricing.price_competition",
+              "pricing.profit_pressure",
+              "policy.policy_impact",
+              "growth.drivers",
+              "growth.future_uncertainty"
+            ],
+            "exact_quote_count": 0,
+            "quote_identity_validated": true,
+            "semantic_quote_support_verified": false,
+            "scope": "coverage only; does not validate relevance, redundancy or granularity"
+          },
+          "usage": {
+            "completion_tokens": 230,
+            "prompt_tokens": 1177,
+            "total_tokens": 1407,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 39,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": null,
+            "queue_time": 0.308545421,
+            "prompt_time": 0.084822942,
+            "completion_time": 0.251356347,
+            "total_time": 0.336179289
+          },
+          "elapsed_ms": 3938.0
+        },
+        {
+          "role": "judge",
+          "actual_model_id": "openai/gpt-oss-120b",
+          "parameters": {
+            "temperature": 0.0,
+            "max_tokens": 4096,
+            "reasoning_effort": "low",
+            "thinking": "provider_default"
+          },
+          "assessment": {
+            "components": [
+              {
+                "component_id": "share.brand_share",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 1,
+                    "field": "intent",
+                    "quote": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。"
+                  }
+                ],
+                "reason": "任务1明确提出研究主要品牌的市场份额分布，满足品牌份额需求。"
+              },
+              {
+                "component_id": "pricing.price_competition",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 2,
+                    "field": "intent",
+                    "quote": "分析2026年主流车型的价格区间变化、价格战现状，并重点研究价格竞争对车企利润、毛利率及整体盈利能力的影响。"
+                  }
+                ],
+                "reason": "任务2直接涉及价格区间、价格战及价格竞争的分析。"
+              },
+              {
+                "component_id": "pricing.profit_pressure",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 2,
+                    "field": "intent",
+                    "quote": "分析2026年主流车型的价格区间变化、价格战现状，并重点研究价格竞争对车企利润、毛利率及整体盈利能力的影响。"
+                  }
+                ],
+                "reason": "任务2明确要求研究价格竞争对利润、毛利率及盈利能力的压力。"
+              },
+              {
+                "component_id": "policy.policy_impact",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 3,
+                    "field": "intent",
+                    "quote": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。"
+                  }
+                ],
+                "reason": "任务3聚焦政策及监管对市场竞争的影响。"
+              },
+              {
+                "component_id": "growth.drivers",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 4,
+                    "field": "intent",
+                    "quote": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。"
+                  }
+                ],
+                "reason": "任务4明确研究技术、需求、出口等增长驱动因素。"
+              },
+              {
+                "component_id": "growth.future_uncertainty",
+                "status": "covered",
+                "evidence": [
+                  {
+                    "task_id": 5,
+                    "field": "intent",
+                    "quote": "预测2026-2027年市场需求趋势，识别市场下行风险及不确定性因素，评估增长情景。"
+                  }
+                ],
+                "reason": "任务5专门预测未来需求并分析下行风险和不确定性。"
+              }
+            ]
+          },
+          "projection": {
+            "evaluation_set": "core",
+            "dimension_statuses": {
+              "share": "covered",
+              "pricing": "covered",
+              "policy": "covered",
+              "growth": "covered"
+            },
+            "dimension_coverage": 1.0,
+            "missing_components": [],
+            "uncertain_components": [],
+            "exact_quote_count": 6,
+            "quote_identity_validated": true,
+            "semantic_quote_support_verified": false,
+            "scope": "coverage only; does not validate relevance, redundancy or granularity"
+          },
+          "usage": {
+            "completion_tokens": 894,
+            "prompt_tokens": 1205,
+            "total_tokens": 2099,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 389,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": null,
+            "queue_time": 0.623813369,
+            "prompt_time": 0.083674985,
+            "completion_time": 1.914078735,
+            "total_time": 1.99775372
+          },
+          "elapsed_ms": 3703.0
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "This is development calibration; criteria decomposition and output format differ from v1.",
+    "Exact quotes prove textual identity, not semantic sufficiency.",
+    "20B all-uncertain positive response has zero quotations; schema validity is not a usable coverage signal.",
+    "Both role budgets and JSON-object request modes differ; observations cannot isolate model-size effects.",
+    "Two related plans of one topic are not a held-out multi-topic benchmark."
+  ],
+  "release_status": "CALIBRATION COMPLETED — SEMANTIC GATE NOT READY",
+  "calibration_completed": true,
+  "semantic_gate_ready": false,
+  "production_semantic_blocking_enabled": false,
+  "human_gold_standard_available": false,
+  "next_stage": "docs/SEMANTIC_CALIBRATION_NEXT_STAGE.md"
+}

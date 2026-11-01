@@ -1,0 +1,15 @@
+{
+  "source_sha256": "5f7899353685f3e5ece102bc6994ff1540d51ea7c464f68585d3c250267c545d",
+  "items": [
+    {
+      "review_id": "a64962003175bbd2",
+      "sample_id": "ev-market:1",
+      "phase": "initial"
+    },
+    {
+      "review_id": "630ac01d1e55107b",
+      "sample_id": "ev-market:1",
+      "phase": "final"
+    }
+  ]
+}

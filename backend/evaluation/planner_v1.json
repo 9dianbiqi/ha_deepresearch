@@ -1,0 +1,2511 @@
+{
+  "schema_version": 1,
+  "dataset_version": "planner-seed-v1.1.0",
+  "provenance": "synthetic_seed",
+  "annotation_status": "ai_draft",
+  "annotation_author": "Codex",
+  "reviewers": [],
+  "topics": [
+    {
+      "id": "ev-market",
+      "domain": "market",
+      "language": "zh",
+      "split": "development",
+      "topic": "分析 2026 年中国新能源汽车市场的竞争格局和未来发展趋势，重点覆盖市场份额、价格竞争、政策环境和增长驱动。",
+      "scope": "限定中国市场与2026年；不强制要求电池或充电设施独立成章。",
+      "required_dimensions": [
+        {
+          "id": "share",
+          "description": "主要品牌市场份额与集中度"
+        },
+        {
+          "id": "pricing",
+          "description": "价格竞争与盈利压力"
+        },
+        {
+          "id": "policy",
+          "description": "政策环境对竞争的影响"
+        },
+        {
+          "id": "growth",
+          "description": "未来增长驱动与不确定性"
+        }
+      ],
+      "task_count_range": [
+        3,
+        6
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "品牌竞争格局",
+              "intent": "比较主要品牌的份额和市场集中度",
+              "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "share"
+              ],
+              "rationale": "直接研究题目指定的主要品牌市场份额与集中度，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "价格竞争",
+              "intent": "研究降价与盈利压力",
+              "query": "2026 中国新能源汽车 价格战 毛利率",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "pricing"
+              ],
+              "rationale": "直接研究题目指定的价格竞争与盈利压力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "政策环境",
+              "intent": "研究补贴和监管变化对厂商竞争的影响",
+              "query": "2026 中国新能源汽车 补贴 监管 政策",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "policy"
+              ],
+              "rationale": "直接研究题目指定的政策环境对竞争的影响，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "发展趋势",
+              "intent": "识别增长驱动及未来不确定性",
+              "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "growth"
+              ],
+              "rationale": "直接研究题目指定的未来增长驱动与不确定性，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "品牌竞争格局",
+              "intent": "比较主要品牌的份额和市场集中度",
+              "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "share"
+              ],
+              "rationale": "直接研究题目指定的主要品牌市场份额与集中度，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "价格竞争",
+              "intent": "研究降价与盈利压力",
+              "query": "2026 中国新能源汽车 价格战 毛利率",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "pricing"
+              ],
+              "rationale": "直接研究题目指定的价格竞争与盈利压力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "政策环境",
+              "intent": "研究补贴和监管变化对厂商竞争的影响",
+              "query": "2026 中国新能源汽车 补贴 监管 政策",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "policy"
+              ],
+              "rationale": "直接研究题目指定的政策环境对竞争的影响，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "boundary",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "品牌竞争格局",
+              "intent": "比较主要品牌的份额和市场集中度",
+              "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "share"
+              ],
+              "rationale": "直接研究题目指定的主要品牌市场份额与集中度，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "价格竞争",
+              "intent": "研究降价与盈利压力",
+              "query": "2026 中国新能源汽车 价格战 毛利率",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "pricing"
+              ],
+              "rationale": "直接研究题目指定的价格竞争与盈利压力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "政策环境",
+              "intent": "研究补贴和监管变化对厂商竞争的影响",
+              "query": "2026 中国新能源汽车 补贴 监管 政策",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "policy"
+              ],
+              "rationale": "直接研究题目指定的政策环境对竞争的影响，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "发展趋势",
+              "intent": "识别增长驱动及未来不确定性",
+              "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "growth"
+              ],
+              "rationale": "直接研究题目指定的未来增长驱动与不确定性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 5,
+              "title": "国内电动车头部厂商竞争位置",
+              "intent": "谁占据领先地位及各厂商相对占比",
+              "query": "国内电动车 头部厂商 排名 占比",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "share"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [],
+          "evaluation_set": "boundary",
+          "pair_relations": [
+            {
+              "task_ids": [
+                1,
+                5
+              ],
+              "label": "uncertain",
+              "reason": "两项任务均涉及市场份额和竞争地位，但任务5未明确区分品牌与集团的分析口径，无法确认是否能够产生独立研究结论。"
+            }
+          ]
+        },
+        {
+          "id": "off-topic-extra",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "品牌竞争格局",
+              "intent": "比较主要品牌的份额和市场集中度",
+              "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "share"
+              ],
+              "rationale": "直接研究题目指定的主要品牌市场份额与集中度，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "价格竞争",
+              "intent": "研究降价与盈利压力",
+              "query": "2026 中国新能源汽车 价格战 毛利率",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "pricing"
+              ],
+              "rationale": "直接研究题目指定的价格竞争与盈利压力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "政策环境",
+              "intent": "研究补贴和监管变化对厂商竞争的影响",
+              "query": "2026 中国新能源汽车 补贴 监管 政策",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "policy"
+              ],
+              "rationale": "直接研究题目指定的政策环境对竞争的影响，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "发展趋势",
+              "intent": "识别增长驱动及未来不确定性",
+              "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "growth"
+              ],
+              "rationale": "直接研究题目指定的未来增长驱动与不确定性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 5,
+              "title": "烘焙入门",
+              "intent": "调查家庭烤面包的配方",
+              "query": "家庭 面包 烘焙 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "与当前研究对象和要求均无关。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "品牌竞争格局",
+              "intent": "比较主要品牌的份额和市场集中度",
+              "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "share"
+              ],
+              "rationale": "直接研究题目指定的主要品牌市场份额与集中度，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "价格竞争",
+              "intent": "研究降价与盈利压力",
+              "query": "2026 中国新能源汽车 价格战 毛利率",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "pricing"
+              ],
+              "rationale": "直接研究题目指定的价格竞争与盈利压力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "政策环境",
+              "intent": "研究补贴和监管变化对厂商竞争的影响",
+              "query": "2026 中国新能源汽车 补贴 监管 政策",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "policy"
+              ],
+              "rationale": "直接研究题目指定的政策环境对竞争的影响，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "发展趋势",
+              "intent": "识别增长驱动及未来不确定性",
+              "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "growth"
+              ],
+              "rationale": "直接研究题目指定的未来增长驱动与不确定性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 5,
+              "title": "品牌竞争格局",
+              "intent": "比较主要品牌的份额和市场集中度",
+              "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "share"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                5
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 3,
+              "title": "蛋糕制作",
+              "intent": "研究家庭蛋糕制作方法",
+              "query": "蛋糕 奶油打发 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 4,
+              "title": "披萨制作",
+              "intent": "研究家庭披萨制作方法",
+              "query": "披萨 面团配比 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    },
+    {
+      "id": "framework-comparison",
+      "domain": "technical_comparison",
+      "language": "zh",
+      "split": "development",
+      "topic": "对比 LangChain 和 LlamaIndex 的 RAG 能力、集成生态和选型代价。",
+      "scope": "限于RAG应用选型；不要求泛化排名。",
+      "required_dimensions": [
+        {
+          "id": "rag",
+          "description": "RAG流程能力"
+        },
+        {
+          "id": "ecosystem",
+          "description": "数据与模型集成生态"
+        },
+        {
+          "id": "cost",
+          "description": "选型维护和迁移代价"
+        }
+      ],
+      "task_count_range": [
+        2,
+        5
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "RAG能力",
+              "intent": "比较检索增强流程的支持",
+              "query": "LangChain LlamaIndex RAG 检索 工作流 能力",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "rag"
+              ],
+              "rationale": "直接研究题目指定的RAG流程能力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "集成生态",
+              "intent": "比较数据源与模型连接能力",
+              "query": "LangChain LlamaIndex 集成生态 数据源 模型",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ecosystem"
+              ],
+              "rationale": "直接研究题目指定的数据与模型集成生态，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "选型代价",
+              "intent": "比较维护学习及迁移成本",
+              "query": "LangChain LlamaIndex 选型代价 维护 迁移",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "cost"
+              ],
+              "rationale": "直接研究题目指定的选型维护和迁移代价，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "RAG能力",
+              "intent": "比较检索增强流程的支持",
+              "query": "LangChain LlamaIndex RAG 检索 工作流 能力",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "rag"
+              ],
+              "rationale": "直接研究题目指定的RAG流程能力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "集成生态",
+              "intent": "比较数据源与模型连接能力",
+              "query": "LangChain LlamaIndex 集成生态 数据源 模型",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ecosystem"
+              ],
+              "rationale": "直接研究题目指定的数据与模型集成生态，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "RAG能力",
+              "intent": "比较检索增强流程的支持",
+              "query": "LangChain LlamaIndex RAG 检索 工作流 能力",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "rag"
+              ],
+              "rationale": "直接研究题目指定的RAG流程能力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "集成生态",
+              "intent": "比较数据源与模型连接能力",
+              "query": "LangChain LlamaIndex 集成生态 数据源 模型",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ecosystem"
+              ],
+              "rationale": "直接研究题目指定的数据与模型集成生态，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "选型代价",
+              "intent": "比较维护学习及迁移成本",
+              "query": "LangChain LlamaIndex 选型代价 维护 迁移",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "cost"
+              ],
+              "rationale": "直接研究题目指定的选型维护和迁移代价，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "检索增强支持",
+              "intent": "比较两个框架完成问答流程的方式",
+              "query": "框架 知识问答 管道 特性",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "rag"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "同一研究目标的同义改写，新增任务未带来新的结论维度。"
+            }
+          ]
+        },
+        {
+          "id": "all-in-one",
+          "kind": "too_coarse",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "综合调研所有方面",
+              "intent": "在一次任务中深入研究RAG流程能力；数据与模型集成生态；选型维护和迁移代价",
+              "query": "对比 LangChain 和 LlamaIndex 的 RAG 能力、集成生态和选型代价。",
+              "relevance": 2,
+              "granularity": "too_coarse",
+              "covered_dimensions": [
+                "rag",
+                "ecosystem",
+                "cost"
+              ],
+              "rationale": "虽明确提到全部维度，但将多个独立比较问题塞入一个任务，缺少可单独验证的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "RAG能力",
+              "intent": "比较检索增强流程的支持",
+              "query": "LangChain LlamaIndex RAG 检索 工作流 能力",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "rag"
+              ],
+              "rationale": "直接研究题目指定的RAG流程能力，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "集成生态",
+              "intent": "比较数据源与模型连接能力",
+              "query": "LangChain LlamaIndex 集成生态 数据源 模型",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ecosystem"
+              ],
+              "rationale": "直接研究题目指定的数据与模型集成生态，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "选型代价",
+              "intent": "比较维护学习及迁移成本",
+              "query": "LangChain LlamaIndex 选型代价 维护 迁移",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "cost"
+              ],
+              "rationale": "直接研究题目指定的选型维护和迁移代价，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "RAG能力",
+              "intent": "比较检索增强流程的支持",
+              "query": "LangChain LlamaIndex RAG 检索 工作流 能力",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "rag"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 3,
+              "title": "蛋糕制作",
+              "intent": "研究家庭蛋糕制作方法",
+              "query": "蛋糕 奶油打发 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    },
+    {
+      "id": "python-features",
+      "domain": "factual_lookup",
+      "language": "zh",
+      "split": "development",
+      "topic": "Python 3.14 有哪些新增特性，升级时有哪些兼容性注意事项？",
+      "scope": "只研究该版本的新功能和升级兼容性；不扩展语言历史。",
+      "required_dimensions": [
+        {
+          "id": "features",
+          "description": "该版本新增特性"
+        },
+        {
+          "id": "migration",
+          "description": "升级兼容性注意事项"
+        }
+      ],
+      "task_count_range": [
+        1,
+        4
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "新增特性",
+              "intent": "查明Python 3.14新增功能",
+              "query": "Python 3.14 新增特性 release notes",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "features"
+              ],
+              "rationale": "直接研究题目指定的该版本新增特性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "升级兼容性",
+              "intent": "研究升级时的破坏性变更和迁移注意事项",
+              "query": "Python 3.14 升级 兼容性 注意事项 migration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "migration"
+              ],
+              "rationale": "直接研究题目指定的升级兼容性注意事项，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "新增特性",
+              "intent": "查明Python 3.14新增功能",
+              "query": "Python 3.14 新增特性 release notes",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "features"
+              ],
+              "rationale": "直接研究题目指定的该版本新增特性，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "新增特性",
+              "intent": "查明Python 3.14新增功能",
+              "query": "Python 3.14 新增特性 release notes",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "features"
+              ],
+              "rationale": "直接研究题目指定的该版本新增特性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "升级兼容性",
+              "intent": "研究升级时的破坏性变更和迁移注意事项",
+              "query": "Python 3.14 升级 兼容性 注意事项 migration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "migration"
+              ],
+              "rationale": "直接研究题目指定的升级兼容性注意事项，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "新版本能力",
+              "intent": "整理该发行版增加的功能",
+              "query": "CPython release additions",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "features"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                3
+              ],
+              "rationale": "同一研究目标的同义改写，新增任务未带来新的结论维度。"
+            }
+          ]
+        },
+        {
+          "id": "navigation-step",
+          "kind": "too_fine",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "打开新增特性或数据清单的目录页",
+              "intent": "只定位并打开目录页，不研究该维度内容",
+              "query": "Python 3.14 有哪些新增特性，升级时有哪些兼容性注意事项？ 目录页",
+              "relevance": 1,
+              "granularity": "too_fine",
+              "covered_dimensions": [],
+              "rationale": "只是信息获取步骤，不能独立回答任何指定研究维度。"
+            },
+            {
+              "id": 2,
+              "title": "升级兼容性",
+              "intent": "研究升级时的破坏性变更和迁移注意事项",
+              "query": "Python 3.14 升级 兼容性 注意事项 migration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "migration"
+              ],
+              "rationale": "直接研究题目指定的升级兼容性注意事项，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "新增特性",
+              "intent": "查明Python 3.14新增功能",
+              "query": "Python 3.14 新增特性 release notes",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "features"
+              ],
+              "rationale": "直接研究题目指定的该版本新增特性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "升级兼容性",
+              "intent": "研究升级时的破坏性变更和迁移注意事项",
+              "query": "Python 3.14 升级 兼容性 注意事项 migration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "migration"
+              ],
+              "rationale": "直接研究题目指定的升级兼容性注意事项，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "新增特性",
+              "intent": "查明Python 3.14新增功能",
+              "query": "Python 3.14 新增特性 release notes",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "features"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                3
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    },
+    {
+      "id": "rag-design",
+      "domain": "architecture",
+      "language": "zh",
+      "split": "development",
+      "topic": "设计企业知识库 RAG 方案，覆盖数据接入、检索策略、效果评估和权限治理。",
+      "scope": "设计研究任务而不是直接编写实现；权限治理为明确必需维度。",
+      "required_dimensions": [
+        {
+          "id": "ingestion",
+          "description": "数据接入与索引更新"
+        },
+        {
+          "id": "retrieval",
+          "description": "检索策略"
+        },
+        {
+          "id": "evaluation",
+          "description": "效果评估"
+        },
+        {
+          "id": "permissions",
+          "description": "权限隔离与治理"
+        }
+      ],
+      "task_count_range": [
+        3,
+        6
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据接入",
+              "intent": "研究知识库数据接入与增量索引",
+              "query": "企业知识库 RAG 数据接入 增量索引",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ingestion"
+              ],
+              "rationale": "直接研究题目指定的数据接入与索引更新，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "检索策略",
+              "intent": "比较企业知识库召回与重排策略",
+              "query": "企业知识库 RAG 检索策略 召回 重排",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "retrieval"
+              ],
+              "rationale": "直接研究题目指定的检索策略，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "效果评估",
+              "intent": "研究RAG效果指标与评估集",
+              "query": "企业知识库 RAG 效果评估 指标 评估集",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "evaluation"
+              ],
+              "rationale": "直接研究题目指定的效果评估，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "权限治理",
+              "intent": "研究访问控制和知识权限隔离",
+              "query": "企业知识库 RAG 权限治理 访问控制 隔离",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "permissions"
+              ],
+              "rationale": "直接研究题目指定的权限隔离与治理，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据接入",
+              "intent": "研究知识库数据接入与增量索引",
+              "query": "企业知识库 RAG 数据接入 增量索引",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ingestion"
+              ],
+              "rationale": "直接研究题目指定的数据接入与索引更新，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "检索策略",
+              "intent": "比较企业知识库召回与重排策略",
+              "query": "企业知识库 RAG 检索策略 召回 重排",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "retrieval"
+              ],
+              "rationale": "直接研究题目指定的检索策略，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "效果评估",
+              "intent": "研究RAG效果指标与评估集",
+              "query": "企业知识库 RAG 效果评估 指标 评估集",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "evaluation"
+              ],
+              "rationale": "直接研究题目指定的效果评估，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据接入",
+              "intent": "研究知识库数据接入与增量索引",
+              "query": "企业知识库 RAG 数据接入 增量索引",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ingestion"
+              ],
+              "rationale": "直接研究题目指定的数据接入与索引更新，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "检索策略",
+              "intent": "比较企业知识库召回与重排策略",
+              "query": "企业知识库 RAG 检索策略 召回 重排",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "retrieval"
+              ],
+              "rationale": "直接研究题目指定的检索策略，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "效果评估",
+              "intent": "研究RAG效果指标与评估集",
+              "query": "企业知识库 RAG 效果评估 指标 评估集",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "evaluation"
+              ],
+              "rationale": "直接研究题目指定的效果评估，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "权限治理",
+              "intent": "研究访问控制和知识权限隔离",
+              "query": "企业知识库 RAG 权限治理 访问控制 隔离",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "permissions"
+              ],
+              "rationale": "直接研究题目指定的权限隔离与治理，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 5,
+              "title": "知识导入流程",
+              "intent": "调查资料导入及更新机制",
+              "query": "内部资料 导入 更新管道",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ingestion"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                5
+              ],
+              "rationale": "同一研究目标的同义改写，新增任务未带来新的结论维度。"
+            }
+          ]
+        },
+        {
+          "id": "off-topic-extra",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据接入",
+              "intent": "研究知识库数据接入与增量索引",
+              "query": "企业知识库 RAG 数据接入 增量索引",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ingestion"
+              ],
+              "rationale": "直接研究题目指定的数据接入与索引更新，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "检索策略",
+              "intent": "比较企业知识库召回与重排策略",
+              "query": "企业知识库 RAG 检索策略 召回 重排",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "retrieval"
+              ],
+              "rationale": "直接研究题目指定的检索策略，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "效果评估",
+              "intent": "研究RAG效果指标与评估集",
+              "query": "企业知识库 RAG 效果评估 指标 评估集",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "evaluation"
+              ],
+              "rationale": "直接研究题目指定的效果评估，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "权限治理",
+              "intent": "研究访问控制和知识权限隔离",
+              "query": "企业知识库 RAG 权限治理 访问控制 隔离",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "permissions"
+              ],
+              "rationale": "直接研究题目指定的权限隔离与治理，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 5,
+              "title": "烘焙入门",
+              "intent": "调查家庭烤面包的配方",
+              "query": "家庭 面包 烘焙 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "与当前研究对象和要求均无关。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据接入",
+              "intent": "研究知识库数据接入与增量索引",
+              "query": "企业知识库 RAG 数据接入 增量索引",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ingestion"
+              ],
+              "rationale": "直接研究题目指定的数据接入与索引更新，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "检索策略",
+              "intent": "比较企业知识库召回与重排策略",
+              "query": "企业知识库 RAG 检索策略 召回 重排",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "retrieval"
+              ],
+              "rationale": "直接研究题目指定的检索策略，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "效果评估",
+              "intent": "研究RAG效果指标与评估集",
+              "query": "企业知识库 RAG 效果评估 指标 评估集",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "evaluation"
+              ],
+              "rationale": "直接研究题目指定的效果评估，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "权限治理",
+              "intent": "研究访问控制和知识权限隔离",
+              "query": "企业知识库 RAG 权限治理 访问控制 隔离",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "permissions"
+              ],
+              "rationale": "直接研究题目指定的权限隔离与治理，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 5,
+              "title": "数据接入",
+              "intent": "研究知识库数据接入与增量索引",
+              "query": "企业知识库 RAG 数据接入 增量索引",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "ingestion"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                5
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 3,
+              "title": "蛋糕制作",
+              "intent": "研究家庭蛋糕制作方法",
+              "query": "蛋糕 奶油打发 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 4,
+              "title": "披萨制作",
+              "intent": "研究家庭披萨制作方法",
+              "query": "披萨 面团配比 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    },
+    {
+      "id": "database-choice",
+      "domain": "technology_selection",
+      "language": "zh",
+      "split": "development",
+      "topic": "比较 PostgreSQL 与 Redis 在订单系统中的职责、性能和持久化可靠性。",
+      "scope": "比较互补职责，避免把二者当作可以无条件替换的产品。",
+      "required_dimensions": [
+        {
+          "id": "roles",
+          "description": "订单系统中的职责分工"
+        },
+        {
+          "id": "performance",
+          "description": "性能与负载权衡"
+        },
+        {
+          "id": "durability",
+          "description": "持久化可靠性"
+        }
+      ],
+      "task_count_range": [
+        2,
+        5
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "职责分工",
+              "intent": "研究两者在订单系统中的职责与工作负载",
+              "query": "PostgreSQL Redis 订单系统 职责 分工 工作负载",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "roles"
+              ],
+              "rationale": "直接研究题目指定的订单系统中的职责分工，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "性能权衡",
+              "intent": "比较典型订单负载的性能与资源代价",
+              "query": "PostgreSQL Redis 订单系统 性能 延迟 吞吐",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "performance"
+              ],
+              "rationale": "直接研究题目指定的性能与负载权衡，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "持久化可靠性",
+              "intent": "比较故障后的持久化与恢复保证",
+              "query": "PostgreSQL Redis 持久化可靠性 故障恢复",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "durability"
+              ],
+              "rationale": "直接研究题目指定的持久化可靠性，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "职责分工",
+              "intent": "研究两者在订单系统中的职责与工作负载",
+              "query": "PostgreSQL Redis 订单系统 职责 分工 工作负载",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "roles"
+              ],
+              "rationale": "直接研究题目指定的订单系统中的职责分工，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "性能权衡",
+              "intent": "比较典型订单负载的性能与资源代价",
+              "query": "PostgreSQL Redis 订单系统 性能 延迟 吞吐",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "performance"
+              ],
+              "rationale": "直接研究题目指定的性能与负载权衡，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "职责分工",
+              "intent": "研究两者在订单系统中的职责与工作负载",
+              "query": "PostgreSQL Redis 订单系统 职责 分工 工作负载",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "roles"
+              ],
+              "rationale": "直接研究题目指定的订单系统中的职责分工，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "性能权衡",
+              "intent": "比较典型订单负载的性能与资源代价",
+              "query": "PostgreSQL Redis 订单系统 性能 延迟 吞吐",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "performance"
+              ],
+              "rationale": "直接研究题目指定的性能与负载权衡，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "持久化可靠性",
+              "intent": "比较故障后的持久化与恢复保证",
+              "query": "PostgreSQL Redis 持久化可靠性 故障恢复",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "durability"
+              ],
+              "rationale": "直接研究题目指定的持久化可靠性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "组件角色",
+              "intent": "明确事务记录和高速访问的边界",
+              "query": "订单 事务记录 高速访问 边界",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "roles"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "同一研究目标的同义改写，新增任务未带来新的结论维度。"
+            }
+          ]
+        },
+        {
+          "id": "all-in-one",
+          "kind": "too_coarse",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "综合调研所有方面",
+              "intent": "在一次任务中深入研究订单系统中的职责分工；性能与负载权衡；持久化可靠性",
+              "query": "比较 PostgreSQL 与 Redis 在订单系统中的职责、性能和持久化可靠性。",
+              "relevance": 2,
+              "granularity": "too_coarse",
+              "covered_dimensions": [
+                "roles",
+                "performance",
+                "durability"
+              ],
+              "rationale": "虽明确提到全部维度，但将多个独立比较问题塞入一个任务，缺少可单独验证的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "职责分工",
+              "intent": "研究两者在订单系统中的职责与工作负载",
+              "query": "PostgreSQL Redis 订单系统 职责 分工 工作负载",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "roles"
+              ],
+              "rationale": "直接研究题目指定的订单系统中的职责分工，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "性能权衡",
+              "intent": "比较典型订单负载的性能与资源代价",
+              "query": "PostgreSQL Redis 订单系统 性能 延迟 吞吐",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "performance"
+              ],
+              "rationale": "直接研究题目指定的性能与负载权衡，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "持久化可靠性",
+              "intent": "比较故障后的持久化与恢复保证",
+              "query": "PostgreSQL Redis 持久化可靠性 故障恢复",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "durability"
+              ],
+              "rationale": "直接研究题目指定的持久化可靠性，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "职责分工",
+              "intent": "研究两者在订单系统中的职责与工作负载",
+              "query": "PostgreSQL Redis 订单系统 职责 分工 工作负载",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "roles"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 3,
+              "title": "蛋糕制作",
+              "intent": "研究家庭蛋糕制作方法",
+              "query": "蛋糕 奶油打发 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    },
+    {
+      "id": "privacy-study",
+      "domain": "policy_research",
+      "language": "zh",
+      "split": "development",
+      "topic": "调研移动应用隐私合规，重点覆盖数据清单、用户同意和删除请求流程。",
+      "scope": "这是研究规划样本，不提供法律结论；具体法规需执行研究时核实。",
+      "required_dimensions": [
+        {
+          "id": "inventory",
+          "description": "数据清单与用途"
+        },
+        {
+          "id": "consent",
+          "description": "用户同意流程"
+        },
+        {
+          "id": "deletion",
+          "description": "删除请求处理"
+        }
+      ],
+      "task_count_range": [
+        2,
+        5
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据清单",
+              "intent": "研究数据分类及处理用途的梳理方法",
+              "query": "移动应用 隐私合规 数据清单 用途",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "inventory"
+              ],
+              "rationale": "直接研究题目指定的数据清单与用途，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "用户同意",
+              "intent": "研究告知与同意的交互和记录流程",
+              "query": "移动应用 隐私合规 用户同意 告知 流程",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "consent"
+              ],
+              "rationale": "直接研究题目指定的用户同意流程，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "删除请求",
+              "intent": "研究用户删除请求的处理与验证",
+              "query": "移动应用 隐私合规 删除请求 处理 验证",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "deletion"
+              ],
+              "rationale": "直接研究题目指定的删除请求处理，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据清单",
+              "intent": "研究数据分类及处理用途的梳理方法",
+              "query": "移动应用 隐私合规 数据清单 用途",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "inventory"
+              ],
+              "rationale": "直接研究题目指定的数据清单与用途，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "用户同意",
+              "intent": "研究告知与同意的交互和记录流程",
+              "query": "移动应用 隐私合规 用户同意 告知 流程",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "consent"
+              ],
+              "rationale": "直接研究题目指定的用户同意流程，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据清单",
+              "intent": "研究数据分类及处理用途的梳理方法",
+              "query": "移动应用 隐私合规 数据清单 用途",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "inventory"
+              ],
+              "rationale": "直接研究题目指定的数据清单与用途，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "用户同意",
+              "intent": "研究告知与同意的交互和记录流程",
+              "query": "移动应用 隐私合规 用户同意 告知 流程",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "consent"
+              ],
+              "rationale": "直接研究题目指定的用户同意流程，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "删除请求",
+              "intent": "研究用户删除请求的处理与验证",
+              "query": "移动应用 隐私合规 删除请求 处理 验证",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "deletion"
+              ],
+              "rationale": "直接研究题目指定的删除请求处理，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "信息盘点",
+              "intent": "调查收集信息与使用目的的盘点方法",
+              "query": "App 信息收集 目的盘点",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "inventory"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "同一研究目标的同义改写，新增任务未带来新的结论维度。"
+            }
+          ]
+        },
+        {
+          "id": "navigation-step",
+          "kind": "too_fine",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "打开新增特性或数据清单的目录页",
+              "intent": "只定位并打开目录页，不研究该维度内容",
+              "query": "调研移动应用隐私合规，重点覆盖数据清单、用户同意和删除请求流程。 目录页",
+              "relevance": 1,
+              "granularity": "too_fine",
+              "covered_dimensions": [],
+              "rationale": "只是信息获取步骤，不能独立回答任何指定研究维度。"
+            },
+            {
+              "id": 2,
+              "title": "用户同意",
+              "intent": "研究告知与同意的交互和记录流程",
+              "query": "移动应用 隐私合规 用户同意 告知 流程",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "consent"
+              ],
+              "rationale": "直接研究题目指定的用户同意流程，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "删除请求",
+              "intent": "研究用户删除请求的处理与验证",
+              "query": "移动应用 隐私合规 删除请求 处理 验证",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "deletion"
+              ],
+              "rationale": "直接研究题目指定的删除请求处理，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "数据清单",
+              "intent": "研究数据分类及处理用途的梳理方法",
+              "query": "移动应用 隐私合规 数据清单 用途",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "inventory"
+              ],
+              "rationale": "直接研究题目指定的数据清单与用途，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "用户同意",
+              "intent": "研究告知与同意的交互和记录流程",
+              "query": "移动应用 隐私合规 用户同意 告知 流程",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "consent"
+              ],
+              "rationale": "直接研究题目指定的用户同意流程，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "删除请求",
+              "intent": "研究用户删除请求的处理与验证",
+              "query": "移动应用 隐私合规 删除请求 处理 验证",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "deletion"
+              ],
+              "rationale": "直接研究题目指定的删除请求处理，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "数据清单",
+              "intent": "研究数据分类及处理用途的梳理方法",
+              "query": "移动应用 隐私合规 数据清单 用途",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "inventory"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 3,
+              "title": "蛋糕制作",
+              "intent": "研究家庭蛋糕制作方法",
+              "query": "蛋糕 奶油打发 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    },
+    {
+      "id": "local-llm",
+      "domain": "deployment",
+      "language": "zh",
+      "split": "holdout",
+      "topic": "调研本地大模型部署，比较硬件需求、模型选择和服务运维。",
+      "scope": "关注本地部署的三项约束；不需要云端供应商价格排名。",
+      "required_dimensions": [
+        {
+          "id": "hardware",
+          "description": "硬件需求"
+        },
+        {
+          "id": "models",
+          "description": "模型选择"
+        },
+        {
+          "id": "operations",
+          "description": "服务运维"
+        }
+      ],
+      "task_count_range": [
+        2,
+        5
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "硬件需求",
+              "intent": "研究本地推理的显存和计算需求",
+              "query": "本地大模型部署 硬件需求 显存 计算",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "hardware"
+              ],
+              "rationale": "直接研究题目指定的硬件需求，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "模型选择",
+              "intent": "比较适用模型及能力资源权衡",
+              "query": "本地大模型部署 模型选择 能力 资源",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "models"
+              ],
+              "rationale": "直接研究题目指定的模型选择，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "服务运维",
+              "intent": "研究本地模型服务监控升级与故障处理",
+              "query": "本地大模型部署 服务运维 监控 升级",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "operations"
+              ],
+              "rationale": "直接研究题目指定的服务运维，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "硬件需求",
+              "intent": "研究本地推理的显存和计算需求",
+              "query": "本地大模型部署 硬件需求 显存 计算",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "hardware"
+              ],
+              "rationale": "直接研究题目指定的硬件需求，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "模型选择",
+              "intent": "比较适用模型及能力资源权衡",
+              "query": "本地大模型部署 模型选择 能力 资源",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "models"
+              ],
+              "rationale": "直接研究题目指定的模型选择，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "硬件需求",
+              "intent": "研究本地推理的显存和计算需求",
+              "query": "本地大模型部署 硬件需求 显存 计算",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "hardware"
+              ],
+              "rationale": "直接研究题目指定的硬件需求，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "模型选择",
+              "intent": "比较适用模型及能力资源权衡",
+              "query": "本地大模型部署 模型选择 能力 资源",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "models"
+              ],
+              "rationale": "直接研究题目指定的模型选择，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "服务运维",
+              "intent": "研究本地模型服务监控升级与故障处理",
+              "query": "本地大模型部署 服务运维 监控 升级",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "operations"
+              ],
+              "rationale": "直接研究题目指定的服务运维，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "运行资源",
+              "intent": "调查离线推理所需设备容量",
+              "query": "离线推理 设备容量 内存",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "hardware"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "同一研究目标的同义改写，新增任务未带来新的结论维度。"
+            }
+          ]
+        },
+        {
+          "id": "off-topic-extra",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "硬件需求",
+              "intent": "研究本地推理的显存和计算需求",
+              "query": "本地大模型部署 硬件需求 显存 计算",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "hardware"
+              ],
+              "rationale": "直接研究题目指定的硬件需求，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "模型选择",
+              "intent": "比较适用模型及能力资源权衡",
+              "query": "本地大模型部署 模型选择 能力 资源",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "models"
+              ],
+              "rationale": "直接研究题目指定的模型选择，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "服务运维",
+              "intent": "研究本地模型服务监控升级与故障处理",
+              "query": "本地大模型部署 服务运维 监控 升级",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "operations"
+              ],
+              "rationale": "直接研究题目指定的服务运维，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "烘焙入门",
+              "intent": "调查家庭烤面包的配方",
+              "query": "家庭 面包 烘焙 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "与当前研究对象和要求均无关。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "硬件需求",
+              "intent": "研究本地推理的显存和计算需求",
+              "query": "本地大模型部署 硬件需求 显存 计算",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "hardware"
+              ],
+              "rationale": "直接研究题目指定的硬件需求，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "模型选择",
+              "intent": "比较适用模型及能力资源权衡",
+              "query": "本地大模型部署 模型选择 能力 资源",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "models"
+              ],
+              "rationale": "直接研究题目指定的模型选择，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "服务运维",
+              "intent": "研究本地模型服务监控升级与故障处理",
+              "query": "本地大模型部署 服务运维 监控 升级",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "operations"
+              ],
+              "rationale": "直接研究题目指定的服务运维，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "硬件需求",
+              "intent": "研究本地推理的显存和计算需求",
+              "query": "本地大模型部署 硬件需求 显存 计算",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "hardware"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 3,
+              "title": "蛋糕制作",
+              "intent": "研究家庭蛋糕制作方法",
+              "query": "蛋糕 奶油打发 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    },
+    {
+      "id": "battery-lifecycle",
+      "domain": "energy",
+      "language": "en",
+      "split": "holdout",
+      "topic": "Compare EV battery lifecycle emissions, material supply risks, and recycling options.",
+      "scope": "Compare only these three requested dimensions; no requirement to rank car brands.",
+      "required_dimensions": [
+        {
+          "id": "emissions",
+          "description": "Lifecycle emissions"
+        },
+        {
+          "id": "supply",
+          "description": "Material supply risks"
+        },
+        {
+          "id": "recycling",
+          "description": "Recycling options"
+        }
+      ],
+      "task_count_range": [
+        2,
+        5
+      ],
+      "candidates": [
+        {
+          "id": "acceptable",
+          "kind": "acceptable",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "Lifecycle emissions",
+              "intent": "Compare EV battery lifecycle emissions across production and use",
+              "query": "EV battery lifecycle emissions production use",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "emissions"
+              ],
+              "rationale": "直接研究题目指定的Lifecycle emissions，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "Material supply risks",
+              "intent": "Assess battery material supply risks and concentration",
+              "query": "EV battery material supply risks concentration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "supply"
+              ],
+              "rationale": "直接研究题目指定的Material supply risks，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "Recycling options",
+              "intent": "Compare EV battery recycling options and tradeoffs",
+              "query": "EV battery recycling options tradeoffs",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "recycling"
+              ],
+              "rationale": "直接研究题目指定的Recycling options，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "omit-last-dimension",
+          "kind": "missing_dimension",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "Lifecycle emissions",
+              "intent": "Compare EV battery lifecycle emissions across production and use",
+              "query": "EV battery lifecycle emissions production use",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "emissions"
+              ],
+              "rationale": "直接研究题目指定的Lifecycle emissions，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "Material supply risks",
+              "intent": "Assess battery material supply risks and concentration",
+              "query": "EV battery material supply risks concentration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "supply"
+              ],
+              "rationale": "直接研究题目指定的Material supply risks，形成一个可独立检索的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "paraphrase-duplicate",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "Lifecycle emissions",
+              "intent": "Compare EV battery lifecycle emissions across production and use",
+              "query": "EV battery lifecycle emissions production use",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "emissions"
+              ],
+              "rationale": "直接研究题目指定的Lifecycle emissions，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "Material supply risks",
+              "intent": "Assess battery material supply risks and concentration",
+              "query": "EV battery material supply risks concentration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "supply"
+              ],
+              "rationale": "直接研究题目指定的Material supply risks，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "Recycling options",
+              "intent": "Compare EV battery recycling options and tradeoffs",
+              "query": "EV battery recycling options tradeoffs",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "recycling"
+              ],
+              "rationale": "直接研究题目指定的Recycling options，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "Carbon footprint across stages",
+              "intent": "Compare cradle-to-grave greenhouse gas burdens",
+              "query": "traction pack cradle-to-grave carbon footprint",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "emissions"
+              ],
+              "rationale": "与任务1换词表达同一研究目标，没有新增比较对象、时间范围或结论维度。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "同一研究目标的同义改写，新增任务未带来新的结论维度。"
+            }
+          ]
+        },
+        {
+          "id": "all-in-one",
+          "kind": "too_coarse",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "综合调研所有方面",
+              "intent": "在一次任务中深入研究Lifecycle emissions；Material supply risks；Recycling options",
+              "query": "Compare EV battery lifecycle emissions, material supply risks, and recycling options.",
+              "relevance": 2,
+              "granularity": "too_coarse",
+              "covered_dimensions": [
+                "emissions",
+                "supply",
+                "recycling"
+              ],
+              "rationale": "虽明确提到全部维度，但将多个独立比较问题塞入一个任务，缺少可单独验证的结论单元。"
+            }
+          ],
+          "redundant_pairs": []
+        },
+        {
+          "id": "exact-duplicate-control",
+          "kind": "redundant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "Lifecycle emissions",
+              "intent": "Compare EV battery lifecycle emissions across production and use",
+              "query": "EV battery lifecycle emissions production use",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "emissions"
+              ],
+              "rationale": "直接研究题目指定的Lifecycle emissions，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 2,
+              "title": "Material supply risks",
+              "intent": "Assess battery material supply risks and concentration",
+              "query": "EV battery material supply risks concentration",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "supply"
+              ],
+              "rationale": "直接研究题目指定的Material supply risks，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 3,
+              "title": "Recycling options",
+              "intent": "Compare EV battery recycling options and tradeoffs",
+              "query": "EV battery recycling options tradeoffs",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "recycling"
+              ],
+              "rationale": "直接研究题目指定的Recycling options，形成一个可独立检索的结论单元。"
+            },
+            {
+              "id": 4,
+              "title": "Lifecycle emissions",
+              "intent": "Compare EV battery lifecycle emissions across production and use",
+              "query": "EV battery lifecycle emissions production use",
+              "relevance": 2,
+              "granularity": "appropriate",
+              "covered_dimensions": [
+                "emissions"
+              ],
+              "rationale": "原样重复任务1，无新增研究目标；用于验证词法去重的正向控制。"
+            }
+          ],
+          "redundant_pairs": [
+            {
+              "task_ids": [
+                1,
+                4
+              ],
+              "rationale": "title、intent和query均与任务1完全相同。"
+            }
+          ]
+        },
+        {
+          "id": "unrelated-plan-control",
+          "kind": "irrelevant",
+          "tasks": [
+            {
+              "id": 1,
+              "title": "面包制作",
+              "intent": "研究家庭面包制作方法",
+              "query": "面包 酵母发酵 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 2,
+              "title": "饼干制作",
+              "intent": "研究家庭饼干制作方法",
+              "query": "饼干 烤箱温度 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            },
+            {
+              "id": 3,
+              "title": "蛋糕制作",
+              "intent": "研究家庭蛋糕制作方法",
+              "query": "蛋糕 奶油打发 配方",
+              "relevance": 0,
+              "granularity": "appropriate",
+              "covered_dimensions": [],
+              "rationale": "完全偏离研究主题；用于验证词法覆盖不足的正向控制。"
+            }
+          ],
+          "redundant_pairs": []
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "source_sha256": "5f7899353685f3e5ece102bc6994ff1540d51ea7c464f68585d3c250267c545d",
+  "annotation_status": "ai_draft",
+  "rubrics": [
+    {
+      "id": "ev-market",
+      "domain": "market",
+      "language": "zh",
+      "split": "development",
+      "topic": "分析 2026 年中国新能源汽车市场的竞争格局和未来发展趋势，重点覆盖市场份额、价格竞争、政策环境和增长驱动。",
+      "scope": "限定中国市场与2026年；不强制要求电池或充电设施独立成章。",
+      "required_dimensions": [
+        {
+          "id": "share",
+          "description": "主要品牌市场份额与集中度"
+        },
+        {
+          "id": "pricing",
+          "description": "价格竞争与盈利压力"
+        },
+        {
+          "id": "policy",
+          "description": "政策环境对竞争的影响"
+        },
+        {
+          "id": "growth",
+          "description": "未来增长驱动与不确定性"
+        }
+      ],
+      "task_count_range": [
+        3,
+        6
+      ]
+    }
+  ],
+  "items": [
+    {
+      "review_id": "630ac01d1e55107b",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "2026年市场份额与格局",
+          "intent": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。",
+          "query": "2026年中国新能源汽车市场份额 比亚迪 特斯拉 市占率",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "规模、销量与主要品牌份额直接服务竞争格局；份额分布可支持集中度计算，完整绑定share。一个市场结构研究单元，粒度合理。"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争与定价策略",
+          "intent": "分析2026年主流车型的价格区间变化、价格战现状及各品牌针对不同细分市场的定价策略。",
+          "query": "2026年新能源汽车价格战 车型定价策略 降价趋势",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "价格区间、价格战和定价策略直接相关，粒度合理；但未明确研究利润、毛利、成本或盈利承压，不能完整绑定要求包含盈利压力的pricing维度。属于部分覆盖，不是偏题。"
+        },
+        {
+          "id": 3,
+          "title": "政策环境与法规",
+          "intent": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。",
+          "query": "2026年新能源汽车补贴政策 购置税优惠 路权政策",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "policy"
+          ],
+          "rationale": "国家/地方政策、税收、路权及双积分对市场的影响直接覆盖policy；按同一政策问题组织，粒度合理。研究需验证政策是否仍适用，文本中的例子不是已证实事实。"
+        },
+        {
+          "id": 4,
+          "title": "增长驱动因素分析",
+          "intent": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。",
+          "query": "2026年新能源汽车增长驱动因素 固态电池 智能化 出口",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "技术、智能化与出口驱动与主题直接相关，粒度合理；但主要研究2026年现有驱动，没有明确未来预测、下行情景或不确定性，不能完整绑定要求未来驱动与不确定性的growth。固态电池是待验证线索，不应预设已经形成增长贡献。"
+        },
+        {
+          "id": 5,
+          "title": "竞争格局与品牌动向",
+          "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+          "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "车企战略、产品节奏和差异化能形成区别于份额统计的结论，用户已确认1/5互补。与竞争格局直接相关，粒度合理；它不是share所要求的份额与集中度任务，也没有补齐未来风险。"
+        }
+      ],
+      "redundant_pairs": [],
+      "pair_relations": [
+        {
+          "task_ids": [
+            1,
+            2
+          ],
+          "label": "complementary",
+          "reason": "市场结构与价格竞争回答不同问题；共享品牌对象不等于重复。"
+        },
+        {
+          "task_ids": [
+            1,
+            3
+          ],
+          "label": "complementary",
+          "reason": "市场份额统计与政策影响的结论不同。"
+        },
+        {
+          "task_ids": [
+            1,
+            4
+          ],
+          "label": "complementary",
+          "reason": "市场现状与增长驱动的研究目标不同。"
+        },
+        {
+          "task_ids": [
+            1,
+            5
+          ],
+          "label": "complementary",
+          "reason": "能产生不同结论。"
+        },
+        {
+          "task_ids": [
+            2,
+            3
+          ],
+          "label": "complementary",
+          "reason": "定价行为与政策制度影响互补，即使政策可能影响价格。"
+        },
+        {
+          "task_ids": [
+            2,
+            4
+          ],
+          "label": "complementary",
+          "reason": "价格竞争与技术/智能化/出口驱动是不同分析轴。"
+        },
+        {
+          "task_ids": [
+            2,
+            5
+          ],
+          "label": "complementary",
+          "reason": "任务2聚焦价格与定价，任务5还有战略与产品节奏；可能共享部分事实，但整体目标不同，不足以判定完整重复。"
+        },
+        {
+          "task_ids": [
+            3,
+            4
+          ],
+          "label": "complementary",
+          "reason": "政策影响与技术/出口等增长驱动不同，允许共享背景事实。"
+        },
+        {
+          "task_ids": [
+            3,
+            5
+          ],
+          "label": "complementary",
+          "reason": "制度环境与企业战略行为不同。"
+        },
+        {
+          "task_ids": [
+            4,
+            5
+          ],
+          "label": "complementary",
+          "reason": "行业增长动力与企业战略/产品节奏不同；共享技术或产品事实不自动构成重复。"
+        }
+      ],
+      "reviewer": "Codex (AI)",
+      "reviewed_at": "2026-10-08",
+      "review_notes": "完整AI审阅；保留用户已确认的1/5互补。价格利润压力与未来风险未明确覆盖。"
+    },
+    {
+      "review_id": "a64962003175bbd2",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "2026年市场份额与格局",
+          "intent": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。",
+          "query": "2026年中国新能源汽车市场份额 比亚迪 特斯拉 市占率",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "规模、销量与主要品牌份额直接服务竞争格局；份额分布可支持集中度计算，完整绑定share。一个市场结构研究单元，粒度合理。"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争与定价策略",
+          "intent": "分析2026年主流车型的价格区间变化、价格战现状及各品牌针对不同细分市场的定价策略。",
+          "query": "2026年新能源汽车价格战 车型定价策略 降价趋势",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "价格区间、价格战和定价策略直接相关，粒度合理；但未明确研究利润、毛利、成本或盈利承压，不能完整绑定要求包含盈利压力的pricing维度。属于部分覆盖，不是偏题。"
+        },
+        {
+          "id": 3,
+          "title": "政策环境与法规",
+          "intent": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。",
+          "query": "2026年新能源汽车补贴政策 购置税优惠 路权政策",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "policy"
+          ],
+          "rationale": "国家/地方政策、税收、路权及双积分对市场的影响直接覆盖policy；按同一政策问题组织，粒度合理。研究需验证政策是否仍适用，文本中的例子不是已证实事实。"
+        },
+        {
+          "id": 4,
+          "title": "增长驱动因素分析",
+          "intent": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。",
+          "query": "2026年新能源汽车增长驱动因素 固态电池 智能化 出口",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "技术、智能化与出口驱动与主题直接相关，粒度合理；但主要研究2026年现有驱动，没有明确未来预测、下行情景或不确定性，不能完整绑定要求未来驱动与不确定性的growth。固态电池是待验证线索，不应预设已经形成增长贡献。"
+        },
+        {
+          "id": 5,
+          "title": "竞争格局与品牌动向",
+          "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+          "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "车企战略、产品节奏和差异化能形成区别于份额统计的结论，用户已确认1/5互补。与竞争格局直接相关，粒度合理；它不是share所要求的份额与集中度任务，也没有补齐未来风险。"
+        }
+      ],
+      "redundant_pairs": [],
+      "pair_relations": [
+        {
+          "task_ids": [
+            1,
+            2
+          ],
+          "label": "complementary",
+          "reason": "市场结构与价格竞争回答不同问题；共享品牌对象不等于重复。"
+        },
+        {
+          "task_ids": [
+            1,
+            3
+          ],
+          "label": "complementary",
+          "reason": "市场份额统计与政策影响的结论不同。"
+        },
+        {
+          "task_ids": [
+            1,
+            4
+          ],
+          "label": "complementary",
+          "reason": "市场现状与增长驱动的研究目标不同。"
+        },
+        {
+          "task_ids": [
+            1,
+            5
+          ],
+          "label": "complementary",
+          "reason": "能产生不同结论。"
+        },
+        {
+          "task_ids": [
+            2,
+            3
+          ],
+          "label": "complementary",
+          "reason": "定价行为与政策制度影响互补，即使政策可能影响价格。"
+        },
+        {
+          "task_ids": [
+            2,
+            4
+          ],
+          "label": "complementary",
+          "reason": "价格竞争与技术/智能化/出口驱动是不同分析轴。"
+        },
+        {
+          "task_ids": [
+            2,
+            5
+          ],
+          "label": "complementary",
+          "reason": "任务2聚焦价格与定价，任务5还有战略与产品节奏；可能共享部分事实，但整体目标不同，不足以判定完整重复。"
+        },
+        {
+          "task_ids": [
+            3,
+            4
+          ],
+          "label": "complementary",
+          "reason": "政策影响与技术/出口等增长驱动不同，允许共享背景事实。"
+        },
+        {
+          "task_ids": [
+            3,
+            5
+          ],
+          "label": "complementary",
+          "reason": "制度环境与企业战略行为不同。"
+        },
+        {
+          "task_ids": [
+            4,
+            5
+          ],
+          "label": "complementary",
+          "reason": "行业增长动力与企业战略/产品节奏不同；共享技术或产品事实不自动构成重复。"
+        }
+      ],
+      "reviewer": "Codex (AI)",
+      "reviewed_at": "2026-10-08",
+      "review_notes": "完整AI审阅；保留用户已确认的1/5互补。价格利润压力与未来风险未明确覆盖。"
+    }
+  ],
+  "partial_human_review": {
+    "task_pair": [
+      1,
+      5
+    ],
+    "label": "complementary",
+    "reason": "能产生不同结论。",
+    "source": "user_message_2026-10-08",
+    "scope": "same captured plan in two identical initial/final snapshots; remaining task labels unreviewed"
+  },
+  "annotation_author_type": "ai",
+  "review_completion": "complete_ai_review",
+  "review_provenance": "Codex chat review of captured plan against the existing rubric; not an independent blind judge or human gold.",
+  "pair_label_provenance": [
+    {
+      "task_ids": [
+        1,
+        5
+      ],
+      "source": "user_message_2026-10-08",
+      "label": "complementary"
+    }
+  ],
+  "other_label_provenance": "Codex (AI); source task wording reviewed against frozen rubric"
+}

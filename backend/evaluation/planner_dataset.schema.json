@@ -1,0 +1,366 @@
+{
+  "$defs": {
+    "AnnotatedTask": {
+      "additionalProperties": false,
+      "description": "One plan task plus reviewable relevance, coverage and grain labels.",
+      "properties": {
+        "id": {
+          "exclusiveMinimum": 0,
+          "title": "Id",
+          "type": "integer"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "intent": {
+          "minLength": 1,
+          "title": "Intent",
+          "type": "string"
+        },
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "relevance": {
+          "enum": [
+            0,
+            1,
+            2,
+            "uncertain"
+          ],
+          "title": "Relevance"
+        },
+        "granularity": {
+          "enum": [
+            "too_coarse",
+            "appropriate",
+            "too_fine",
+            "uncertain"
+          ],
+          "title": "Granularity",
+          "type": "string"
+        },
+        "covered_dimensions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "const": "uncertain",
+              "type": "string"
+            }
+          ],
+          "title": "Covered Dimensions"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "intent",
+        "query",
+        "relevance",
+        "granularity",
+        "covered_dimensions",
+        "rationale"
+      ],
+      "title": "AnnotatedTask",
+      "type": "object"
+    },
+    "Dimension": {
+      "additionalProperties": false,
+      "description": "One required answer dimension defined by the topic's explicit scope.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "description"
+      ],
+      "title": "Dimension",
+      "type": "object"
+    },
+    "EvaluationTopic": {
+      "additionalProperties": false,
+      "description": "A topic rubric shared by all candidates to avoid candidate-specific truth.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "domain": {
+          "minLength": 1,
+          "title": "Domain",
+          "type": "string"
+        },
+        "language": {
+          "enum": [
+            "zh",
+            "en"
+          ],
+          "title": "Language",
+          "type": "string"
+        },
+        "split": {
+          "enum": [
+            "development",
+            "holdout"
+          ],
+          "title": "Split",
+          "type": "string"
+        },
+        "topic": {
+          "minLength": 1,
+          "title": "Topic",
+          "type": "string"
+        },
+        "scope": {
+          "minLength": 1,
+          "title": "Scope",
+          "type": "string"
+        },
+        "required_dimensions": {
+          "items": {
+            "$ref": "#/$defs/Dimension"
+          },
+          "minItems": 1,
+          "title": "Required Dimensions",
+          "type": "array"
+        },
+        "task_count_range": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Task Count Range",
+          "type": "array"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/PlanCandidate"
+          },
+          "minItems": 1,
+          "title": "Candidates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "domain",
+        "language",
+        "split",
+        "topic",
+        "scope",
+        "required_dimensions",
+        "task_count_range",
+        "candidates"
+      ],
+      "title": "EvaluationTopic",
+      "type": "object"
+    },
+    "PairRelation": {
+      "additionalProperties": false,
+      "description": "Record an explicit pair relation, including evidence insufficiency.",
+      "properties": {
+        "task_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Task Ids",
+          "type": "array"
+        },
+        "label": {
+          "enum": [
+            "redundant",
+            "complementary",
+            "uncertain"
+          ],
+          "title": "Label",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_ids",
+        "label",
+        "reason"
+      ],
+      "title": "PairRelation",
+      "type": "object"
+    },
+    "PlanCandidate": {
+      "additionalProperties": false,
+      "description": "A fixed plan candidate with explicit per-task and pair annotations.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "acceptable",
+            "missing_dimension",
+            "redundant",
+            "irrelevant",
+            "too_coarse",
+            "too_fine",
+            "boundary"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/AnnotatedTask"
+          },
+          "maxItems": 16,
+          "title": "Tasks",
+          "type": "array"
+        },
+        "redundant_pairs": {
+          "items": {
+            "$ref": "#/$defs/RedundantPair"
+          },
+          "title": "Redundant Pairs",
+          "type": "array"
+        },
+        "pair_relations": {
+          "items": {
+            "$ref": "#/$defs/PairRelation"
+          },
+          "title": "Pair Relations",
+          "type": "array"
+        },
+        "evaluation_set": {
+          "default": "core",
+          "enum": [
+            "core",
+            "boundary"
+          ],
+          "title": "Evaluation Set",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "tasks",
+        "redundant_pairs"
+      ],
+      "title": "PlanCandidate",
+      "type": "object"
+    },
+    "RedundantPair": {
+      "additionalProperties": false,
+      "description": "A semantically redundant task pair and the reviewer's reason.",
+      "properties": {
+        "task_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Task Ids",
+          "type": "array"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_ids",
+        "rationale"
+      ],
+      "title": "RedundantPair",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Versioned synthetic seed corpus with honest annotation provenance.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "dataset_version": {
+      "minLength": 1,
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "provenance": {
+      "const": "synthetic_seed",
+      "title": "Provenance",
+      "type": "string"
+    },
+    "annotation_status": {
+      "enum": [
+        "ai_draft",
+        "human_reviewed"
+      ],
+      "title": "Annotation Status",
+      "type": "string"
+    },
+    "annotation_author": {
+      "minLength": 1,
+      "title": "Annotation Author",
+      "type": "string"
+    },
+    "reviewers": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reviewers",
+      "type": "array"
+    },
+    "topics": {
+      "items": {
+        "$ref": "#/$defs/EvaluationTopic"
+      },
+      "minItems": 1,
+      "title": "Topics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "dataset_version",
+    "provenance",
+    "annotation_status",
+    "annotation_author",
+    "reviewers",
+    "topics"
+  ],
+  "title": "PlanEvaluationDataset",
+  "type": "object"
+}

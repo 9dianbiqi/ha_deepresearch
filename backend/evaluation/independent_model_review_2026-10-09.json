@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-09",
+  "source_protocol_sha256": "4d9e5bc665b5b90a3fd7c48c79cd3b1c6d1c5dcce3e3302859da779de83664aa",
+  "feedback_model": {
+    "requested": "openai/gpt-oss-20b",
+    "actual": "openai/gpt-oss-20b",
+    "action": "keep",
+    "findings": [],
+    "usage": {
+      "completion_tokens": 98,
+      "prompt_tokens": 774,
+      "total_tokens": 872,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 80,
+        "rejected_prediction_tokens": null
+      },
+      "prompt_tokens_details": null,
+      "queue_time": 0.394592951,
+      "prompt_time": 0.038986352,
+      "completion_time": 0.107503358,
+      "total_time": 0.14648971
+    },
+    "elapsed_ms": 4406.0
+  },
+  "judge_model": {
+    "requested": "openai/gpt-oss-120b",
+    "actual": "openai/gpt-oss-120b",
+    "assessment": {
+      "task_labels": [
+        {
+          "task_id": 1,
+          "relevance": 2,
+          "granularity": "appropriate",
+          "reason": "Directly addresses market share and concentration, matching the 'share' dimension."
+        },
+        {
+          "task_id": 2,
+          "relevance": 2,
+          "granularity": "appropriate",
+          "reason": "Focuses on price ranges and pricing strategies, fulfilling the 'pricing' dimension."
+        },
+        {
+          "task_id": 3,
+          "relevance": 2,
+          "granularity": "appropriate",
+          "reason": "Analyzes subsidies, tax incentives and regulations, covering the 'policy' dimension."
+        },
+        {
+          "task_id": 4,
+          "relevance": 2,
+          "granularity": "appropriate",
+          "reason": "Examines technology, smart upgrades and export factors, satisfying the 'growth' dimension."
+        },
+        {
+          "task_id": 5,
+          "relevance": 2,
+          "granularity": "too_coarse",
+          "reason": "Broadly surveys overall competitive landscape, overlapping multiple dimensions without deep focus."
+        }
+      ],
+      "dimension_labels": [
+        {
+          "dimension_id": "share",
+          "status": "covered",
+          "task_ids": [
+            1,
+            5
+          ],
+          "reason": "Task 1 provides detailed market‑share data; Task 5 adds supplementary brand‑level insights."
+        },
+        {
+          "dimension_id": "pricing",
+          "status": "covered",
+          "task_ids": [
+            2,
+            5
+          ],
+          "reason": "Task 2 analyses pricing dynamics; Task 5 includes pricing aspects within its broader competition review."
+        },
+        {
+          "dimension_id": "policy",
+          "status": "covered",
+          "task_ids": [
+            3,
+            5
+          ],
+          "reason": "Task 3 details policy environment; Task 5 references policy impacts as part of overall competition."
+        },
+        {
+          "dimension_id": "growth",
+          "status": "covered",
+          "task_ids": [
+            4,
+            5
+          ],
+          "reason": "Task 4 explores growth drivers; Task 5 touches on growth factors in its strategic overview."
+        }
+      ],
+      "pair_relations": [
+        {
+          "task_ids": [
+            1,
+            2
+          ],
+          "label": "complementary",
+          "reason": "Different focus areas (share vs pricing) provide distinct information."
+        },
+        {
+          "task_ids": [
+            1,
+            3
+          ],
+          "label": "complementary",
+          "reason": "Share analysis and policy review address separate dimensions."
+        },
+        {
+          "task_ids": [
+            1,
+            4
+          ],
+          "label": "complementary",
+          "reason": "Market‑share data and growth drivers are distinct but jointly needed."
+        },
+        {
+          "task_ids": [
+            1,
+            5
+          ],
+          "label": "complementary",
+          "reason": "Task 5 overlaps on share but adds broader strategic context; not redundant."
+        },
+        {
+          "task_ids": [
+            2,
+            3
+          ],
+          "label": "complementary",
+          "reason": "Pricing and policy are separate analytical angles."
+        },
+        {
+          "task_ids": [
+            2,
+            4
+          ],
+          "label": "complementary",
+          "reason": "Pricing strategies and growth drivers are different dimensions."
+        },
+        {
+          "task_ids": [
+            2,
+            5
+          ],
+          "label": "complementary",
+          "reason": "Task 5 includes pricing aspects but with less depth; complements Task 2."
+        },
+        {
+          "task_ids": [
+            3,
+            4
+          ],
+          "label": "complementary",
+          "reason": "Policy environment and growth drivers are distinct."
+        },
+        {
+          "task_ids": [
+            3,
+            5
+          ],
+          "label": "complementary",
+          "reason": "Task 5 references policy impacts but does not replace detailed policy analysis in Task 3."
+        },
+        {
+          "task_ids": [
+            4,
+            5
+          ],
+          "label": "complementary",
+          "reason": "Task 5 mentions growth factors broadly; Task 4 provides focused analysis."
+        }
+      ]
+    },
+    "raw_projection": {
+      "evaluation_set": "core",
+      "acceptable": false,
+      "dimension_coverage": 1.0,
+      "confirmed_dimension_coverage_lower_bound": 1.0,
+      "relevance_problem_task_ids": [],
+      "granularity_problem_task_ids": [
+        5
+      ],
+      "redundant_pairs": [],
+      "uncertain_pairs": [],
+      "task_count_out_of_range": false,
+      "uncovered_dimensions": [],
+      "uncertain_dimensions": []
+    },
+    "usage": {
+      "completion_tokens": 986,
+      "prompt_tokens": 927,
+      "total_tokens": 1913,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 354,
+        "rejected_prediction_tokens": null
+      },
+      "prompt_tokens_details": null,
+      "queue_time": 1.130538475,
+      "prompt_time": 0.052101749,
+      "completion_time": 2.072794385,
+      "total_time": 2.124896134
+    },
+    "elapsed_ms": 4813.0
+  },
+  "actual_model_separation_checked": true,
+  "blinded_input_allowlist_checked": true,
+  "planner": {
+    "requested_model": "glm-4.7-flash",
+    "new_call_performed": false,
+    "reason": "feedback action was keep; historical captured plan reviewed"
+  },
+  "paired_comparison_available": false,
+  "coordination": {
+    "model_decision_disagreement": true,
+    "evaluation_set": "boundary",
+    "needs_adjudication": true,
+    "primary_metrics_eligible": false,
+    "interpretation": "Preserve raw model labels; do not assume the larger judge is correct."
+  },
+  "grounding_audit": {
+    "author": "Codex (post-hoc AI inspection; not an additional independent judge)",
+    "task_5_source": {
+      "id": 5,
+      "title": "竞争格局与品牌动向",
+      "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+      "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局"
+    },
+    "flags": [
+      {
+        "dimension": "pricing",
+        "issue": "Judge credits task5 with pricing aspects, but its description does not explicitly promise pricing, profitability or cost analysis."
+      },
+      {
+        "dimension": "policy",
+        "issue": "Judge states task5 references policy impacts; the captured task5 contains strategy, product launch cadence and differentiation, without a policy research commitment."
+      },
+      {
+        "dimension": "growth",
+        "issue": "Judge credits task5 with growth factors and marks whole growth dimension covered without explicit future scenario/risk goals in the captured plan."
+      }
+    ],
+    "consequence": "The raw 4/4 coverage and too-coarse label are uncalibrated opinions, not verified reference truth."
+  },
+  "limitations": [
+    "One topic and one original plan; no replanning comparison.",
+    "Feedback and judge are different sizes from the same model family; errors may still be correlated.",
+    "Different API-reported IDs and successful schema validation do not prove semantic accuracy.",
+    "User-confirmed 1/5 complementary relation is consistent with judge; other labels are not human gold."
+  ]
+}

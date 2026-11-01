@@ -1,0 +1,577 @@
+{
+  "schema_version": 1,
+  "annotation_status": "ai_draft",
+  "annotation_author_type": "ai",
+  "reviewer": "Codex (chat AI review)",
+  "reviewed_at": "2026-10-08",
+  "generator_model": "glm-4.7-flash",
+  "source_sha256": "58f002ef0c6a4eefd0042cfde2168f5ab430eb470ecc83be264dfc3e2c0e9456",
+  "unique_topic_count": 1,
+  "completed_control_count": 1,
+  "completed_feedback_count": 1,
+  "failed_feedback_request_count": 2,
+  "failed_initial_control_request_count": 1,
+  "evaluation_notes": [
+    "Reviewer also authored feedback; not blind, not independent human gold.",
+    "Whole-plan coverage follows criteria recorded before requests; different tasks may jointly satisfy a dimension.",
+    "Provider errors remain unscored and are not counted as semantic failures.",
+    "Historical original plan is descriptive; the fresh matched control is the comparison arm."
+  ],
+  "comparison": {
+    "control_dimension_coverage": 0.5,
+    "feedback_dimension_coverage": 1.0,
+    "resolved_dimensions": [
+      "pricing",
+      "growth"
+    ],
+    "new_relevance_problems": [],
+    "new_redundant_pairs": [],
+    "new_granularity_problems": [],
+    "control_task_count": 6,
+    "feedback_task_count": 6,
+    "control_total_tokens": 1510,
+    "feedback_total_tokens": 1689,
+    "extra_tokens": 179,
+    "extra_tokens_ratio": 0.1185430463576159,
+    "control_elapsed_ms": 4719.0,
+    "feedback_elapsed_ms": 3078.0,
+    "latency_claim": "observed only; not evidence of a latency improvement",
+    "stability_established": false,
+    "causal_generalization_established": false
+  },
+  "conditions": [
+    {
+      "condition_id": "control_1",
+      "status": "collected",
+      "quality": {
+        "acceptable": false,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [
+          "coverage"
+        ],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 0.5,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [
+          "pricing",
+          "growth"
+        ],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "dimension_component_evidence": {
+        "share": {
+          "complete": true,
+          "task_ids": [
+            2
+          ]
+        },
+        "pricing": {
+          "complete": false,
+          "price_tasks": [
+            3
+          ],
+          "profit_or_cost_tasks": []
+        },
+        "policy": {
+          "complete": true,
+          "task_ids": [
+            4
+          ]
+        },
+        "growth": {
+          "complete": false,
+          "driver_tasks": [
+            5
+          ],
+          "forecast_scenario_risk_tasks": []
+        }
+      },
+      "annotated_candidate": {
+        "id": "control_1",
+        "kind": "missing_dimension",
+        "tasks": [
+          {
+            "id": 1,
+            "title": "2026年市场规模与结构",
+            "intent": "获取2026年中国新能源汽车的总体销量、渗透率及市场结构（如纯电/插混占比）。",
+            "query": "2026年中国新能源汽车销量 渗透率 市场结构",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [],
+            "rationale": "市场规模、渗透率与纯电/插混结构提供独立背景，相关且粒度合理；不替代品牌份额或盈利、风险研究。"
+          },
+          {
+            "id": 2,
+            "title": "主要品牌市占率分布",
+            "intent": "分析比亚迪、特斯拉、新势力及传统车企在2026年的具体市场份额及排名变化。",
+            "query": "2026年新能源汽车品牌市占率 比亚迪 特斯拉 排名",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [
+              "share"
+            ],
+            "rationale": "品牌具体份额与排名变化覆盖share；与任务1的宏观规模/技术结构不同。"
+          },
+          {
+            "id": 3,
+            "title": "价格战与定价策略",
+            "intent": "调研2026年主流车型的价格区间、终端优惠幅度及各品牌针对不同细分市场的定价策略。",
+            "query": "2026年新能源汽车价格战 车型定价 终端优惠",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [],
+            "rationale": "明确研究车型价格、终端优惠与定价，但未明确利润、毛利或成本压力，pricing整体不完整。"
+          },
+          {
+            "id": 4,
+            "title": "政策环境与法规",
+            "intent": "梳理2026年最新的国家补贴退坡情况、购置税政策、路权政策及双积分政策的影响。",
+            "query": "2026年新能源汽车补贴政策 购置税 路权 双积分",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [
+              "policy"
+            ],
+            "rationale": "明确研究政策制度对市场的影响，覆盖policy。"
+          },
+          {
+            "id": 5,
+            "title": "技术突破与增长驱动",
+            "intent": "探究2026年推动市场增长的核心技术（如固态电池、800V快充）及出口表现。",
+            "query": "2026年新能源汽车技术突破 固态电池 出口数据",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [],
+            "rationale": "明确研究当前技术与出口驱动，但全计划没有未来预测、情景与不确定风险，growth整体不完整。"
+          },
+          {
+            "id": 6,
+            "title": "竞争格局与战略动向",
+            "intent": "研究主要车企在2026年的产品发布节奏、智能化战略布局及差异化竞争手段。",
+            "query": "2026年车企战略布局 智能化 新产品发布",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [],
+            "rationale": "企业产品节奏、智能化战略和差异化形成独立结论，与份额、当前价格、行业驱动互补。"
+          }
+        ],
+        "redundant_pairs": [],
+        "pair_relations": [
+          {
+            "task_ids": [
+              1,
+              2
+            ],
+            "label": "complementary",
+            "reason": "总体规模/技术结构与品牌份额/排名的对象层级不同，形成不同结论。"
+          },
+          {
+            "task_ids": [
+              1,
+              3
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“2026年市场规模与结构”，任务3为“价格战与定价策略”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              1,
+              4
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“2026年市场规模与结构”，任务4为“政策环境与法规”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              1,
+              5
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“2026年市场规模与结构”，任务5为“技术突破与增长驱动”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              1,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“2026年市场规模与结构”，任务6为“竞争格局与战略动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              3
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“主要品牌市占率分布”，任务3为“价格战与定价策略”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              4
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“主要品牌市占率分布”，任务4为“政策环境与法规”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              5
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“主要品牌市占率分布”，任务5为“技术突破与增长驱动”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“主要品牌市占率分布”，任务6为“竞争格局与战略动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              3,
+              4
+            ],
+            "label": "complementary",
+            "reason": "任务3的目标为“价格战与定价策略”，任务4为“政策环境与法规”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              3,
+              5
+            ],
+            "label": "complementary",
+            "reason": "任务3的目标为“价格战与定价策略”，任务5为“技术突破与增长驱动”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              3,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务3的目标为“价格战与定价策略”，任务6为“竞争格局与战略动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              4,
+              5
+            ],
+            "label": "complementary",
+            "reason": "任务4的目标为“政策环境与法规”，任务5为“技术突破与增长驱动”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              4,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务4的目标为“政策环境与法规”，任务6为“竞争格局与战略动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              5,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务5的目标为“技术突破与增长驱动”，任务6为“竞争格局与战略动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          }
+        ],
+        "evaluation_set": "core"
+      },
+      "gate_verdict": "pass",
+      "gate_metrics": {
+        "task_count": 6,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.2407,
+        "coverage_ratio": 0.5789
+      },
+      "elapsed_ms": 4719.0,
+      "token_usage": [
+        {
+          "input_tokens": 1116,
+          "output_tokens": 394,
+          "total_tokens": 1510,
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "condition_id": "feedback_1",
+      "status": "collected",
+      "quality": {
+        "acceptable": true,
+        "evaluation_set": "core",
+        "uncertain_pairs": [],
+        "issues": [],
+        "relevance_mean": 2.0,
+        "relevance_problem_task_ids": [],
+        "redundant_pairs": [],
+        "dimension_coverage": 1.0,
+        "unresolved_dimensions": [],
+        "missing_dimensions": [],
+        "granularity_problem_task_ids": [],
+        "task_count_out_of_range": false
+      },
+      "dimension_component_evidence": {
+        "share": {
+          "complete": true,
+          "task_ids": [
+            1
+          ]
+        },
+        "pricing": {
+          "complete": true,
+          "price_tasks": [
+            2
+          ],
+          "profit_or_cost_tasks": [
+            2
+          ]
+        },
+        "policy": {
+          "complete": true,
+          "task_ids": [
+            3
+          ]
+        },
+        "growth": {
+          "complete": true,
+          "driver_tasks": [
+            4
+          ],
+          "forecast_scenario_risk_tasks": [
+            5
+          ]
+        }
+      },
+      "annotated_candidate": {
+        "id": "feedback_1",
+        "kind": "acceptable",
+        "tasks": [
+          {
+            "id": 1,
+            "title": "市场份额与格局",
+            "intent": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。",
+            "query": "2026年中国新能源汽车市场份额 比亚迪 特斯拉 市占率",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [
+              "share"
+            ],
+            "rationale": "合并规模与品牌份额研究，覆盖share，目标集中且可独立检索。"
+          },
+          {
+            "id": 2,
+            "title": "价格竞争与盈利压力",
+            "intent": "分析2026年主流车型的价格区间变化、价格战现状，并重点研究价格竞争对车企利润、毛利率及整体盈利能力的影响。",
+            "query": "2026年新能源汽车价格战 利润率 毛利率 盈利能力",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [
+              "pricing"
+            ],
+            "rationale": "价格竞争及利润、毛利率、盈利能力均在intent/query明确出现，pricing达到冻结标准；具体成本分解仍可细化。"
+          },
+          {
+            "id": 3,
+            "title": "政策环境与法规",
+            "intent": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。",
+            "query": "2026年新能源汽车补贴政策 购置税优惠 路权政策",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [
+              "policy"
+            ],
+            "rationale": "明确研究政策制度对市场的影响，覆盖policy。"
+          },
+          {
+            "id": 4,
+            "title": "增长驱动因素",
+            "intent": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。",
+            "query": "2026年新能源汽车增长驱动因素 固态电池 智能化 出口",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [
+              "growth"
+            ],
+            "rationale": "负责技术、智能化和出口等增长驱动部分；与任务5的未来需求情景和风险共同完成growth。本绑定表示共同贡献，不表示本任务独自完整覆盖。"
+          },
+          {
+            "id": 5,
+            "title": "未来增长情景与风险",
+            "intent": "预测2026-2027年市场需求趋势，识别市场下行风险及不确定性因素，评估增长情景。",
+            "query": "2026-2027年新能源汽车需求预测 下行风险 不确定性",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [
+              "growth"
+            ],
+            "rationale": "明确预测2026–2027年需求，识别下行风险和不确定性，并评估增长情景；与任务4共同完成growth。"
+          },
+          {
+            "id": 6,
+            "title": "竞争格局与品牌动向",
+            "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+            "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局",
+            "relevance": 2,
+            "granularity": "appropriate",
+            "covered_dimensions": [],
+            "rationale": "竞争战略、产品节奏与差异化有独立研究价值，不与份额统计或情景预测重复。"
+          }
+        ],
+        "redundant_pairs": [],
+        "pair_relations": [
+          {
+            "task_ids": [
+              1,
+              2
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“市场份额与格局”，任务2为“价格竞争与盈利压力”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              1,
+              3
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“市场份额与格局”，任务3为“政策环境与法规”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              1,
+              4
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“市场份额与格局”，任务4为“增长驱动因素”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              1,
+              5
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“市场份额与格局”，任务5为“未来增长情景与风险”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              1,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务1的目标为“市场份额与格局”，任务6为“竞争格局与品牌动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              3
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“价格竞争与盈利压力”，任务3为“政策环境与法规”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              4
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“价格竞争与盈利压力”，任务4为“增长驱动因素”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              5
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“价格竞争与盈利压力”，任务5为“未来增长情景与风险”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              2,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务2的目标为“价格竞争与盈利压力”，任务6为“竞争格局与品牌动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              3,
+              4
+            ],
+            "label": "complementary",
+            "reason": "任务3的目标为“政策环境与法规”，任务4为“增长驱动因素”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              3,
+              5
+            ],
+            "label": "complementary",
+            "reason": "任务3的目标为“政策环境与法规”，任务5为“未来增长情景与风险”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              3,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务3的目标为“政策环境与法规”，任务6为“竞争格局与品牌动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              4,
+              5
+            ],
+            "label": "complementary",
+            "reason": "增长驱动与未来需求情景/风险互补，合起来完成复合维度。"
+          },
+          {
+            "task_ids": [
+              4,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务4的目标为“增长驱动因素”，任务6为“竞争格局与品牌动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          },
+          {
+            "task_ids": [
+              5,
+              6
+            ],
+            "label": "complementary",
+            "reason": "任务5的目标为“未来增长情景与风险”，任务6为“竞争格局与品牌动向”；共享市场背景或部分事实，但预期研究结论不同，未发现实质重复。"
+          }
+        ],
+        "evaluation_set": "core"
+      },
+      "gate_verdict": "pass",
+      "gate_metrics": {
+        "task_count": 6,
+        "dropped_duplicate_count": 0,
+        "max_pairwise_overlap": 0.2308,
+        "coverage_ratio": 0.7105
+      },
+      "elapsed_ms": 3078.0,
+      "token_usage": [
+        {
+          "input_tokens": 1270,
+          "output_tokens": 419,
+          "total_tokens": 1689,
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "condition_id": "feedback_2",
+      "status": "provider_error",
+      "quality": null,
+      "provider_error_code": "1305"
+    }
+  ]
+}

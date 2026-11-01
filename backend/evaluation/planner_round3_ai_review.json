@@ -1,0 +1,431 @@
+{
+  "schema_version": 1,
+  "source_sha256": "4c4be649abca767bfdd0528a1e1de997d985042a359971046271384e101e9d0d",
+  "annotation_status": "ai_draft",
+  "rubrics": [
+    {
+      "id": "ev-market",
+      "domain": "market",
+      "language": "zh",
+      "split": "development",
+      "topic": "分析 2026 年中国新能源汽车市场的竞争格局和未来发展趋势，重点覆盖市场份额、价格竞争、政策环境和增长驱动。",
+      "scope": "限定中国市场与2026年；不强制要求电池或充电设施独立成章。",
+      "required_dimensions": [
+        {
+          "id": "share",
+          "description": "主要品牌市场份额与集中度"
+        },
+        {
+          "id": "pricing",
+          "description": "价格竞争与盈利压力"
+        },
+        {
+          "id": "policy",
+          "description": "政策环境对竞争的影响"
+        },
+        {
+          "id": "growth",
+          "description": "未来增长驱动与不确定性"
+        }
+      ],
+      "task_count_range": [
+        3,
+        6
+      ]
+    }
+  ],
+  "items": [
+    {
+      "review_id": "39807bece74efb41",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "品牌竞争格局",
+          "intent": "比较主要品牌的份额和市场集中度",
+          "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "目标明确为品牌份额与集中度，直接覆盖share维度。"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争",
+          "intent": "研究降价与盈利压力",
+          "query": "2026 中国新能源汽车 价格战 毛利率",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "pricing"
+          ],
+          "rationale": "目标明确为价格竞争及盈利压力，直接覆盖pricing维度。"
+        },
+        {
+          "id": 3,
+          "title": "政策环境",
+          "intent": "研究补贴和监管变化对厂商竞争的影响",
+          "query": "2026 中国新能源汽车 补贴 监管 政策",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "policy"
+          ],
+          "rationale": "目标明确为政策激励和监管影响，直接覆盖policy维度。"
+        },
+        {
+          "id": 4,
+          "title": "发展趋势",
+          "intent": "识别增长驱动及未来不确定性",
+          "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "growth"
+          ],
+          "rationale": "目标明确为未来增长驱动及不确定性，直接覆盖growth维度。"
+        },
+        {
+          "id": 5,
+          "title": "烘焙入门",
+          "intent": "调查家庭烤面包的配方",
+          "query": "家庭 面包 烘焙 配方",
+          "relevance": 0,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "烘焙任务可独立研究，但与本题对象和目标无关；相关性为0，不能覆盖任何必需维度。"
+        }
+      ],
+      "redundant_pairs": [],
+      "reviewer": "Codex (AI)",
+      "review_notes": "任务1–4分别覆盖四项明确要求；任务5研究面包配方，与新能源汽车市场问题无关，应删除。",
+      "reviewed_at": "2026-10-08"
+    },
+    {
+      "review_id": "2977f559d0b0697a",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "品牌竞争格局",
+          "intent": "比较主要品牌的份额和市场集中度",
+          "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "目标明确为品牌份额与集中度，直接覆盖share维度。"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争",
+          "intent": "研究降价与盈利压力",
+          "query": "2026 中国新能源汽车 价格战 毛利率",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "pricing"
+          ],
+          "rationale": "目标明确为价格竞争及盈利压力，直接覆盖pricing维度。"
+        },
+        {
+          "id": 3,
+          "title": "政策环境",
+          "intent": "研究补贴和监管变化对厂商竞争的影响",
+          "query": "2026 中国新能源汽车 补贴 监管 政策",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "policy"
+          ],
+          "rationale": "目标明确为政策激励和监管影响，直接覆盖policy维度。"
+        }
+      ],
+      "redundant_pairs": [],
+      "reviewer": "Codex (AI)",
+      "review_notes": "已有任务只明确研究份额、价格和政策，不能据此默认未来增长驱动已经被研究。缺少growth维度，应补充需求增长驱动与不确定性任务。",
+      "reviewed_at": "2026-10-08"
+    },
+    {
+      "review_id": "4ee47a78e50c810f",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "品牌竞争格局",
+          "intent": "比较主要品牌的份额和市场集中度",
+          "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "目标明确为品牌份额与集中度，直接覆盖share维度。"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争",
+          "intent": "研究降价与盈利压力",
+          "query": "2026 中国新能源汽车 价格战 毛利率",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "pricing"
+          ],
+          "rationale": "目标明确为价格竞争及盈利压力，直接覆盖pricing维度。"
+        },
+        {
+          "id": 3,
+          "title": "政策环境",
+          "intent": "研究补贴和监管变化对厂商竞争的影响",
+          "query": "2026 中国新能源汽车 补贴 监管 政策",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "policy"
+          ],
+          "rationale": "目标明确为政策激励和监管影响，直接覆盖policy维度。"
+        },
+        {
+          "id": 4,
+          "title": "发展趋势",
+          "intent": "识别增长驱动及未来不确定性",
+          "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "growth"
+          ],
+          "rationale": "目标明确为未来增长驱动及不确定性，直接覆盖growth维度。"
+        },
+        {
+          "id": 5,
+          "title": "国内电动车头部厂商竞争位置",
+          "intent": "谁占据领先地位及各厂商相对占比",
+          "query": "国内电动车 头部厂商 排名 占比",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "任务5与任务1研究同一竞争位置维度；任务相关，但新增研究价值重复。"
+        }
+      ],
+      "redundant_pairs": [],
+      "reviewer": "Codex (AI)",
+      "review_notes": "用户明确提出将任务1与5的关系标为uncertain；其余标签仍是AI草稿。两项任务均涉及市场份额和竞争地位，但任务5未明确区分品牌与集团的分析口径，无法确认是否能够产生独立研究结论。",
+      "reviewed_at": "2026-10-08",
+      "pair_relations": [
+        {
+          "task_ids": [
+            1,
+            5
+          ],
+          "label": "uncertain",
+          "reason": "两项任务均涉及市场份额和竞争地位，但任务5未明确区分品牌与集团的分析口径，无法确认是否能够产生独立研究结论。"
+        }
+      ]
+    },
+    {
+      "review_id": "510cdbb49cf34538",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "品牌竞争格局",
+          "intent": "比较主要品牌的份额和市场集中度",
+          "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "目标明确为品牌份额与集中度，直接覆盖share维度。"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争",
+          "intent": "研究降价与盈利压力",
+          "query": "2026 中国新能源汽车 价格战 毛利率",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "pricing"
+          ],
+          "rationale": "目标明确为价格竞争及盈利压力，直接覆盖pricing维度。"
+        },
+        {
+          "id": 3,
+          "title": "政策环境",
+          "intent": "研究补贴和监管变化对厂商竞争的影响",
+          "query": "2026 中国新能源汽车 补贴 监管 政策",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "policy"
+          ],
+          "rationale": "目标明确为政策激励和监管影响，直接覆盖policy维度。"
+        },
+        {
+          "id": 4,
+          "title": "发展趋势",
+          "intent": "识别增长驱动及未来不确定性",
+          "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "growth"
+          ],
+          "rationale": "目标明确为未来增长驱动及不确定性，直接覆盖growth维度。"
+        },
+        {
+          "id": 5,
+          "title": "品牌竞争格局",
+          "intent": "比较主要品牌的份额和市场集中度",
+          "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "任务5与任务1研究同一竞争位置维度；任务相关，但新增研究价值重复。"
+        }
+      ],
+      "redundant_pairs": [
+        {
+          "task_ids": [
+            1,
+            5
+          ],
+          "rationale": "任务5的标题、意图、检索词均原样重复任务1，应删除。"
+        }
+      ],
+      "reviewer": "Codex (AI)",
+      "review_notes": "任务5的标题、意图、检索词均原样重复任务1，应删除。",
+      "reviewed_at": "2026-10-08"
+    },
+    {
+      "review_id": "2fb06c6edac439cf",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "品牌竞争格局",
+          "intent": "比较主要品牌的份额和市场集中度",
+          "query": "中国新能源汽车 2026 品牌市场份额 集中度",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "share"
+          ],
+          "rationale": "目标明确为品牌份额与集中度，直接覆盖share维度。"
+        },
+        {
+          "id": 2,
+          "title": "价格竞争",
+          "intent": "研究降价与盈利压力",
+          "query": "2026 中国新能源汽车 价格战 毛利率",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "pricing"
+          ],
+          "rationale": "目标明确为价格竞争及盈利压力，直接覆盖pricing维度。"
+        },
+        {
+          "id": 3,
+          "title": "政策环境",
+          "intent": "研究补贴和监管变化对厂商竞争的影响",
+          "query": "2026 中国新能源汽车 补贴 监管 政策",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "policy"
+          ],
+          "rationale": "目标明确为政策激励和监管影响，直接覆盖policy维度。"
+        },
+        {
+          "id": 4,
+          "title": "发展趋势",
+          "intent": "识别增长驱动及未来不确定性",
+          "query": "中国新能源汽车 未来发展趋势 增长驱动 风险",
+          "relevance": 2,
+          "granularity": "appropriate",
+          "covered_dimensions": [
+            "growth"
+          ],
+          "rationale": "目标明确为未来增长驱动及不确定性，直接覆盖growth维度。"
+        }
+      ],
+      "redundant_pairs": [],
+      "reviewer": "Codex (AI)",
+      "review_notes": "四个任务各有明确目标，覆盖份额、价格、政策和增长驱动；规划层可判合格。未来趋势任务应独立检索预测和风险，不能只重述前面三项。此判断不保证执行后证据充分。",
+      "reviewed_at": "2026-10-08"
+    },
+    {
+      "review_id": "8b4ac22abf89afa2",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "面包制作",
+          "intent": "研究家庭面包制作方法",
+          "query": "面包 酵母发酵 配方",
+          "relevance": 0,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "烘焙任务可独立研究，但与本题对象和目标无关；相关性为0，不能覆盖任何必需维度。"
+        },
+        {
+          "id": 2,
+          "title": "饼干制作",
+          "intent": "研究家庭饼干制作方法",
+          "query": "饼干 烤箱温度 配方",
+          "relevance": 0,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "烘焙任务可独立研究，但与本题对象和目标无关；相关性为0，不能覆盖任何必需维度。"
+        },
+        {
+          "id": 3,
+          "title": "蛋糕制作",
+          "intent": "研究家庭蛋糕制作方法",
+          "query": "蛋糕 奶油打发 配方",
+          "relevance": 0,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "烘焙任务可独立研究，但与本题对象和目标无关；相关性为0，不能覆盖任何必需维度。"
+        },
+        {
+          "id": 4,
+          "title": "披萨制作",
+          "intent": "研究家庭披萨制作方法",
+          "query": "披萨 面团配比 配方",
+          "relevance": 0,
+          "granularity": "appropriate",
+          "covered_dimensions": [],
+          "rationale": "烘焙任务可独立研究，但与本题对象和目标无关；相关性为0，不能覆盖任何必需维度。"
+        }
+      ],
+      "redundant_pairs": [],
+      "reviewer": "Codex (AI)",
+      "review_notes": "四个任务均为烘焙研究，与原题完全无关；全部必需维度缺失，应重新规划。",
+      "reviewed_at": "2026-10-08"
+    }
+  ],
+  "annotation_author_type": "ai",
+  "review_provenance": "Codex reviewed the six presented plans; not independent human annotation.",
+  "partial_human_review": {
+    "plan_id": "4ee47a78e50c810f",
+    "task_pair": [
+      1,
+      5
+    ],
+    "label": "uncertain",
+    "reason": "两项任务均涉及市场份额和竞争地位，但任务5未明确区分品牌与集团的分析口径，无法确认是否能够产生独立研究结论。",
+    "source": "user_message_2026-10-08"
+  }
+}

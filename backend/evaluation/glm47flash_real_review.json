@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "source_sha256": "5f7899353685f3e5ece102bc6994ff1540d51ea7c464f68585d3c250267c545d",
+  "annotation_status": "unreviewed",
+  "rubrics": [
+    {
+      "id": "ev-market",
+      "domain": "market",
+      "language": "zh",
+      "split": "development",
+      "topic": "分析 2026 年中国新能源汽车市场的竞争格局和未来发展趋势，重点覆盖市场份额、价格竞争、政策环境和增长驱动。",
+      "scope": "限定中国市场与2026年；不强制要求电池或充电设施独立成章。",
+      "required_dimensions": [
+        {
+          "id": "share",
+          "description": "主要品牌市场份额与集中度"
+        },
+        {
+          "id": "pricing",
+          "description": "价格竞争与盈利压力"
+        },
+        {
+          "id": "policy",
+          "description": "政策环境对竞争的影响"
+        },
+        {
+          "id": "growth",
+          "description": "未来增长驱动与不确定性"
+        }
+      ],
+      "task_count_range": [
+        3,
+        6
+      ]
+    }
+  ],
+  "items": [
+    {
+      "review_id": "630ac01d1e55107b",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "2026年市场份额与格局",
+          "intent": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。",
+          "query": "2026年中国新能源汽车市场份额 比亚迪 特斯拉 市占率",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 2,
+          "title": "价格竞争与定价策略",
+          "intent": "分析2026年主流车型的价格区间变化、价格战现状及各品牌针对不同细分市场的定价策略。",
+          "query": "2026年新能源汽车价格战 车型定价策略 降价趋势",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 3,
+          "title": "政策环境与法规",
+          "intent": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。",
+          "query": "2026年新能源汽车补贴政策 购置税优惠 路权政策",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 4,
+          "title": "增长驱动因素分析",
+          "intent": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。",
+          "query": "2026年新能源汽车增长驱动因素 固态电池 智能化 出口",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 5,
+          "title": "竞争格局与品牌动向",
+          "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+          "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        }
+      ],
+      "redundant_pairs": null,
+      "pair_relations": [
+        {
+          "task_ids": [
+            1,
+            5
+          ],
+          "label": "complementary",
+          "reason": "能产生不同结论。"
+        }
+      ],
+      "reviewer": null,
+      "reviewed_at": null,
+      "review_notes": null
+    },
+    {
+      "review_id": "a64962003175bbd2",
+      "topic_id": "ev-market",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "2026年市场份额与格局",
+          "intent": "获取2026年中国新能源汽车市场的整体规模、销量数据及主要品牌（如比亚迪、特斯拉、新势力）的市占率分布情况。",
+          "query": "2026年中国新能源汽车市场份额 比亚迪 特斯拉 市占率",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 2,
+          "title": "价格竞争与定价策略",
+          "intent": "分析2026年主流车型的价格区间变化、价格战现状及各品牌针对不同细分市场的定价策略。",
+          "query": "2026年新能源汽车价格战 车型定价策略 降价趋势",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 3,
+          "title": "政策环境与法规",
+          "intent": "梳理2026年最新的国家及地方补贴政策、购置税优惠、路权政策及双积分政策对市场的影响。",
+          "query": "2026年新能源汽车补贴政策 购置税优惠 路权政策",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 4,
+          "title": "增长驱动因素分析",
+          "intent": "探究2026年推动市场增长的核心动力，包括技术突破（如固态电池）、智能化升级及出口表现。",
+          "query": "2026年新能源汽车增长驱动因素 固态电池 智能化 出口",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        },
+        {
+          "id": 5,
+          "title": "竞争格局与品牌动向",
+          "intent": "研究主要车企（传统车企转型与新势力）在2026年的战略布局、产品发布节奏及差异化竞争手段。",
+          "query": "2026年车企竞争格局 新势力 传统车企转型 战略布局",
+          "relevance": null,
+          "granularity": null,
+          "covered_dimensions": null,
+          "rationale": null
+        }
+      ],
+      "redundant_pairs": null,
+      "pair_relations": [
+        {
+          "task_ids": [
+            1,
+            5
+          ],
+          "label": "complementary",
+          "reason": "能产生不同结论。"
+        }
+      ],
+      "reviewer": null,
+      "reviewed_at": null,
+      "review_notes": null
+    }
+  ],
+  "partial_human_review": {
+    "task_pair": [
+      1,
+      5
+    ],
+    "label": "complementary",
+    "reason": "能产生不同结论。",
+    "source": "user_message_2026-10-08",
+    "scope": "same captured plan in two identical initial/final snapshots; remaining task labels unreviewed"
+  }
+}
