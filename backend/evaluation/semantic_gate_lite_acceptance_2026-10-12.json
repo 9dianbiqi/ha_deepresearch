@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "consolidated_at": "2026-10-12",
+  "experiments_completed_at": "2026-10-10",
+  "status": "V1 FROZEN — OFFLINE ACCEPTED — PRODUCTION BLOCKING DISABLED",
+  "scope": [
+    "coverage",
+    "redundancy",
+    "relevance"
+  ],
+  "prompt_version": "semantic-gate-lite-v1.1",
+  "human_gold": false,
+  "label_provenance": "AI-authored obvious development references; no production accuracy claim",
+  "production_blocking_enabled": false,
+  "new_api_calls_during_consolidation": 0,
+  "completed_tests_not_rerun": true,
+  "runs": [
+    {
+      "source_file": "semantic-gate-lite-dev12-2026-10-10.json",
+      "source_sha256": "22df8a3218102edbb0ce7eac7e88bdaee944c07e7c1a8175125aa941764159d6",
+      "dataset_version": "semantic-gate-lite-dev-v1",
+      "summary": {
+        "attempted": 12,
+        "correct_full_vector": 5,
+        "uncertain": 0,
+        "technical_failure": 5,
+        "false_rejection": 0,
+        "missed_failure": 0,
+        "other_mismatch": 2
+      },
+      "actual_models": [
+        "openai/gpt-oss-20b"
+      ]
+    },
+    {
+      "source_file": "semantic-gate-lite-dev12-prompt11-2026-10-10.json",
+      "source_sha256": "ce663ebd217b5be41f4637af1dcbba747d1912771b4e63d2cf9171d0a081d20a",
+      "dataset_version": "semantic-gate-lite-dev-v1",
+      "summary": {
+        "attempted": 12,
+        "correct_full_vector": 12,
+        "uncertain": 0,
+        "technical_failure": 0,
+        "false_rejection": 0,
+        "missed_failure": 0,
+        "other_mismatch": 0
+      },
+      "actual_models": [
+        "openai/gpt-oss-20b"
+      ]
+    },
+    {
+      "source_file": "semantic-gate-lite-verification-2026-10-10.json",
+      "source_sha256": "f9ff157de800b25f764087658a559f18d9bd691b335682e86e1810134c8a4242",
+      "dataset_version": "semantic-lite-verification-v1",
+      "summary": {
+        "attempted": 12,
+        "correct_full_vector": 12,
+        "uncertain": 0,
+        "technical_failure": 0,
+        "false_rejection": 0,
+        "missed_failure": 0,
+        "other_mismatch": 0
+      },
+      "actual_models": [
+        "openai/gpt-oss-20b"
+      ]
+    }
+  ],
+  "current_prompt_summary": {
+    "attempted": 24,
+    "correct_full_vector": 24,
+    "uncertain": 0,
+    "technical_failure": 0,
+    "false_rejection": 0,
+    "missed_failure": 0,
+    "other_mismatch": 0
+  },
+  "verification_partitions": {
+    "fixed_repeat": {
+      "attempted": 6,
+      "correct_full_vector": 6,
+      "uncertain": 0,
+      "technical_failure": 0,
+      "false_rejection": 0,
+      "missed_failure": 0,
+      "other_mismatch": 0
+    },
+    "new_smoke": {
+      "attempted": 6,
+      "correct_full_vector": 6,
+      "uncertain": 0,
+      "technical_failure": 0,
+      "false_rejection": 0,
+      "missed_failure": 0,
+      "other_mismatch": 0
+    }
+  },
+  "current_prompt_observation_count": 24,
+  "unique_cases_in_current_prompt": 18,
+  "known_total_tokens_current_prompt": 19724,
+  "token_usage_observation_count": 24,
+  "observed_latency_median_ms": 2086.5,
+  "engineering_regression": {
+    "completed_at": "2026-10-10",
+    "passed": 787,
+    "skipped": 2,
+    "lint": "passed",
+    "mypy_source_files": 71,
+    "mypy": "passed",
+    "rerun_during_consolidation": false
+  },
+  "limitations": [
+    "Only six of the twelve fixed cases had a second observation.",
+    "Six new cases were not used in prompt repair; they are small smoke checks, not independent human gold.",
+    "Exact quotations validate source identity, not semantic correctness.",
+    "Formal production rejection/miss thresholds and sufficient independent validation are not established."
+  ],
+  "release_status": "V1 FROZEN — OFFLINE ACCEPTED — PRODUCTION BLOCKING DISABLED",
+  "frozen_manifest": "evaluation/semantic_gate_lite_v1_frozen_manifest.json",
+  "previous_status": "LITE V1 OFFLINE IMPLEMENTED — PRODUCTION BLOCKING NOT ENABLED",
+  "shadow_mode_connected": false,
+  "next_stage": "docs/SEMANTIC_GATE_SHADOW_NEXT.md"
+}

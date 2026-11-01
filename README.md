@@ -58,6 +58,9 @@ flowchart LR
 - [集成架构说明](docs/ARCHITECTURE_OPTIMIZED.md)
 - [技术实现详解](docs/TECHNICAL_DEEP_DIVE.md)
 - [规划校验门（Plan Gate）](docs/PLAN_QUALITY_GATE.md)
+- [离线 Semantic Gate Lite V1](docs/SEMANTIC_GATE_LITE_V1.md)
+- [Lite V1 冻结验收](docs/acceptance/SEMANTIC_GATE_LITE_V1_2026-10-12.md)
+- [后续 Shadow Evaluation（尚未接入）](docs/SEMANTIC_GATE_SHADOW_NEXT.md)
 
 ## 功能
 
