@@ -1,0 +1,307 @@
+{
+  "version": "semantic-lite-verification-v1",
+  "label_provenance": "AI-authored development references; six repeats plus six new cases not used in prompt repair; not independent human gold",
+  "human_gold": false,
+  "cases": [
+    {
+      "id": "coverage-pass-1",
+      "check": "coverage",
+      "topic": "研究新能源汽车市场份额和盈利能力。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "市场份额",
+          "intent": "调查新能源汽车品牌市场份额",
+          "query": "调查新能源汽车品牌市场份额"
+        },
+        {
+          "id": 2,
+          "title": "盈利能力",
+          "intent": "研究新能源汽车企业利润与盈利能力",
+          "query": "研究新能源汽车企业利润与盈利能力"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "两个明确要求都由任务承诺。",
+      "partition": "fixed_repeat"
+    },
+    {
+      "id": "coverage-fail-1",
+      "check": "coverage",
+      "topic": "研究新能源汽车市场份额和盈利能力。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "市场份额",
+          "intent": "调查新能源汽车品牌市场份额",
+          "query": "调查新能源汽车品牌市场份额"
+        }
+      ],
+      "expected": {
+        "coverage": "fail",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "盈利能力完全遗漏。",
+      "partition": "fixed_repeat"
+    },
+    {
+      "id": "redundancy-pass-1",
+      "check": "redundancy",
+      "topic": "研究新能源汽车的市场份额与企业战略。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "份额",
+          "intent": "调查品牌市场份额分布",
+          "query": "调查品牌市场份额分布"
+        },
+        {
+          "id": 2,
+          "title": "战略",
+          "intent": "研究车企产品发布节奏和竞争战略",
+          "query": "研究车企产品发布节奏和竞争战略"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "现状份额和竞争行动互补。",
+      "partition": "fixed_repeat"
+    },
+    {
+      "id": "redundancy-fail-2",
+      "check": "redundancy",
+      "topic": "研究电动汽车品牌的销量占比。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "销量占比",
+          "intent": "调查电动汽车各品牌销量占总销量的比例",
+          "query": "调查电动汽车各品牌销量占总销量的比例"
+        },
+        {
+          "id": 2,
+          "title": "市占率",
+          "intent": "研究电动汽车品牌销售份额及相对占比",
+          "query": "研究电动汽车品牌销售份额及相对占比"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "fail",
+        "relevance": "pass"
+      },
+      "label_reason": "同一对象与销量占比目标的同义表达。",
+      "partition": "fixed_repeat"
+    },
+    {
+      "id": "relevance-pass-1",
+      "check": "relevance",
+      "topic": "只研究新能源汽车的市场份额和企业盈利。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "份额",
+          "intent": "研究新能源汽车品牌份额",
+          "query": "研究新能源汽车品牌份额"
+        },
+        {
+          "id": 2,
+          "title": "盈利",
+          "intent": "研究新能源汽车车企盈利情况",
+          "query": "研究新能源汽车车企盈利情况"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "全部任务直接服务范围。",
+      "partition": "fixed_repeat"
+    },
+    {
+      "id": "relevance-fail-1",
+      "check": "relevance",
+      "topic": "只研究新能源汽车市场份额。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "份额",
+          "intent": "研究新能源汽车品牌份额",
+          "query": "研究新能源汽车品牌份额"
+        },
+        {
+          "id": 2,
+          "title": "燃油维修",
+          "intent": "研究燃油车发动机维修方法",
+          "query": "研究燃油车发动机维修方法"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "fail"
+      },
+      "label_reason": "任务2偏离明确限定的研究对象与目标。",
+      "partition": "fixed_repeat"
+    },
+    {
+      "id": "new-coverage-pass",
+      "check": "coverage",
+      "topic": "研究公寓电费计费规则和退款流程。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "计费",
+          "intent": "研究公寓电费计费规则",
+          "query": "研究公寓电费计费规则"
+        },
+        {
+          "id": 2,
+          "title": "退款",
+          "intent": "研究公寓退款流程",
+          "query": "研究公寓退款流程"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "AI-authored obvious new fixture; no human gold claim",
+      "partition": "new_smoke"
+    },
+    {
+      "id": "new-coverage-fail",
+      "check": "coverage",
+      "topic": "研究云备份的保留期限和恢复步骤。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "保留",
+          "intent": "研究云备份保留期限",
+          "query": "研究云备份保留期限"
+        }
+      ],
+      "expected": {
+        "coverage": "fail",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "AI-authored obvious new fixture; no human gold claim",
+      "partition": "new_smoke"
+    },
+    {
+      "id": "new-redundancy-pass",
+      "check": "redundancy",
+      "topic": "研究咖啡机的购买价格和清洁方法。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "价格",
+          "intent": "研究咖啡机购买价格",
+          "query": "研究咖啡机购买价格"
+        },
+        {
+          "id": 2,
+          "title": "清洁",
+          "intent": "研究咖啡机清洁方法",
+          "query": "研究咖啡机清洁方法"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "AI-authored obvious new fixture; no human gold claim",
+      "partition": "new_smoke"
+    },
+    {
+      "id": "new-redundancy-fail",
+      "check": "redundancy",
+      "topic": "研究笔记本电脑单次充电的续航时间。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "续航",
+          "intent": "调查笔记本单次充电可持续使用多久",
+          "query": "调查笔记本单次充电可持续使用多久"
+        },
+        {
+          "id": 2,
+          "title": "使用时长",
+          "intent": "研究笔记本一次充满电后的持续使用时间",
+          "query": "研究笔记本一次充满电后的持续使用时间"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "fail",
+        "relevance": "pass"
+      },
+      "label_reason": "AI-authored obvious new fixture; no human gold claim",
+      "partition": "new_smoke"
+    },
+    {
+      "id": "new-relevance-pass",
+      "check": "relevance",
+      "topic": "只研究图书馆预约制度和开放时间。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "预约",
+          "intent": "研究图书馆预约制度",
+          "query": "研究图书馆预约制度"
+        },
+        {
+          "id": 2,
+          "title": "开放",
+          "intent": "研究图书馆开放时间",
+          "query": "研究图书馆开放时间"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "pass"
+      },
+      "label_reason": "AI-authored obvious new fixture; no human gold claim",
+      "partition": "new_smoke"
+    },
+    {
+      "id": "new-relevance-fail",
+      "check": "relevance",
+      "topic": "只研究图片压缩方法。",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "压缩",
+          "intent": "研究图片压缩方法",
+          "query": "研究图片压缩方法"
+        },
+        {
+          "id": 2,
+          "title": "自行车",
+          "intent": "研究自行车轮胎维修方法",
+          "query": "研究自行车轮胎维修方法"
+        }
+      ],
+      "expected": {
+        "coverage": "pass",
+        "redundancy": "pass",
+        "relevance": "fail"
+      },
+      "label_reason": "AI-authored obvious new fixture; no human gold claim",
+      "partition": "new_smoke"
+    }
+  ]
+}

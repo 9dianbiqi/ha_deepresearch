@@ -29,6 +29,10 @@ SAFE_CONFIGURATION_FIELDS = (
     "summary_factual_threshold",
     "summary_citation_threshold",
     "summary_overall_threshold",
+    "plan_validation",
+    "plan_overlap_threshold",
+    "plan_coverage_threshold",
+    "plan_validation_retries",
     "run_timeout_seconds",
     "max_concurrent_runs",
     "retention_days",
@@ -231,6 +235,32 @@ class Configuration(BaseModel):
         ge=0.0,
         le=1.0,
         title="Summary Overall Threshold",
+    )
+    plan_validation: bool = Field(
+        default=True,
+        title="Plan Validation",
+        description="Deterministically validate planner output for duplicate tasks and topic coverage",
+    )
+    plan_overlap_threshold: float = Field(
+        default=0.75,
+        gt=0.0,
+        le=1.0,
+        title="Plan Overlap Threshold",
+        description="Pairwise query Jaccard overlap strictly above which a task is dropped as a duplicate",
+    )
+    plan_coverage_threshold: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        title="Plan Coverage Threshold",
+        description="Minimum fraction of significant topic terms covered by planned task texts",
+    )
+    plan_validation_retries: int = Field(
+        default=1,
+        ge=0,
+        le=2,
+        title="Plan Validation Retries",
+        description="Bounded planner re-plan attempts after deterministic validation feedback",
     )
     github_token: str | None = Field(
         default=None,

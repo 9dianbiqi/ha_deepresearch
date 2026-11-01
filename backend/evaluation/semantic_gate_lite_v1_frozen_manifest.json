@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-10-12",
+  "status": "V1 FROZEN — OFFLINE ACCEPTED — PRODUCTION BLOCKING DISABLED",
+  "scope": [
+    "coverage",
+    "redundancy",
+    "relevance"
+  ],
+  "prompt_version": "semantic-gate-lite-v1.1",
+  "system_prompt_sha256": "eba78ff28bc680b0f867a8556a1e9497e033e82684ed87f8061d0c6f45492fb3",
+  "model_parameters": {
+    "model": "openai/gpt-oss-20b",
+    "temperature": 0,
+    "reasoning_effort": "low",
+    "max_tokens": 2048,
+    "timeout_seconds": 30,
+    "response_format": "json_object",
+    "sdk_retries": 0
+  },
+  "file_fingerprints_lf": {
+    "src/research/semantic_gate.py": "1fb34380ec22ffdef50f10d03234c49c428bb23e7f1c328e61555a029a76dd2e",
+    "src/research/semantic_gate_eval.py": "b4e810257eb1ed0461f476668e8c2ab8a56d7b8aac157312fafd9c2045b0ff57",
+    "tests/test_semantic_gate.py": "c2bbd40c7209babd5edabbb89c7c0fc968930b4465e0673d3e22dce3babf8c3c",
+    "evaluation/semantic_gate_lite_dev12.json": "11cedd625a213d54f09f380cbf78a7e9f64f4c3824afbe7fed2916c9433a2dca",
+    "evaluation/semantic_gate_lite_verification12.json": "0b7d7da7ae5535bae17f19717586c0d99dde00d77336538b16d4a479c4270df4"
+  },
+  "evidence": "evaluation/semantic_gate_lite_acceptance_2026-10-12.json",
+  "observations": 24,
+  "distinct_cases": 18,
+  "independent_observations_not_claimed": true,
+  "human_gold": false,
+  "accuracy_100_percent_not_claimed": true,
+  "shadow_mode_connected": false,
+  "production_blocking_enabled": false,
+  "next_stage": "Shadow Evaluation; diagnostic only, original plan remains authoritative",
+  "change_policy": "Do not overwrite this manifest or retune Lite V1 in place; changes require a new version and separate evidence."
+}
